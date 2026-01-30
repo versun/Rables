@@ -26,13 +26,13 @@
 
         <% if integration.requires_server_url? %>
           <div class="field">
-            <%= f.label :server_url, "Server URL" %>
+            <%= f.label :server_url, "Server URL", for: "git_integration_server_url_#{integration.provider}" %>
             <%= f.text_field :server_url, id: "git_integration_server_url_#{integration.provider}", placeholder: "https://your-gitea-instance.com" %>
             <small>自托管实例的 URL</small>
           </div>
         <% elsif integration.provider == "gitlab" %>
           <div class="field">
-            <%= f.label :server_url, "Server URL (Optional)" %>
+            <%= f.label :server_url, "Server URL (Optional)", for: "git_integration_server_url_#{integration.provider}" %>
             <%= f.text_field :server_url, id: "git_integration_server_url_#{integration.provider}", placeholder: "https://gitlab.com" %>
             <small>留空使用 gitlab.com，或输入自托管 GitLab URL</small>
           </div>
@@ -40,14 +40,14 @@
 
         <% if %w[bitbucket gitea codeberg].include?(integration.provider) %>
           <div class="field">
-            <%= f.label :username, username_label(integration.provider) %>
+            <%= f.label :username, username_label(integration.provider), for: "git_integration_username_#{integration.provider}" %>
             <%= f.text_field :username, id: "git_integration_username_#{integration.provider}", placeholder: username_placeholder(integration.provider) %>
             <small><%= username_help_text(integration.provider) %></small>
           </div>
         <% end %>
 
         <div class="field">
-          <%= f.label :access_token, token_label(integration.provider) %>
+          <%= f.label :access_token, token_label(integration.provider), for: "git_integration_access_token_#{integration.provider}" %>
           <%= f.text_field :access_token, type: "password", id: "git_integration_access_token_#{integration.provider}", value: "", placeholder: token_placeholder(integration.provider), autocomplete: "new-password" %>
           <small><%= token_help_text(integration.provider) %>（留空表示不修改）</small>
         </div>
