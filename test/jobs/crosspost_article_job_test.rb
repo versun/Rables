@@ -16,7 +16,7 @@ class CrosspostArticleJobTest < ActiveJob::TestCase
     Crosspost.mastodon.update!(enabled: true)
 
     mock_service = Minitest::Mock.new
-    mock_service.expect :post, "https://mastodon.social/@user/123", [Article]
+    mock_service.expect :post, "https://mastodon.social/@user/123", [ Article ]
 
     MastodonService.stub :new, mock_service do
       CrosspostArticleJob.perform_now(@article.id, "mastodon")
@@ -30,7 +30,7 @@ class CrosspostArticleJobTest < ActiveJob::TestCase
     Crosspost.twitter.update!(enabled: true)
 
     mock_service = Minitest::Mock.new
-    mock_service.expect :post, "https://twitter.com/user/status/123", [Article]
+    mock_service.expect :post, "https://twitter.com/user/status/123", [ Article ]
 
     TwitterService.stub :new, mock_service do
       CrosspostArticleJob.perform_now(@article.id, "twitter")
@@ -44,7 +44,7 @@ class CrosspostArticleJobTest < ActiveJob::TestCase
     Crosspost.bluesky.update!(enabled: true)
 
     mock_service = Minitest::Mock.new
-    mock_service.expect :post, "https://bsky.app/profile/user/post/123", [Article]
+    mock_service.expect :post, "https://bsky.app/profile/user/post/123", [ Article ]
 
     BlueskyService.stub :new, mock_service do
       CrosspostArticleJob.perform_now(@article.id, "bluesky")
@@ -58,7 +58,7 @@ class CrosspostArticleJobTest < ActiveJob::TestCase
     Crosspost.mastodon.update!(enabled: true)
 
     mock_service = Minitest::Mock.new
-    mock_service.expect :post, "https://mastodon.social/@user/123", [Article]
+    mock_service.expect :post, "https://mastodon.social/@user/123", [ Article ]
 
     MastodonService.stub :new, mock_service do
       assert_difference "ActivityLog.count", 1 do
@@ -75,7 +75,7 @@ class CrosspostArticleJobTest < ActiveJob::TestCase
     Crosspost.mastodon.update!(enabled: true)
 
     mock_service = Minitest::Mock.new
-    mock_service.expect :post, nil, [Article]
+    mock_service.expect :post, nil, [ Article ]
 
     MastodonService.stub :new, mock_service do
       CrosspostArticleJob.perform_now(@article.id, "mastodon")
@@ -113,7 +113,7 @@ class CrosspostArticleJobTest < ActiveJob::TestCase
     @article.social_media_posts.create!(platform: "mastodon", url: "https://old-url.com")
 
     mock_service = Minitest::Mock.new
-    mock_service.expect :post, "https://mastodon.social/@user/456", [Article]
+    mock_service.expect :post, "https://mastodon.social/@user/456", [ Article ]
 
     MastodonService.stub :new, mock_service do
       assert_no_difference "@article.social_media_posts.count" do

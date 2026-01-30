@@ -82,7 +82,7 @@ class NativeNewsletterSenderJobTest < ActiveJob::TestCase
     untagged_subscriber.tags << other_tag
 
     # Clear other subscribers
-    Subscriber.where.not(id: [tagged_subscriber.id, untagged_subscriber.id]).update_all(confirmed_at: nil)
+    Subscriber.where.not(id: [ tagged_subscriber.id, untagged_subscriber.id ]).update_all(confirmed_at: nil)
 
     # Job creates multiple logs: started, failed (per email due to SMTP error in test), completed
     # At minimum: started + failed + completed = 3 logs

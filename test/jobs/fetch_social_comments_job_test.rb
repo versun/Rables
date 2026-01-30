@@ -25,7 +25,7 @@ class FetchSocialCommentsJobTest < ActiveJob::TestCase
     )
 
     mock_service = Minitest::Mock.new
-    mock_service.expect :fetch_comments, { comments: [], rate_limit: nil }, [String]
+    mock_service.expect :fetch_comments, { comments: [], rate_limit: nil }, [ String ]
 
     MastodonService.stub :new, mock_service do
       FetchSocialCommentsJob.perform_now
@@ -44,7 +44,7 @@ class FetchSocialCommentsJobTest < ActiveJob::TestCase
     )
 
     mock_service = Minitest::Mock.new
-    mock_service.expect :fetch_comments, { comments: [], rate_limit: nil }, [String]
+    mock_service.expect :fetch_comments, { comments: [], rate_limit: nil }, [ String ]
 
     BlueskyService.stub :new, mock_service do
       FetchSocialCommentsJob.perform_now
@@ -65,7 +65,7 @@ class FetchSocialCommentsJobTest < ActiveJob::TestCase
     mock_service = Object.new
     mock_service.define_singleton_method(:fetch_comments) do |_url|
       {
-        comments: [{
+        comments: [ {
           external_id: "456",
           author_name: "Test User",
           author_username: "@testuser",
@@ -73,7 +73,7 @@ class FetchSocialCommentsJobTest < ActiveJob::TestCase
           content: "Great article!",
           published_at: Time.current,
           url: "https://mastodon.social/@testuser/456"
-        }],
+        } ],
         rate_limit: nil
       }
     end
@@ -110,14 +110,14 @@ class FetchSocialCommentsJobTest < ActiveJob::TestCase
     mock_service = Object.new
     mock_service.define_singleton_method(:fetch_comments) do |_url|
       {
-        comments: [{
+        comments: [ {
           external_id: "456",
           author_name: "New Name",
           author_username: "@newuser",
           content: "Updated content",
           published_at: Time.current,
           url: "https://mastodon.social/@newuser/456"
-        }],
+        } ],
         rate_limit: nil
       }
     end

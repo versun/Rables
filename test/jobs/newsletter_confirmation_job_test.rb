@@ -29,7 +29,7 @@ class NewsletterConfirmationJobTest < ActiveJob::TestCase
     end
 
     delivered = ActionMailer::Base.deliveries.last
-    assert_equal [@subscriber.email], delivered.to
+    assert_equal [ @subscriber.email ], delivered.to
   end
 
   test "raises error when subscriber not found" do
