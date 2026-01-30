@@ -212,7 +212,8 @@ GEM
       logger
     mini_mime (1.1.5)
     mini_portile2 (2.8.9)
-    minitest (5.27.0)
+    minitest (6.0.1)
+      prism (~> 1.5)
     mission_control-jobs (1.1.0)
       actioncable (>= 7.1)
       actionpack (>= 7.1)
@@ -491,7 +492,7 @@ DEPENDENCIES
   jbuilder
   kamal
   mastodon-api
-  minitest (~> 5.25)
+  minitest (~> 6.0)
   mission_control-jobs
   open-uri
   propshaft

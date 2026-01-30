@@ -76,5 +76,5 @@ group :test do
   gem "simplecov", require: false
   gem "selenium-webdriver"
   # Pin minitest to 5.x due to incompatibility between minitest 6.0 and Rails 8.1
-  gem "minitest", "~> 5.25"
+  gem "minitest", "~> 6.0"
 end
