@@ -32,11 +32,11 @@ class NewsletterConfirmationJobTest < ActiveJob::TestCase
     assert_equal [ @subscriber.email ], delivered.to
   end
 
-  test "raises error when subscriber not found" do
-    # The job catches errors and re-raises them, but the error handling
-    # references subscriber.email which causes NoMethodError for nil
-    assert_raises NoMethodError do
-      NewsletterConfirmationJob.perform_now(999999)
+  test "does nothing when subscriber not found" do
+    assert_no_emails do
+      assert_nothing_raised do
+        NewsletterConfirmationJob.perform_now(999999)
+      end
     end
   end
 

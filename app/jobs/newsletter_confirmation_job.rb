@@ -23,11 +23,18 @@ class NewsletterConfirmationJob < ApplicationJob
       level: "info",
       component: "NewsletterConfirmationJob",
       subscriber_email: subscriber.email
+  rescue ActiveRecord::RecordNotFound => e
+    Rails.event.notify "newsletter_confirmation_job.subscriber_not_found",
+      level: "error",
+      component: "NewsletterConfirmationJob",
+      subscriber_id: subscriber_id,
+      error_message: e.message
   rescue => e
     Rails.event.notify "newsletter_confirmation_job.email_failed",
       level: "error",
       component: "NewsletterConfirmationJob",
-      subscriber_email: subscriber.email,
+      subscriber_email: subscriber&.email,
+      subscriber_id: subscriber_id,
       error_message: e.message
     Rails.event.notify "newsletter_confirmation_job.error_backtrace",
       level: "error",
