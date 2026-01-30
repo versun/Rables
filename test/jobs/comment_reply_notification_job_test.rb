@@ -4,6 +4,12 @@ class CommentReplyNotificationJobTest < ActiveJob::TestCase
   include ActionMailer::TestHelper
   def setup
     super
+    # Reset ActionMailer to test delivery method
+    ActionMailer::Base.delivery_method = :test
+    ActionMailer::Base.deliveries.clear
+
+    # Enable native newsletter but don't configure SMTP
+    # The job checks Rails.env.test? and skips SMTP configuration
     NewsletterSetting.instance.update!(
       enabled: true,
       provider: "native",

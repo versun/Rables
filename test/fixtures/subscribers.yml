@@ -7,7 +7,7 @@ confirmed_subscriber:
   updated_at: <%= 2.days.ago %>
 
 unconfirmed_subscriber:
-  email: unconfirmed@example.com
+  email: pending@example.com
   confirmation_token: <%= SecureRandom.urlsafe_base64(32) %>
   unsubscribe_token: <%= SecureRandom.urlsafe_base64(32) %>
   created_at: <%= 1.day.ago %>
@@ -21,4 +21,3 @@ unsubscribed_subscriber:
   unsubscribed_at: <%= 1.day.ago %>
   created_at: <%= 3.days.ago %>
   updated_at: <%= 1.day.ago %>
-

@@ -160,14 +160,8 @@ class Admin::ArticlesControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "should batch crosspost with enabled platforms" do
-    crosspost = Crosspost.create!(
-      platform: "mastodon",
-      enabled: true,
-      server_url: "https://mastodon.example",
-      client_key: "key",
-      client_secret: "secret",
-      access_token: "token"
-    )
+    crosspost = crossposts(:mastodon)
+    crosspost.update!(enabled: true)
 
     article = articles(:published_article)
 

@@ -16,3 +16,8 @@ javascript:
   created_at: <%= 1.day.ago %>
   updated_at: <%= 1.day.ago %>
 
+tech_tag:
+  name: Tech
+  slug: tech
+  created_at: <%= 1.day.ago %>
+  updated_at: <%= 1.day.ago %>

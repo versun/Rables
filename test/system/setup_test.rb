@@ -8,7 +8,7 @@ class SetupTest < ApplicationSystemTestCase
   test "setup redirects when already completed" do
     visit setup_path
 
-    assert_current_path admin_root_path
+    assert_current_path new_session_path
     assert_text "Setup has already been completed."
   end
 

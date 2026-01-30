@@ -47,6 +47,120 @@ class CrosspostTest < ActiveSupport::TestCase
     assert xiaohongshu.valid?
   end
 
+  test "validates platform presence" do
+    crosspost = Crosspost.new(platform: nil)
+    assert_not crosspost.valid?
+    assert_includes crosspost.errors[:platform], "can't be blank"
+  end
+
+  test "validates platform inclusion in allowed platforms" do
+    crosspost = Crosspost.new(platform: "invalid_platform")
+    assert_not crosspost.valid?
+    assert_includes crosspost.errors[:platform], "is not included in the list"
+  end
+
+  test "mastodon? returns true for mastodon platform" do
+    crosspost = Crosspost.new(platform: "mastodon")
+    assert crosspost.mastodon?
+    assert_not crosspost.twitter?
+    assert_not crosspost.bluesky?
+    assert_not crosspost.xiaohongshu?
+  end
+
+  test "twitter? returns true for twitter platform" do
+    crosspost = Crosspost.new(platform: "twitter")
+    assert crosspost.twitter?
+    assert_not crosspost.mastodon?
+    assert_not crosspost.bluesky?
+  end
+
+  test "bluesky? returns true for bluesky platform" do
+    crosspost = Crosspost.new(platform: "bluesky")
+    assert crosspost.bluesky?
+    assert_not crosspost.mastodon?
+    assert_not crosspost.twitter?
+  end
+
+  test "xiaohongshu? returns true for xiaohongshu platform" do
+    crosspost = Crosspost.new(platform: "xiaohongshu")
+    assert crosspost.xiaohongshu?
+    assert_not crosspost.mastodon?
+    assert_not crosspost.twitter?
+  end
+
+  test "enabled? returns true when enabled is true" do
+    crosspost = Crosspost.new(platform: "mastodon", enabled: true)
+    assert crosspost.enabled?
+  end
+
+  test "enabled? returns false when enabled is false" do
+    crosspost = Crosspost.new(platform: "mastodon", enabled: false)
+    assert_not crosspost.enabled?
+  end
+
+  test "rejects server_url with credentials" do
+    crosspost = build_crosspost("https://user:pass@mastodon.social")
+    assert_not crosspost.valid?
+    assert_includes crosspost.errors[:server_url], "must not include credentials"
+  end
+
+  test "validates twitter credentials when enabled" do
+    crosspost = Crosspost.new(
+      platform: "twitter",
+      enabled: true,
+      api_key: nil,
+      api_key_secret: nil,
+      access_token: nil,
+      access_token_secret: nil
+    )
+    assert_not crosspost.valid?
+    assert_includes crosspost.errors[:api_key], "can't be blank"
+    assert_includes crosspost.errors[:api_key_secret], "can't be blank"
+    assert_includes crosspost.errors[:access_token], "can't be blank"
+    assert_includes crosspost.errors[:access_token_secret], "can't be blank"
+  end
+
+  test "validates bluesky credentials when enabled" do
+    crosspost = Crosspost.new(
+      platform: "bluesky",
+      enabled: true,
+      username: nil,
+      app_password: nil
+    )
+    assert_not crosspost.valid?
+    assert_includes crosspost.errors[:username], "can't be blank"
+    assert_includes crosspost.errors[:app_password], "can't be blank"
+  end
+
+  test "does not validate credentials when disabled" do
+    crosspost = Crosspost.new(
+      platform: "mastodon",
+      enabled: false,
+      client_key: nil,
+      client_secret: nil,
+      access_token: nil
+    )
+    crosspost.valid?
+    assert_empty crosspost.errors[:client_key]
+    assert_empty crosspost.errors[:client_secret]
+    assert_empty crosspost.errors[:access_token]
+  end
+
+  test "PLATFORMS constant contains all supported platforms" do
+    assert_includes Crosspost::PLATFORMS, "mastodon"
+    assert_includes Crosspost::PLATFORMS, "twitter"
+    assert_includes Crosspost::PLATFORMS, "bluesky"
+    assert_includes Crosspost::PLATFORMS, "xiaohongshu"
+    assert_equal 4, Crosspost::PLATFORMS.length
+  end
+
+  test "PLATFORM_ICONS contains icons for all platforms" do
+    assert_equal "fa-brands fa-mastodon", Crosspost::PLATFORM_ICONS["mastodon"]
+    assert_equal "fa-brands fa-square-x-twitter", Crosspost::PLATFORM_ICONS["twitter"]
+    assert_equal "fa-brands fa-square-bluesky", Crosspost::PLATFORM_ICONS["bluesky"]
+    assert_equal "svg:xiaohongshu", Crosspost::PLATFORM_ICONS["xiaohongshu"]
+  end
+
   private
 
   def build_crosspost(server_url)
