@@ -58,8 +58,10 @@
     <h2><%= @article.title %></h2>
   </div>
   <small class="article-meta">
+    <span class="article-date"><%= @article.created_at.strftime("%Y-%m-%d") %></span>
   <% social_posts = @article.social_media_posts.select { |post| Crosspost::PLATFORMS.include?(post.platform) } %>
   <% if social_posts.any? %>
+      <span class="article-meta-divider">|</span>
       <span class="social-label">also posted on:</span>
       <% social_posts.each do |post| %>
         <% if post.url.present? %>
@@ -82,6 +84,8 @@
           </a>
         <% end %>
       <% end %>
+      <span class="article-meta-divider">|</span>
+  <% else %>
       <span class="article-meta-divider">|</span>
   <% end %>
     <span class="share-container" data-controller="share" data-share-url-value="<%= article_full_url %>">
