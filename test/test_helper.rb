@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require "simplecov"
 
 if ENV["TEST_ENV_NUMBER"].to_s.empty?
