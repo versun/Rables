@@ -1,0 +1,105 @@
+<%= form_with model: setting, url: admin_jekyll_path, method: :patch, local: true do |f| %>
+  <% if setting.errors.any? %>
+    <div class="form-errors">
+      <h3><%= pluralize(setting.errors.count, "error") %> prohibited this setting from being saved:</h3>
+      <ul>
+        <% setting.errors.full_messages.each do |message| %>
+          <li><%= message %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <h3>General Settings</h3>
+
+  <div class="form-group">
+    <%= f.label :jekyll_path, "Jekyll Path" %>
+    <%= f.text_field :jekyll_path, placeholder: "/path/to/your/jekyll/site" %>
+    <small class="form-hint">Absolute path to your Jekyll site directory</small>
+  </div>
+
+  <div class="form-group">
+    <%= f.label :repository_type, "Repository Type" %>
+    <%= f.select :repository_type, JekyllSetting::REPOSITORY_TYPES.map { |t| [t.titleize, t] } %>
+  </div>
+
+  <div class="form-group" data-show-when="repository_type=git">
+    <%= f.label :repository_url, "Repository URL" %>
+    <%= f.text_field :repository_url, placeholder: "https://github.com/user/repo.git" %>
+    <small class="form-hint">Git repository URL for auto-push</small>
+  </div>
+
+  <div class="form-group" data-show-when="repository_type=git">
+    <%= f.label :branch, "Branch" %>
+    <%= f.text_field :branch %>
+  </div>
+
+  <h3>Directory Structure</h3>
+
+  <div class="form-row">
+    <div class="form-group">
+      <%= f.label :posts_directory, "Posts Directory" %>
+      <%= f.text_field :posts_directory %>
+    </div>
+
+    <div class="form-group">
+      <%= f.label :pages_directory, "Pages Directory" %>
+      <%= f.text_field :pages_directory %>
+    </div>
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <%= f.label :assets_directory, "Assets Directory" %>
+      <%= f.text_field :assets_directory %>
+    </div>
+
+    <div class="form-group">
+      <%= f.label :images_directory, "Images Directory" %>
+      <%= f.text_field :images_directory %>
+    </div>
+  </div>
+
+  <h3>Sync Options</h3>
+
+  <div class="form-group checkbox-group">
+    <%= f.check_box :auto_sync_enabled %>
+    <%= f.label :auto_sync_enabled, "Enable Auto Sync" %>
+    <small class="form-hint">Allow background jobs to sync content</small>
+  </div>
+
+  <div class="form-group checkbox-group">
+    <%= f.check_box :sync_on_publish %>
+    <%= f.label :sync_on_publish, "Sync on Publish" %>
+    <small class="form-hint">Automatically sync when articles are published</small>
+  </div>
+
+  <h3>Content Export</h3>
+
+  <div class="form-group">
+    <%= f.label :front_matter_mapping, "Custom Front Matter (JSON)" %>
+    <%= f.text_area :front_matter_mapping, rows: 3 %>
+    <small class="form-hint">JSON object with custom front matter fields</small>
+  </div>
+
+  <h3>Comments Export</h3>
+
+  <div class="form-group checkbox-group">
+    <%= f.check_box :export_comments %>
+    <%= f.label :export_comments, "Export Comments" %>
+  </div>
+
+  <div class="form-group">
+    <%= f.label :comments_format, "Comments Format" %>
+    <%= f.select :comments_format, JekyllSetting::COMMENTS_FORMATS.map { |f| [f.upcase, f] } %>
+  </div>
+
+  <div class="form-group checkbox-group">
+    <%= f.check_box :include_social_comments %>
+    <%= f.label :include_social_comments, "Include Social Comments" %>
+  </div>
+
+  <div class="form-actions">
+    <%= f.submit "Save Settings", class: "btn btn-primary" %>
+  </div>
+<% end %>

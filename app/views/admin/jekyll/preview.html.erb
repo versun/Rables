@@ -1,0 +1,27 @@
+<% content_for :title, "Jekyll Preview | Admin" %>
+
+<div class="admin-header">
+  <h1>Jekyll Export Preview</h1>
+  <%= link_to "Back to Settings", admin_jekyll_path, class: "btn btn-secondary" %>
+</div>
+
+<div class="admin-card">
+  <div class="card-header">
+    <h2><%= @filename %></h2>
+  </div>
+  <div class="card-body">
+    <pre class="code-preview"><code><%= @content %></code></pre>
+  </div>
+</div>
+
+<style>
+  .code-preview {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+    padding: 1rem;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+</style>

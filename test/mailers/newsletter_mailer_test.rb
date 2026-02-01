@@ -180,7 +180,10 @@ class NewsletterMailerTest < ActionMailer::TestCase
       text_body = email.text_part.body.decoded
       html_body = email.html_part.body.decoded
 
-      expected_url = "https://settings.example.com#{Rails.application.routes.url_helpers.article_path(article)}"
+      # CMS mode: Article URLs follow Jekyll format: /YYYY/MM/DD/slug/
+      # Use created_at as publication date (articles don't have published_at field)
+      expected_jekyll_path = "/#{article.created_at.strftime('%Y/%m/%d')}/#{article.slug}/"
+      expected_url = "https://settings.example.com#{expected_jekyll_path}"
 
       assert_includes text_body, expected_url
       assert_includes html_body, expected_url

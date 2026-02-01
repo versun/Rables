@@ -114,9 +114,9 @@
                   <% display_title = display_commentable&.title.presence || display_commentable&.try(:slug) %>
                   <% if display_commentable %>
                     <% if display_commentable.is_a?(Article) %>
-                      <%= link_to display_title.to_s.truncate(50), article_path(display_commentable), class: "title-link", target: "_blank" %>
+                      <%= link_to display_title.to_s.truncate(50), edit_admin_article_path(display_commentable), class: "title-link" %>
                     <% elsif display_commentable.is_a?(Page) %>
-                      <%= link_to display_title.to_s.truncate(50), page_path(display_commentable), class: "title-link", target: "_blank" %>
+                      <%= link_to display_title.to_s.truncate(50), edit_admin_page_path(display_commentable), class: "title-link" %>
                     <% else %>
                       <%= display_title.to_s.truncate(50) %>
                     <% end %>

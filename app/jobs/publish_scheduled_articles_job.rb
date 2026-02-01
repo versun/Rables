@@ -30,6 +30,9 @@ class PublishScheduledArticlesJob < ApplicationJob
       article_id: article_id,
       current_time: Time.current
     article.publish_scheduled
+
+    # Trigger Jekyll sync if enabled
+    trigger_jekyll_sync(article)
   rescue ActiveRecord::RecordNotFound => e
     Rails.event.notify "publish_scheduled_articles_job.article_not_found",
       level: "error",
@@ -62,4 +65,13 @@ class PublishScheduledArticlesJob < ApplicationJob
   #     job[:job] == self && job[:args].first == article.id
   #   end
   # end
+
+  private
+
+  def trigger_jekyll_sync(article)
+    setting = JekyllSetting.instance
+    return unless setting.sync_on_publish? && setting.auto_sync_enabled?
+
+    JekyllSingleSyncJob.perform_later("article", article.id, action: :sync)
+  end
 end

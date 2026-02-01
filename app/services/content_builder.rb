@@ -48,7 +48,7 @@ module ContentBuilder
     end
 
     # 构建URL和链接文本
-    post_url = build_post_url(slug)
+    post_url = build_post_url(slug, article)
     link_text = count_non_ascii_double ? "\nRead more:#{post_url}" : "\nRead more: #{post_url}"
     link_length = count_non_ascii_double ? 34 : (count_chars(link_text, false))
 
@@ -125,8 +125,9 @@ module ContentBuilder
 
   # 构建文章URL
   # @param slug [String] 文章slug
+  # @param article [Article] 文章对象，用于获取发布日期
   # @return [String] 文章完整URL
-  def build_post_url(slug)
+  def build_post_url(slug, article = nil)
     # 确保获取完整URL，带scheme
     site_url = Setting.first&.url.presence || "http://localhost:3000"
 
@@ -136,13 +137,13 @@ module ContentBuilder
     # 确保URL有scheme
     site_url = "https://#{site_url}" unless site_url.match?(%r{^https?://})
 
-    # 解析获取host和scheme
-    uri = URI.parse(site_url)
-
-    Rails.application.routes.url_helpers.article_url(
-      slug,
-      host: uri.host,
-      protocol: uri.scheme
-    )
+    # CMS mode: Article URLs follow Jekyll format: /YYYY/MM/DD/slug/
+    if article
+      # Use created_at as publication date (articles don't have published_at field)
+      published_date = article.created_at
+      "#{site_url}/#{published_date.strftime('%Y/%m/%d')}/#{slug}/"
+    else
+      "#{site_url}/#{slug}/"
+    end
   end
 end

@@ -30,11 +30,8 @@ class CommentMailer < ApplicationMailer
   def commentable_path(commentable)
     return "" unless commentable
 
-    helpers = Rails.application.routes.url_helpers
-    if commentable.is_a?(Page)
-      helpers.page_path(commentable)
-    else
-      helpers.article_path(commentable)
-    end
+    # CMS mode: no public frontend, return empty path
+    # Comments are managed in admin panel only
+    ""
   end
 end

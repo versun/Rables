@@ -142,7 +142,7 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
       }
     end
 
-    assert_redirected_to article_path(article)
+    assert_redirected_to root_path
     assert_match "验证失败", flash[:alert]
   end
 
@@ -246,7 +246,7 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
       }.merge(captcha_params)
     end
 
-    assert_redirected_to article_path(article)
+    assert_redirected_to root_path
     assert_match "提交评论时出错", flash[:alert]
   end
 
@@ -262,7 +262,7 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
       }.merge(captcha_params)
     end
 
-    assert_redirected_to page_path(page)
+    assert_redirected_to root_path
   end
 
   test "xhr html request returns json on validation error" do

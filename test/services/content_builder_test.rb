@@ -150,7 +150,7 @@ class ContentBuilderTest < ActiveSupport::TestCase
 
   # 场景3: description为空，content不为空，总字符超过最大值，添加read more链接并截断
   test "scenario 3: no description, long content exceeds max_length, adds read more link and truncates" do
-    max_length = 80
+    max_length = 120
     long_content = "a" * 200
     article = create_published_article(
       title: "Title",

@@ -1,0 +1,75 @@
+<% content_for :title, "Jekyll Integration | Admin" %>
+
+<div class="admin-header">
+  <h1>Jekyll Integration</h1>
+</div>
+
+<div class="admin-grid">
+  <!-- Settings Card -->
+  <div class="admin-card">
+    <div class="card-header">
+      <h2>Settings</h2>
+    </div>
+    <div class="card-body">
+      <%= render "form", setting: @setting %>
+    </div>
+  </div>
+
+  <!-- Sync Status Card -->
+  <div class="admin-card">
+    <div class="card-header">
+      <h2>Sync Status</h2>
+    </div>
+    <div class="card-body">
+      <%= render "sync_status", setting: @setting, verification_errors: @verification_errors %>
+    </div>
+  </div>
+</div>
+
+<!-- Sync History -->
+<div class="admin-card mt-4">
+  <div class="card-header">
+    <h2>Recent Sync History</h2>
+    <%= link_to "View All", admin_jekyll_sync_records_path, class: "btn btn-sm btn-secondary" %>
+  </div>
+  <div class="card-body">
+    <% if @sync_records.any? %>
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Articles</th>
+            <th>Pages</th>
+            <th>Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% @sync_records.each do |record| %>
+            <tr>
+              <td><%= record.created_at.strftime("%Y-%m-%d %H:%M") %></td>
+              <td><%= record.sync_type.titleize %></td>
+              <td>
+                <span class="status-badge status-<%= record.status %>">
+                  <%= record.status %>
+                </span>
+              </td>
+              <td><%= record.articles_count || "-" %></td>
+              <td><%= record.pages_count || "-" %></td>
+              <td>
+                <% if record.duration %>
+                  <%= record.duration %>s
+                <% else %>
+                  -
+                <% end %>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    <% else %>
+      <p class="text-muted">No sync history yet.</p>
+    <% end %>
+  </div>
+</div>

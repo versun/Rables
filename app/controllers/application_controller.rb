@@ -8,24 +8,14 @@ class ApplicationController < ActionController::Base
   # allow_browser versions: :modern
   protect_from_forgery with: :exception
 
-  helper_method :navbar_items
-
   private
 
   def set_time_zone
     Time.zone = CacheableSettings.site_info[:time_zone] || "UTC"
   end
 
-  def navbar_items
-    @navbar_items ||= CacheableSettings.navbar_items
-  end
-
   def refresh_settings
     CacheableSettings.refresh_site_info
-  end
-
-  def refresh_pages
-    CacheableSettings.refresh_navbar_items
   end
 
   def redirect_to_setup_if_needed

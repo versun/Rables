@@ -1,0 +1,61 @@
+<% content_for :title, "Jekyll Sync History | Admin" %>
+
+<div class="admin-header">
+  <h1>Jekyll Sync History</h1>
+  <%= link_to "Back to Settings", admin_jekyll_path, class: "btn btn-secondary" %>
+</div>
+
+<div class="admin-card">
+  <div class="card-body">
+    <% if @sync_records.any? %>
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Articles</th>
+            <th>Pages</th>
+            <th>Git Commit</th>
+            <th>Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% @sync_records.each do |record| %>
+            <tr>
+              <td><%= record.created_at.strftime("%Y-%m-%d %H:%M:%S") %></td>
+              <td><%= record.sync_type.titleize %></td>
+              <td>
+                <span class="status-badge status-<%= record.status %>">
+                  <%= record.status %>
+                </span>
+              </td>
+              <td><%= record.articles_count || "-" %></td>
+              <td><%= record.pages_count || "-" %></td>
+              <td>
+                <% if record.git_commit_sha %>
+                  <code><%= record.git_commit_sha[0..7] %></code>
+                <% else %>
+                  -
+                <% end %>
+              </td>
+              <td>
+                <% if record.duration %>
+                  <%= record.duration %>s
+                <% else %>
+                  -
+                <% end %>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+
+      <div class="pagination-wrapper">
+        <%= will_paginate @sync_records %>
+      </div>
+    <% else %>
+      <p class="text-muted">No sync history yet.</p>
+    <% end %>
+  </div>
+</div>

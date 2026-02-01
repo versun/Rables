@@ -167,7 +167,7 @@ class CommentsController < ApplicationController
   end
 
   def determine_redirect_path
-    @commentable.is_a?(Page) ? page_path(@commentable) : article_path(@commentable)
+    root_path
   end
 
   def comment_parent_id

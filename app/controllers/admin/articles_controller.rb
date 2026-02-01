@@ -130,6 +130,10 @@ class Admin::ArticlesController < Admin::BaseController
         title: @article.title,
         slug: @article.slug
       )
+
+      # Trigger Jekyll sync if enabled
+      trigger_jekyll_sync(@article)
+
       redirect_to admin_articles_path, notice: "Article was successfully published."
     else
       ActivityLog.log!(
@@ -561,5 +565,12 @@ class Admin::ArticlesController < Admin::BaseController
 
     def article_params
       params.require(:article).permit(:title, :content, :excerpt, :slug, :status, :published_at, :meta_title, :meta_description, :meta_image, :tags, :description, :created_at, :scheduled_at, :send_newsletter, :crosspost_mastodon, :crosspost_twitter, :crosspost_bluesky, :crosspost_xiaohongshu, :tag_list, :comment, :content_type, :html_content, :source_url, :source_author, :source_content, social_media_posts_attributes: [ :id, :platform, :url, :_destroy ])
+    end
+
+    def trigger_jekyll_sync(article)
+      setting = JekyllSetting.instance
+      return unless setting.sync_on_publish? && setting.auto_sync_enabled?
+
+      JekyllSingleSyncJob.perform_later("article", article.id, action: :sync)
     end
 end

@@ -109,8 +109,12 @@ class NewsletterMailer < ApplicationMailer
   def article_full_url(article, site_url)
     return "" if site_url.blank?
 
-    path = Rails.application.routes.url_helpers.article_path(article)
-    "#{site_url}#{path}"
+    # CMS mode: Article URLs point to the static Jekyll site
+    # The URL format follows Jekyll's post structure: /YYYY/MM/DD/slug/
+    # Use created_at as publication date (articles don't have published_at field)
+    published_date = article.created_at
+    jekyll_path = "/#{published_date.strftime('%Y/%m/%d')}/#{article.slug}/"
+    "#{site_url}#{jekyll_path}"
   end
 
   def active_storage_url_options(site_url)

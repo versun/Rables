@@ -1,0 +1,42 @@
+<div class="sync-status">
+  <div class="status-section">
+    <h4>Configuration Status</h4>
+    <% if verification_errors&.empty? %>
+      <div class="status-indicator status-ok">
+        <i class="fas fa-check-circle"></i>
+        <span>Configuration valid</span>
+      </div>
+    <% else %>
+      <div class="status-indicator status-error">
+        <i class="fas fa-exclamation-circle"></i>
+        <span>Configuration errors found</span>
+      </div>
+      <% if verification_errors.present? %>
+        <ul class="error-list">
+          <% verification_errors.each do |error| %>
+            <li><%= error %></li>
+          <% end %>
+        </ul>
+      <% end %>
+    <% end %>
+  </div>
+
+  <div class="status-section">
+    <h4>Jekyll Path</h4>
+    <code><%= setting.jekyll_path.presence || "Not configured" %></code>
+  </div>
+
+  <div class="status-section">
+    <h4>Last Sync</h4>
+    <% if setting.last_sync_at %>
+      <span><%= time_ago_in_words(setting.last_sync_at) %> ago</span>
+    <% else %>
+      <span class="text-muted">Never</span>
+    <% end %>
+  </div>
+
+  <div class="status-actions">
+    <%= button_to "Verify Configuration", verify_admin_jekyll_path, method: :post, class: "btn btn-secondary" %>
+    <%= button_to "Full Sync", sync_admin_jekyll_path, method: :post, class: "btn btn-primary", data: { confirm: "This will sync all content to Jekyll. Continue?" } %>
+  </div>
+</div>

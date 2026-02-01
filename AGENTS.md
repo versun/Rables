@@ -9,7 +9,18 @@ This file provides guidance to coding agents (Codex CLI / Claude Code / etc.) wh
 
 ## Project Overview
 
-Rables is a Rails 8.1 personal blog system with article management, social media crossposting, email newsletters, and static site generation. Uses SQLite for all databases (primary, cache, queue, cable).
+Rables is a Rails 8.1 CMS (Content Management System) for Jekyll static sites with article management, social media crossposting, email newsletters, and Jekyll integration. Uses SQLite for all databases (primary, cache, queue, cable).
+
+### Jekyll Integration
+
+Content is exported to Jekyll-compatible Markdown format with YAML Front Matter. The Jekyll site is managed separately from this CMS.
+
+Key Jekyll components:
+- **JekyllSetting**: Configuration for Jekyll export (path, directories, sync options)
+- **JekyllExport**: Converts articles/pages to Markdown with Front Matter
+- **JekyllSyncService**: Handles file operations and Git integration
+- **JekyllSyncJob**: Background job for full site sync
+- **JekyllSingleSyncJob**: Background job for single item sync
 
 ## Common Commands
 
@@ -67,8 +78,22 @@ bin/rails jobs:work               # Process jobs
 - **Page**: Static pages with similar structure to articles
 - **Tag**: Categorization with slugs, supports subscriber notifications
 
-### Static Site Generation
-Static site generation has been removed from this repository.
+### Jekyll Export
+Located in `app/models/jekyll_export.rb` and `app/services/jekyll_sync_service.rb`:
+- Exports articles to `_posts/YYYY-MM-DD-slug.md` format
+- Exports pages to `_pages/slug.md` format
+- Generates YAML Front Matter with title, date, tags, categories
+- Copies attachments to `assets/images/posts/{slug}/`
+- Supports Git auto-commit and push
+
+### Background Jobs (Solid Queue)
+Key jobs in `app/jobs/`:
+- `CrosspostArticleJob`: Post to social platforms
+- `NativeNewsletterSenderJob`: Send newsletters to subscribers
+- `FetchSocialCommentsJob`: Import comments from social posts
+- `PublishScheduledArticlesJob`: Auto-publish scheduled articles
+- `JekyllSyncJob`: Full Jekyll site sync
+- `JekyllSingleSyncJob`: Single article/page sync
 
 ### Social Media Integration
 Located in `app/services/`:
@@ -93,6 +118,8 @@ All admin routes under `/admin/` namespace. Key controllers handle:
 
 ### Key Models
 - `Setting`: Site-wide configuration (singleton pattern via `first_or_create`)
+- `JekyllSetting`: Jekyll export configuration (singleton pattern)
+- `JekyllSyncRecord`: History of Jekyll sync operations
 - `Subscriber`: Newsletter subscribers with tag-based subscriptions
 - `Redirect`: URL redirect rules with regex support
 - `StaticFile`: User-uploaded files for static hosting
