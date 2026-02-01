@@ -180,7 +180,7 @@ class NewsletterMailerTest < ActionMailer::TestCase
       text_body = email.text_part.body.decoded
       html_body = email.html_part.body.decoded
 
-      expected_url = "https://settings.example.com#{Rails.application.routes.url_helpers.article_path(article)}"
+      expected_url = "https://settings.example.com#{ApplicationController.helpers.public_article_path(article)}"
 
       assert_includes text_body, expected_url
       assert_includes html_body, expected_url

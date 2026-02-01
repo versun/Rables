@@ -6,22 +6,22 @@ module Exports
     require "open-uri"
     require "securerandom"
 
-    def process_html_content(html, record_id:, record_type:)
+    def process_html_content(html, record_id:, record_type:, record_slug: nil)
       html = html.to_s
       return "" if html.blank?
 
       doc = Nokogiri::HTML.fragment(html)
 
       doc.css("action-text-attachment").each do |attachment|
-        process_attachment_element(attachment, record_id, record_type)
+        process_attachment_element(attachment, record_id, record_type, record_slug)
       end
 
       doc.css("figure[data-trix-attachment]").each do |figure|
-        process_figure_element(figure, record_id, record_type)
+        process_figure_element(figure, record_id, record_type, record_slug)
       end
 
       doc.css("img").each do |img|
-        process_image_element(img, record_id, record_type)
+        process_image_element(img, record_id, record_type, record_slug)
       end
 
       doc.to_html
@@ -29,14 +29,14 @@ module Exports
 
     private
 
-    def process_attachment_element(attachment, record_id, record_type)
+    def process_attachment_element(attachment, record_id, record_type, record_slug = nil)
       content_type = attachment["content-type"]
       original_url = attachment["url"]
       filename = attachment["filename"]
 
       return unless content_type&.start_with?("image/") && original_url.present? && filename.present?
 
-      new_url = download_and_save_attachment(original_url, filename, record_id, record_type)
+      new_url = download_and_save_attachment(original_url, filename, record_id, record_type, record_slug)
       return unless new_url
 
       # Use caption attribute if available, otherwise use filename
@@ -54,7 +54,7 @@ module Exports
       Rails.event.notify("exports.attachment_element_failed", component: self.class.name, error: e.message, level: "error")
     end
 
-    def process_figure_element(figure, record_id, record_type)
+    def process_figure_element(figure, record_id, record_type, record_slug = nil)
       attachment_data = JSON.parse(figure["data-trix-attachment"]) rescue nil
       return unless attachment_data
 
@@ -64,7 +64,7 @@ module Exports
 
       return unless content_type&.start_with?("image/") && original_url.present?
 
-      new_url = download_and_save_attachment(original_url, filename, record_id, record_type)
+      new_url = download_and_save_attachment(original_url, filename, record_id, record_type, record_slug)
       return unless new_url
 
       attachment_data["url"] = new_url
@@ -89,7 +89,7 @@ module Exports
       Rails.event.notify("exports.figure_element_failed", component: self.class.name, error: e.message, level: "error")
     end
 
-    def process_image_element(img, record_id, record_type)
+    def process_image_element(img, record_id, record_type, record_slug = nil)
       original_url = img["src"]
       return unless original_url.present?
 
@@ -105,7 +105,7 @@ module Exports
       # 处理外部图片 URL (RemoteImage)
       elsif original_url.start_with?("http")
         filename = extract_filename_from_url(original_url)
-        new_url = download_and_save_attachment(original_url, filename, record_id, record_type)
+        new_url = download_and_save_attachment(original_url, filename, record_id, record_type, record_slug)
         img["src"] = new_url if new_url
       end
     rescue => e
@@ -150,8 +150,8 @@ module Exports
       nil
     end
 
-    def download_and_save_attachment(original_url, filename, record_id, record_type)
-      record_attachments_dir = File.join(attachments_dir, "#{record_type}_#{record_id}")
+    def download_and_save_attachment(original_url, filename, record_id, record_type, record_slug = nil)
+      record_attachments_dir = attachment_directory_for(record_id, record_type, record_slug)
       FileUtils.mkdir_p(record_attachments_dir)
 
       new_filename = "#{SecureRandom.hex(8)}_#{filename}"
@@ -169,10 +169,22 @@ module Exports
         end
       end
 
-      "attachments/#{record_type}_#{record_id}/#{new_filename}"
+      attachment_public_prefix(record_id, record_type, record_slug, new_filename)
     rescue => e
       Rails.event.notify("exports.attachment_download_failed", component: self.class.name, url: original_url, error: e.message, level: "error")
       nil
+    end
+
+    def attachment_directory_for(record_id, record_type, record_slug)
+      File.join(attachments_dir, attachment_subdir(record_id, record_type, record_slug))
+    end
+
+    def attachment_subdir(record_id, record_type, record_slug)
+      "#{record_type}_#{record_id}"
+    end
+
+    def attachment_public_prefix(record_id, record_type, record_slug, filename)
+      "attachments/#{attachment_subdir(record_id, record_type, record_slug)}/#{filename}"
     end
 
     def build_full_url(original_url)

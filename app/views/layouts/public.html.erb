@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title><%= content_for?(:title) ? yield(:title) : "Rables" %></title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+
+    <%= stylesheet_link_tag "public", "data-turbo-track": "reload" %>
+    <%= javascript_importmap_tags %>
+  </head>
+
+  <body class="public-body">
+    <main class="public-main">
+      <%= tag.div(flash[:alert], class: "flash-message flash-alert") if flash[:alert] %>
+      <%= tag.div(flash[:notice], class: "flash-message flash-notice") if flash[:notice] %>
+      <%= yield %>
+    </main>
+    <%= yield :javascript %>
+  </body>
+</html>

@@ -131,6 +131,7 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
 
   test "html submit with invalid captcha redirects with alert" do
     article = articles(:published_article)
+    referer = "http://www.example.com#{ApplicationController.helpers.public_article_path(article)}"
 
     assert_no_difference "Comment.count" do
       post comments_path(article_id: article.slug), params: {
@@ -139,10 +140,10 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
           content: "Nice post!"
         },
         captcha: { a: "1", b: "1", op: "+", answer: "" }
-      }
+      }, headers: { "HTTP_REFERER" => referer }
     end
 
-    assert_redirected_to article_path(article)
+    assert_redirected_to referer
     assert_match "验证失败", flash[:alert]
   end
 
@@ -236,6 +237,7 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
 
   test "html invalid comment redirects with alert" do
     article = articles(:published_article)
+    referer = "http://www.example.com#{ApplicationController.helpers.public_article_path(article)}"
 
     assert_no_difference "Comment.count" do
       post comments_path(article_id: article.slug), params: {
@@ -243,15 +245,16 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
           author_name: "",
           content: ""
         }
-      }.merge(captcha_params)
+      }.merge(captcha_params), headers: { "HTTP_REFERER" => referer }
     end
 
-    assert_redirected_to article_path(article)
+    assert_redirected_to referer
     assert_match "提交评论时出错", flash[:alert]
   end
 
   test "html comment on page redirects to page" do
     page = pages(:published_page)
+    referer = "http://www.example.com#{ApplicationController.helpers.public_page_path(page)}"
 
     assert_difference "Comment.count", 1 do
       post comments_path(page_id: page.slug), params: {
@@ -259,10 +262,10 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
           author_name: "Page Html",
           content: "Nice page!"
         }
-      }.merge(captcha_params)
+      }.merge(captcha_params), headers: { "HTTP_REFERER" => referer }
     end
 
-    assert_redirected_to page_path(page)
+    assert_redirected_to referer
   end
 
   test "xhr html request returns json on validation error" do

@@ -27,7 +27,7 @@ class SubscriptionsTest < ApplicationSystemTestCase
     solve_math_captcha
     click_button "订阅"
 
-    assert_current_path root_path
+    assert_current_path subscriptions_path
     assert_text "订阅成功！请检查您的邮箱并点击确认链接。"
   end
 

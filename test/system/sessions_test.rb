@@ -35,6 +35,6 @@ class SessionsTest < ApplicationSystemTestCase
     # Click the logout link/button in the page
     click_link "Logout"
 
-    assert_current_path root_path
+    assert_current_path new_session_path
   end
 end

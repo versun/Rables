@@ -1,6 +1,7 @@
 class SubscriptionsController < ApplicationController
   include CacheableSettings
   include MathCaptchaVerification
+  layout "public"
   # Allow unauthenticated users to subscribe/confirm/unsubscribe from public pages
   allow_unauthenticated_access only: [ :index, :create, :confirm, :unsubscribe ]
 
@@ -14,7 +15,7 @@ class SubscriptionsController < ApplicationController
 
     if email.blank?
       respond_to do |format|
-        format.html { redirect_to root_path, alert: "请输入有效的邮箱地址。" }
+        format.html { redirect_to subscriptions_path, alert: "请输入有效的邮箱地址。" }
         format.json { render json: { success: false, message: "请输入有效的邮箱地址。" }, status: :unprocessable_entity }
       end
       return
@@ -22,7 +23,7 @@ class SubscriptionsController < ApplicationController
 
     unless math_captcha_valid?(max: 10)
       respond_to do |format|
-        format.html { redirect_to root_path, alert: "验证失败：请回答数学题。" }
+        format.html { redirect_to subscriptions_path, alert: "验证失败：请回答数学题。" }
         format.json { render json: { success: false, message: "验证失败：请回答数学题。" }, status: :unprocessable_entity }
       end
       return
@@ -34,7 +35,7 @@ class SubscriptionsController < ApplicationController
       respond_to do |format|
         format.html do
           flash[:notice] = "您已经订阅了我们的邮件列表。"
-          redirect_to root_path
+          redirect_to subscriptions_path
         end
         format.json { render json: { success: true, message: "您已经订阅了我们的邮件列表。" } }
       end
@@ -68,7 +69,7 @@ class SubscriptionsController < ApplicationController
       respond_to do |format|
         format.html do
           flash[:notice] = "订阅成功！请检查您的邮箱并点击确认链接。"
-          redirect_to root_path
+          redirect_to subscriptions_path
         end
         format.json { render json: { success: true, message: "订阅成功！请检查您的邮箱并点击确认链接。" } }
       end
@@ -83,7 +84,7 @@ class SubscriptionsController < ApplicationController
       respond_to do |format|
         format.html do
           flash[:alert] = @subscriber.errors.full_messages.join(", ")
-          redirect_to root_path
+          redirect_to subscriptions_path
         end
         format.json { render json: { success: false, message: @subscriber.errors.full_messages.join(", ") }, status: :unprocessable_entity }
       end

@@ -1,0 +1,15 @@
+<% content_for :title, "Jekyll | Admin" %>
+
+<div class="admin-page">
+  <h1>Jekyll Integration</h1>
+
+  <div class="admin-card">
+    <h2>Settings</h2>
+    <%= render "form", setting: @setting %>
+  </div>
+
+  <div class="admin-card" style="margin-top: 1.5rem;">
+    <h2>Sync</h2>
+    <%= render "sync_status", setting: @setting, recent_syncs: @recent_syncs %>
+  </div>
+</div>

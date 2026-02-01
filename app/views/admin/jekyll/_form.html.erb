@@ -1,0 +1,112 @@
+<%= form_with model: setting, url: admin_jekyll_path, method: :patch do |f| %>
+  <div class="form-section">
+    <div class="field">
+      <%= f.label :jekyll_path, "Jekyll Path" %>
+      <%= f.text_field :jekyll_path, placeholder: "/path/to/jekyll-site" %>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <%= f.label :repository_type, "Repository Type" %>
+        <%= f.select :repository_type, options_for_select(JekyllSetting::VALID_REPOSITORY_TYPES, setting.repository_type) %>
+      </div>
+      <div class="field">
+        <%= f.label :branch, "Branch" %>
+        <%= f.text_field :branch %>
+      </div>
+    </div>
+
+    <div class="field">
+      <%= f.label :repository_url, "Repository URL" %>
+      <%= f.text_field :repository_url, placeholder: "https://github.com/user/repo.git" %>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Directories</h3>
+    <div class="field-row">
+      <div class="field">
+        <%= f.label :posts_directory, "Posts Directory" %>
+        <%= f.text_field :posts_directory %>
+      </div>
+      <div class="field">
+        <%= f.label :pages_directory, "Pages Directory" %>
+        <%= f.text_field :pages_directory %>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <%= f.label :assets_directory, "Assets Directory" %>
+        <%= f.text_field :assets_directory %>
+      </div>
+      <div class="field">
+        <%= f.label :images_directory, "Images Directory" %>
+        <%= f.text_field :images_directory %>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <%= f.label :static_files_directory, "Static Files Directory" %>
+        <%= f.text_field :static_files_directory %>
+      </div>
+      <div class="field">
+        <%= f.label :redirect_export_format, "Redirect Export Format" %>
+        <%= f.select :redirect_export_format,
+            options_for_select([ [ "Netlify", "netlify" ], [ "Vercel", "vercel" ], [ "Apache", "htaccess" ], [ "Nginx", "nginx" ], [ "Jekyll Plugin", "jekyll-plugin" ] ], setting.redirect_export_format),
+            include_blank: true %>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Sync Options</h3>
+    <div class="field checkbox">
+      <%= f.check_box :auto_sync_enabled %>
+      <%= f.label :auto_sync_enabled, "Enable Auto Sync" %>
+    </div>
+    <div class="field checkbox">
+      <%= f.check_box :sync_on_publish %>
+      <%= f.label :sync_on_publish, "Sync on Publish" %>
+    </div>
+    <div class="field checkbox">
+      <%= f.check_box :download_remote_images %>
+      <%= f.label :download_remote_images, "Download Remote Images" %>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Comments Export</h3>
+    <div class="field checkbox">
+      <%= f.check_box :export_comments %>
+      <%= f.label :export_comments, "Export Comments" %>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <%= f.label :comments_format, "Comments Format" %>
+        <%= f.select :comments_format, options_for_select([ [ "YAML", "yaml" ], [ "JSON", "json" ] ], setting.comments_format) %>
+      </div>
+      <div class="field checkbox">
+        <%= f.check_box :include_pending_comments %>
+        <%= f.label :include_pending_comments, "Include Pending" %>
+      </div>
+      <div class="field checkbox">
+        <%= f.check_box :include_social_comments %>
+        <%= f.label :include_social_comments, "Include Social" %>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Front Matter Mapping (JSON)</h3>
+    <div class="field">
+      <%= f.text_area :front_matter_mapping_json,
+          value: setting.front_matter_mapping.present? ? JSON.pretty_generate(setting.front_matter_mapping) : "",
+          rows: 6,
+          placeholder: "{\n  \"layout\": \"post\"\n}" %>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <%= f.submit "Save", class: "btn btn-primary" %>
+  </div>
+<% end %>

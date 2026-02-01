@@ -10,7 +10,14 @@ class CommentMailer < ApplicationMailer
     @commentable_path = commentable_path(@commentable)
 
     site_url = normalized_site_url(@site_info[:url])
-    @commentable_url = site_url.present? ? "#{site_url}#{@commentable_path}" : @commentable_path
+    @commentable_url =
+      if @commentable_path.to_s.match?(%r{^https?://})
+        @commentable_path
+      elsif site_url.present?
+        "#{site_url}#{@commentable_path}"
+      else
+        @commentable_path
+      end
 
     mail to: @parent.author_email,
       subject: "New reply to your comment | #{@site_title}"
@@ -30,11 +37,7 @@ class CommentMailer < ApplicationMailer
   def commentable_path(commentable)
     return "" unless commentable
 
-    helpers = Rails.application.routes.url_helpers
-    if commentable.is_a?(Page)
-      helpers.page_path(commentable)
-    else
-      helpers.article_path(commentable)
-    end
+    helpers = ApplicationController.helpers
+    commentable.is_a?(Page) ? helpers.public_page_path(commentable) : helpers.public_article_path(commentable)
   end
 end

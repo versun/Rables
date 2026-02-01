@@ -207,7 +207,7 @@
   <div class="form-actions">
     <%= form.submit "Save" %>
     <% if @article.persisted? %>
-      <%= link_to "Delete", article_path(@article.slug), 
+      <%= link_to "Delete", admin_article_path(@article),
           class: "btn btn-danger",
           data: { turbo_method: :delete, turbo_confirm: "Are you sure?" } %>
     <% end %>

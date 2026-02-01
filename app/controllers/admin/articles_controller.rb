@@ -60,6 +60,7 @@ class Admin::ArticlesController < Admin::BaseController
           title: @article.title,
           slug: @article.slug
         )
+        maybe_enqueue_jekyll_sync
         format.html { redirect_to admin_articles_path, notice: "Article was successfully updated." }
         format.json { render :show, status: :ok, location: @article }
       else
@@ -130,6 +131,7 @@ class Admin::ArticlesController < Admin::BaseController
         title: @article.title,
         slug: @article.slug
       )
+      maybe_enqueue_jekyll_sync
       redirect_to admin_articles_path, notice: "Article was successfully published."
     else
       ActivityLog.log!(
@@ -235,6 +237,16 @@ class Admin::ArticlesController < Admin::BaseController
       )
       redirect_to admin_articles_path, notice: "成功添加标签到 #{count} 篇文章。"
     end
+  end
+
+  def maybe_enqueue_jekyll_sync
+    return unless JekyllSetting.respond_to?(:table_exists?) && JekyllSetting.table_exists?
+
+    setting = JekyllSetting.instance
+    return unless setting.auto_sync_enabled? && setting.sync_on_publish?
+    return unless @article.publish?
+
+    JekyllSingleSyncJob.perform_later("Article", @article.id)
   end
 
   def batch_crosspost

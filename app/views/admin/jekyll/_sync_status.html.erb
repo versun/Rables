@@ -1,0 +1,35 @@
+<div class="sync-actions" style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+  <%= button_to "Sync Now", sync_admin_jekyll_path, method: :post, class: "btn btn-primary" %>
+  <%= link_to "View Sync History", admin_jekyll_sync_records_path, class: "btn btn-secondary" %>
+</div>
+
+<% if setting.last_sync_at.present? %>
+  <p style="margin-top: 0.75rem;">Last sync: <%= setting.last_sync_at.strftime("%Y-%m-%d %H:%M") %></p>
+<% end %>
+
+<% if recent_syncs.any? %>
+  <table class="admin-table compact-table" style="margin-top: 1rem;">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Status</th>
+        <th>Articles</th>
+        <th>Pages</th>
+        <th>Completed</th>
+        <th>Commit</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% recent_syncs.each do |record| %>
+        <tr>
+          <td><%= record.sync_type %></td>
+          <td><%= record.status %></td>
+          <td><%= record.articles_count %></td>
+          <td><%= record.pages_count %></td>
+          <td><%= record.completed_at&.strftime("%Y-%m-%d %H:%M") || "—" %></td>
+          <td><%= record.git_commit_sha&.slice(0, 8) || "—" %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+<% end %>

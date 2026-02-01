@@ -127,22 +127,11 @@ module ContentBuilder
   # @param slug [String] 文章slug
   # @return [String] 文章完整URL
   def build_post_url(slug)
-    # 确保获取完整URL，带scheme
+    # Fallback to localhost to preserve previous behavior when no site URL is configured.
     site_url = Setting.first&.url.presence || "http://localhost:3000"
-
-    # 移除末尾的斜杠
     site_url = site_url.chomp("/")
-
-    # 确保URL有scheme
     site_url = "https://#{site_url}" unless site_url.match?(%r{^https?://})
 
-    # 解析获取host和scheme
-    uri = URI.parse(site_url)
-
-    Rails.application.routes.url_helpers.article_url(
-      slug,
-      host: uri.host,
-      protocol: uri.scheme
-    )
+    "#{site_url}#{ApplicationController.helpers.public_article_path(slug)}"
   end
 end

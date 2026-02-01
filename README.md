@@ -1,7 +1,11 @@
 # Rables
 
-A Rails-based personal blog system with article management, social media crossposting, and email newsletter subscriptions.
+Rables is a Rails 8.1 CMS backend for managing content that is synced into a Jekyll site. It keeps the full admin workflow
+(articles, pages, tags, comments, newsletters, crossposting) while removing the public-facing blog UI.
 
-The code that runs my weblog, https://versun.me
+Key points:
+- Admin UI lives under `/admin`.
+- Public endpoints remain for subscriptions, comments, and static files.
+- Jekyll sync writes Markdown + assets into a configured Jekyll directory, optionally committing via Git.
 
-This won't work out of the box for anyone else, but you're welcome to take a look at the code to see how it works.
+This repo is tailored to its owner, but the code is usable as a reference for building a Jekyll-connected CMS backend.

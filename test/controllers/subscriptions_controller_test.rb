@@ -78,7 +78,7 @@ class SubscriptionsControllerTest < ActionDispatch::IntegrationTest
 
   test "blank email redirects with alert" do
     post subscriptions_path, params: { subscription: { email: "" } }
-    assert_redirected_to root_path
+    assert_redirected_to subscriptions_path
     assert_match "请输入有效的邮箱地址", flash[:alert]
   end
 

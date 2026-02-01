@@ -1,0 +1,38 @@
+<% content_for :title, "Jekyll Sync Records | Admin" %>
+
+<div class="admin-page">
+  <h1>Jekyll Sync Records</h1>
+
+  <table class="admin-table compact-table">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Status</th>
+        <th>Articles</th>
+        <th>Pages</th>
+        <th>Started</th>
+        <th>Completed</th>
+        <th>Commit</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% if @sync_records.any? %>
+        <% @sync_records.each do |record| %>
+          <tr>
+            <td><%= record.sync_type %></td>
+            <td><%= record.status %></td>
+            <td><%= record.articles_count %></td>
+            <td><%= record.pages_count %></td>
+            <td><%= record.started_at&.strftime("%Y-%m-%d %H:%M") || "—" %></td>
+            <td><%= record.completed_at&.strftime("%Y-%m-%d %H:%M") || "—" %></td>
+            <td><%= record.git_commit_sha&.slice(0, 8) || "—" %></td>
+          </tr>
+        <% end %>
+      <% else %>
+        <tr>
+          <td colspan="7">No sync records yet.</td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>

@@ -1,0 +1,12 @@
+<% content_for :title, "Jekyll Preview | Admin" %>
+
+<div class="admin-page">
+  <h1>Markdown Preview</h1>
+  <p><strong><%= @item.title %></strong></p>
+
+  <pre style="white-space: pre-wrap; background: #f6f7f9; padding: 1rem; border-radius: 6px;">
+<%= @markdown %>
+  </pre>
+
+  <%= link_to "Back", admin_jekyll_path, class: "btn btn-secondary" %>
+</div>

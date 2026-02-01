@@ -1,11 +1,10 @@
 Rails.application.routes.draw do
   # Defines the root path route ("/")
-  root "articles#index"
+  root to: redirect("/admin")
 
   # User authentication and management
   resources :users
   resource :session
-  resources :passwords
   resource :setup, only: [ :show, :create ], controller: "setup"
 
   # Newsletter subscriptions
@@ -100,6 +99,14 @@ Rails.application.routes.draw do
       end
     end
 
+    resource :jekyll, only: [ :show, :update ], controller: "jekyll" do
+      post :sync
+      post :sync_article
+      post :verify
+      get :preview
+    end
+    resources :jekyll_sync_records, only: [ :index ]
+
     # Activity logs
     resources :activities, only: [ :index ]
 
@@ -120,22 +127,8 @@ Rails.application.routes.draw do
   get "/static/*filename", to: "static_files#show", as: :static_file, format: false
 
 
-  # Health check and feeds
+  # Health check
   get "up" => "rails/health#show", as: :rails_health_check
-  get "/feed.xml" => "articles#index", format: "rss"
-  get "/sitemap.xml" => "sitemap#index", format: "xml", as: :sitemap
-
-  # Public pages routes - for viewing published pages
-  resources :pages, only: [ :show ], param: :slug
-
-  # Public tags routes - for browsing tags and filtering articles
-  resources :tags, only: [ :index, :show ], param: :slug
-
-  # Public article routes (must be last to avoid conflicts)
-  scope path: Rails.application.config.x.article_route_prefix do
-    get "/" => "articles#index", as: :articles
-    get "/:slug" => "articles#show", as: :article
-  end
 
   # Render dynamic PWA files from app/views/pwa/* (remember to link manifest in application.html.erb)
   # get "manifest" => "rails/pwa#manifest", as: :pwa_manifest

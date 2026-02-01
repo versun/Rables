@@ -105,4 +105,22 @@ class ApplicationHelperTest < ActionView::TestCase
       end
     end
   end
+
+  test "public_article_path respects article_route_prefix" do
+    article = Struct.new(:slug).new("hello-world")
+    original = Rails.application.config.x.article_route_prefix
+    Rails.application.config.x.article_route_prefix = "blog"
+
+    assert_equal "/blog/hello-world", public_article_path(article)
+  ensure
+    Rails.application.config.x.article_route_prefix = original
+  end
+
+  test "public_page_url returns redirect url without prefixing site url" do
+    page = Struct.new(:slug, :redirect?, :redirect_url).new("about", true, "https://external.test/about")
+
+    with_stubbed_site_info({ url: "https://site.test" }) do
+      assert_equal "https://external.test/about", public_page_url(page)
+    end
+  end
 end

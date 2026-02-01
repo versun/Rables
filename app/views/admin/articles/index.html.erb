@@ -131,7 +131,7 @@
                 </td>
                 <td class="col-actions-compact">
                   <div class="action-buttons">
-                    <%= link_to article_path(post), class: "action-btn", title: "View" do %>
+                    <%= link_to public_article_url(post), class: "action-btn", title: "View", target: "_blank", rel: "noopener" do %>
                       <i class="fas fa-eye"></i>
                     <% end %>
                     <%= link_to edit_admin_article_path(post), class: "action-btn", title: "Edit" do %>

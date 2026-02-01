@@ -55,6 +55,40 @@ module ApplicationHelper
     site_url
   end
 
+  def public_article_path(article_or_slug)
+    slug = article_or_slug.respond_to?(:slug) ? article_or_slug.slug : article_or_slug
+    prefix = Rails.application.config.x.article_route_prefix.to_s
+    prefix = prefix.delete_prefix("/")
+    segments = [prefix.presence, slug.to_s].compact
+    "/#{segments.join("/")}"
+  end
+
+  def public_page_path(page_or_slug)
+    page = page_or_slug
+    return page.redirect_url if page.respond_to?(:redirect?) && page.redirect?
+
+    slug = page.respond_to?(:slug) ? page.slug : page
+    "/pages/#{slug}"
+  end
+
+  def public_article_url(article_or_slug)
+    site_url = normalized_site_url
+    path = public_article_path(article_or_slug)
+    site_url.present? ? "#{site_url}#{path}" : path
+  end
+
+  def public_page_url(page_or_slug)
+    site_url = normalized_site_url
+    path = public_page_path(page_or_slug)
+    return path if path.to_s.match?(%r{^https?://})
+
+    site_url.present? ? "#{site_url}#{path}" : path
+  end
+
+  def public_commentable_url(commentable)
+    commentable.is_a?(Page) ? public_page_url(commentable) : public_article_url(commentable)
+  end
+
   # Safely render HTML content by sanitizing dangerous tags while preserving common formatting
   def safe_html_content(html_content)
     return "".html_safe if html_content.blank?

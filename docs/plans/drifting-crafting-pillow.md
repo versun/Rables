@@ -849,7 +849,7 @@ bin/rails db:migrate
 16. `SourcesController` - Twitter 内容获取
 17. `BaseController` - 基础控制器
 
-### 后台任务（16 个）
+### 后台任务（15 个）
 1. `CrosspostArticleJob` - 社交媒体跨发
 2. `FetchSocialCommentsJob` - 获取社交评论
 3. `ScheduledFetchSocialCommentsJob` - 定时获取评论
@@ -863,9 +863,8 @@ bin/rails db:migrate
 11. `ImportFromRssJob` - RSS 导入
 12. `ImportFromZipJob` - ZIP 导入
 13. `CleanOldExportsJob` - 清理旧导出
-14. `PasswordResetJob` - 密码重置
-15. `JekyllSyncJob` - Jekyll 全量同步（新增）
-16. `JekyllSingleSyncJob` - Jekyll 单项同步（新增）
+14. `JekyllSyncJob` - Jekyll 全量同步（新增）
+15. `JekyllSingleSyncJob` - Jekyll 单项同步（新增）
 
 ### 服务类（9 个）
 1. `TwitterService` - Twitter/X API

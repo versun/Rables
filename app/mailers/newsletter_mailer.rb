@@ -109,7 +109,7 @@ class NewsletterMailer < ApplicationMailer
   def article_full_url(article, site_url)
     return "" if site_url.blank?
 
-    path = Rails.application.routes.url_helpers.article_path(article)
+    path = ApplicationController.helpers.public_article_path(article)
     "#{site_url}#{path}"
   end
 

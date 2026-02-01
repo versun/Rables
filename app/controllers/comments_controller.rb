@@ -27,8 +27,7 @@ class CommentsController < ApplicationController
           if request.xhr? || request.headers["X-Requested-With"] == "XMLHttpRequest"
             render json: { success: false, message: "验证失败：请回答数学题。" }, status: :unprocessable_entity
           else
-            redirect_path = determine_redirect_path
-            redirect_to redirect_path, alert: "验证失败：请回答数学题。"
+            redirect_to_commentable alert: "验证失败：请回答数学题。"
           end
         end
         format.json { render json: { success: false, message: "验证失败：请回答数学题。" }, status: :unprocessable_entity }
@@ -63,10 +62,9 @@ class CommentsController < ApplicationController
             render json: { success: true, message: "评论已提交，等待审核后显示。" }, status: :created
           else
             # For regular form submissions, redirect
-            redirect_path = determine_redirect_path
             flash[:comment_submitted] = true
             flash[:comment_parent_id] = comment_parent_id
-            redirect_to redirect_path
+            redirect_to_commentable
           end
         end
         format.json { render json: { success: true, message: "评论已提交，等待审核后显示。" }, status: :created }
@@ -89,8 +87,7 @@ class CommentsController < ApplicationController
           if request.xhr? || request.headers["X-Requested-With"] == "XMLHttpRequest"
             render json: { success: false, message: "提交评论时出错：#{@comment.errors.full_messages.join('，')}" }, status: :unprocessable_entity
           else
-            redirect_path = determine_redirect_path
-            redirect_to redirect_path, alert: "提交评论时出错：#{@comment.errors.full_messages.join('，')}"
+            redirect_to_commentable alert: "提交评论时出错：#{@comment.errors.full_messages.join('，')}"
           end
         end
         format.json { render json: { success: false, message: "提交评论时出错：#{@comment.errors.full_messages.join('，')}" }, status: :unprocessable_entity }
@@ -109,7 +106,7 @@ class CommentsController < ApplicationController
         if request.xhr? || request.headers["X-Requested-With"] == "XMLHttpRequest"
           render json: { success: false, message: "文章或页面未找到。" }, status: :not_found
         else
-          redirect_to root_path, alert: "Article or page not found."
+          redirect_to_commentable alert: "Article or page not found."
         end
       end
       format.json { render json: { success: false, message: "文章或页面未找到。" }, status: :not_found }
@@ -141,7 +138,7 @@ class CommentsController < ApplicationController
         if request.xhr? || request.headers["X-Requested-With"] == "XMLHttpRequest"
           render json: { success: false, message: "提交评论时发生错误，请稍后重试。" }, status: :internal_server_error
         else
-          redirect_to root_path, alert: "An error occurred while submitting your comment. Please try again later."
+          redirect_to_commentable alert: "An error occurred while submitting your comment. Please try again later."
         end
       end
       format.json { render json: { success: false, message: "提交评论时发生错误，请稍后重试。" }, status: :internal_server_error }
@@ -167,7 +164,23 @@ class CommentsController < ApplicationController
   end
 
   def determine_redirect_path
-    @commentable.is_a?(Page) ? page_path(@commentable) : article_path(@commentable)
+    referer = request.referer.to_s
+    return root_path if referer.blank?
+
+    site_url = ApplicationController.helpers.normalized_site_url
+    return referer if site_url.present? && referer.start_with?(site_url)
+    return referer if referer.start_with?(request.base_url)
+
+    root_path
+  end
+
+  def redirect_to_commentable(options = {})
+    target = determine_redirect_path
+    if target == root_path
+      redirect_to target, options
+    else
+      redirect_to target, options.merge(allow_other_host: true)
+    end
   end
 
   def comment_parent_id

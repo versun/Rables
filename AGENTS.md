@@ -9,7 +9,8 @@ This file provides guidance to coding agents (Codex CLI / Claude Code / etc.) wh
 
 ## Project Overview
 
-Rables is a Rails 8.1 personal blog system with article management, social media crossposting, email newsletters, and static site generation. Uses SQLite for all databases (primary, cache, queue, cable).
+Rables is a Rails 8.1 CMS backend for a Jekyll static site. It provides admin-only content management, social media crossposting,
+email newsletters, and exports/syncs content into a Jekyll repo. Uses SQLite for all databases (primary, cache, queue, cable).
 
 ## Common Commands
 
@@ -67,8 +68,10 @@ bin/rails jobs:work               # Process jobs
 - **Page**: Static pages with similar structure to articles
 - **Tag**: Categorization with slugs, supports subscriber notifications
 
-### Static Site Generation
-Static site generation has been removed from this repository.
+### Jekyll Integration
+- Jekyll settings are stored in `JekyllSetting` (single record).
+- Sync/export lives in `JekyllExport` + `JekyllSyncService`.
+- Admin UI: `/admin/jekyll` and `/admin/jekyll_sync_records`.
 
 ### Social Media Integration
 Located in `app/services/`:
@@ -82,6 +85,8 @@ Key jobs in `app/jobs/`:
 - `NativeNewsletterSenderJob`: Send newsletters to subscribers
 - `FetchSocialCommentsJob`: Import comments from social posts
 - `PublishScheduledArticlesJob`: Auto-publish scheduled articles
+- `JekyllSyncJob`: Full Jekyll sync
+- `JekyllSingleSyncJob`: Single article/page sync
 
 ### Admin Interface
 All admin routes under `/admin/` namespace. Key controllers handle:
@@ -101,7 +106,8 @@ All admin routes under `/admin/` namespace. Key controllers handle:
 - Uses Hotwire (Turbo + Stimulus)
 - Importmap for JS modules
 - Trix editor for rich text (ActionText)
-- CSS in `application.css`
+- Admin CSS in `admin.css`
+- Public endpoints use a lightweight `public.css`
 
 ### Storage
 - ActiveStorage with local disk or S3 (configurable)
