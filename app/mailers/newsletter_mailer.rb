@@ -109,7 +109,11 @@ class NewsletterMailer < ApplicationMailer
   def article_full_url(article, site_url)
     return "" if site_url.blank?
 
-    path = Rails.application.routes.url_helpers.article_path(article)
+    # Build path manually since frontend routes are removed
+    prefix = Rails.application.config.x.article_route_prefix.to_s
+    prefix = "/#{prefix}" unless prefix.start_with?("/")
+    prefix = "" if prefix == "/"
+    path = "#{prefix}/#{article.slug}"
     "#{site_url}#{path}"
   end
 

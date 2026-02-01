@@ -30,6 +30,10 @@ class Admin::PagesController < Admin::BaseController
           slug: @page.slug
         )
         refresh_pages
+
+        # Trigger Jekyll sync if page is published
+        trigger_jekyll_sync(@page) if @page.publish?
+
         format.html { redirect_to admin_pages_path, notice: "Page was successfully created." }
         format.json { render :show, status: :created, location: @page }
       else
@@ -58,6 +62,10 @@ class Admin::PagesController < Admin::BaseController
           slug: @page.slug
         )
         refresh_pages
+
+        # Trigger Jekyll sync if page is published
+        trigger_jekyll_sync(@page) if @page.publish?
+
         format.html { redirect_to admin_pages_path, notice: "Page was successfully updated." }
         format.json { render :show, status: :ok, location: @page }
       else
@@ -134,5 +142,12 @@ class Admin::PagesController < Admin::BaseController
 
   def refresh_pages
     # 更新页面缓存或执行其他必要的刷新操作
+  end
+
+  def trigger_jekyll_sync(page)
+    setting = JekyllSetting.instance
+    return unless setting.configured? && setting.sync_on_publish?
+
+    JekyllSingleSyncJob.perform_later("Page", page.id, "publish")
   end
 end

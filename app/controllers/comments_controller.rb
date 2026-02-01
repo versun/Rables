@@ -167,7 +167,8 @@ class CommentsController < ApplicationController
   end
 
   def determine_redirect_path
-    @commentable.is_a?(Page) ? page_path(@commentable) : article_path(@commentable)
+    # Since frontend routes are removed, redirect to admin or root
+    admin_root_path
   end
 
   def comment_parent_id

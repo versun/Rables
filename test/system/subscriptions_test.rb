@@ -27,7 +27,9 @@ class SubscriptionsTest < ApplicationSystemTestCase
     solve_math_captcha
     click_button "订阅"
 
-    assert_current_path root_path
+    # After subscription, redirects to root which redirects to /admin which requires login
+    # So we end up at the login page with the success message
+    assert_current_path new_session_path
     assert_text "订阅成功！请检查您的邮箱并点击确认链接。"
   end
 

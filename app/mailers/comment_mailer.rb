@@ -30,11 +30,14 @@ class CommentMailer < ApplicationMailer
   def commentable_path(commentable)
     return "" unless commentable
 
-    helpers = Rails.application.routes.url_helpers
+    # Build path manually since frontend routes are removed
     if commentable.is_a?(Page)
-      helpers.page_path(commentable)
+      "/#{commentable.slug}"
     else
-      helpers.article_path(commentable)
+      prefix = Rails.application.config.x.article_route_prefix.to_s
+      prefix = "/#{prefix}" unless prefix.start_with?("/")
+      prefix = "" if prefix == "/"
+      "#{prefix}/#{commentable.slug}"
     end
   end
 end

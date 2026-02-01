@@ -1,4 +1,5 @@
 class SubscriptionsController < ApplicationController
+  layout "public"
   include CacheableSettings
   include MathCaptchaVerification
   # Allow unauthenticated users to subscribe/confirm/unsubscribe from public pages

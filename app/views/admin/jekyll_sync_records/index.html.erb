@@ -1,0 +1,63 @@
+<h1>Jekyll Sync History</h1>
+
+<div class="admin-toolbar">
+  <%= link_to "Back to Jekyll Settings", admin_jekyll_path, class: "btn btn-secondary" %>
+</div>
+
+<div class="admin-container">
+  <% if @sync_records.any? %>
+    <div class="table-container">
+      <table class="compact-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Triggered By</th>
+            <th>Articles</th>
+            <th>Pages</th>
+            <th>Attachments</th>
+            <th>Duration</th>
+            <th>Git SHA</th>
+            <th>Started</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% @sync_records.each do |record| %>
+            <tr>
+              <td><%= record.id %></td>
+              <td><%= record.sync_type %></td>
+              <td>
+                <span class="status-badge status-<%= record.status %>">
+                  <%= record.status %>
+                </span>
+              </td>
+              <td><%= record.triggered_by %></td>
+              <td><%= record.articles_count %></td>
+              <td><%= record.pages_count %></td>
+              <td><%= record.attachments_count %></td>
+              <td><%= record.duration_in_words || "-" %></td>
+              <td><code><%= record.git_commit_sha&.first(7) || "-" %></code></td>
+              <td><%= record.started_at&.strftime("%Y-%m-%d %H:%M:%S") || "-" %></td>
+              <td class="text-muted" title="<%= record.error_message %>">
+                <%= truncate(record.error_message.to_s, length: 50) %>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+
+    <% if @sync_records.respond_to?(:total_pages) && @sync_records.total_pages > 1 %>
+      <div class="pagination">
+        <%= paginate @sync_records %>
+      </div>
+    <% end %>
+  <% else %>
+    <div class="no-content">
+      <p>No sync records yet.</p>
+      <p><%= link_to "Start a sync", sync_admin_jekyll_path, method: :post, class: "btn btn-primary" %></p>
+    </div>
+  <% end %>
+</div>

@@ -1,0 +1,215 @@
+<h1>Jekyll Integration</h1>
+
+<div class="admin-container">
+  <h2>Configuration</h2>
+
+  <%= form_with model: @setting, url: admin_jekyll_path, method: :patch, local: true do |form| %>
+    <% if @setting.errors.any? %>
+      <div class="flash flash-alert">
+        <ul>
+          <% @setting.errors.full_messages.each do |message| %>
+            <li><%= message %></li>
+          <% end %>
+        </ul>
+      </div>
+    <% end %>
+
+    <div class="form-section">
+      <h3>Basic Settings</h3>
+
+      <div class="form-group">
+        <%= form.label :jekyll_path, "Jekyll Project Path" %>
+        <%= form.text_field :jekyll_path, class: "form-control", placeholder: "/path/to/your/jekyll-site" %>
+        <small class="form-text">The local path to your Jekyll project directory</small>
+      </div>
+
+      <div class="form-group">
+        <%= form.label :repository_type, "Repository Type" %>
+        <%= form.select :repository_type, [["Local Only", "local"], ["Git Repository", "git"]], {}, class: "form-control" %>
+      </div>
+
+      <div class="form-group" id="git-settings" style="<%= @setting.local_repository? ? 'display:none' : '' %>">
+        <%= form.label :repository_url, "Repository URL" %>
+        <%= form.text_field :repository_url, class: "form-control", placeholder: "https://github.com/user/repo.git" %>
+
+        <%= form.label :branch, "Branch" %>
+        <%= form.text_field :branch, class: "form-control", placeholder: "main" %>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <h3>Directory Settings</h3>
+
+      <div class="form-grid-2">
+        <div class="form-group">
+          <%= form.label :posts_directory, "Posts Directory" %>
+          <%= form.text_field :posts_directory, class: "form-control", placeholder: "_posts" %>
+        </div>
+
+        <div class="form-group">
+          <%= form.label :pages_directory, "Pages Directory" %>
+          <%= form.text_field :pages_directory, class: "form-control", placeholder: "_pages" %>
+        </div>
+
+        <div class="form-group">
+          <%= form.label :assets_directory, "Assets Directory" %>
+          <%= form.text_field :assets_directory, class: "form-control", placeholder: "assets/images" %>
+        </div>
+
+        <div class="form-group">
+          <%= form.label :images_directory, "Images Directory" %>
+          <%= form.text_field :images_directory, class: "form-control", placeholder: "assets/images/posts" %>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <h3>Sync Settings</h3>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <%= form.check_box :auto_sync_enabled %>
+          Enable Auto Sync
+        </label>
+        <small class="form-text">Automatically sync content on a schedule</small>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <%= form.check_box :sync_on_publish %>
+          Sync on Publish
+        </label>
+        <small class="form-text">Automatically sync when articles or pages are published</small>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <h3>Export Settings</h3>
+
+      <div class="form-grid-2">
+        <div class="form-group">
+          <%= form.label :redirect_export_format, "Redirect Export Format" %>
+          <%= form.select :redirect_export_format,
+              [["Netlify (_redirects)", "netlify"],
+               ["Vercel (vercel.json)", "vercel"],
+               ["Apache (.htaccess)", "htaccess"],
+               ["Nginx", "nginx"],
+               ["Jekyll Plugin", "jekyll-plugin"]],
+              {}, class: "form-control" %>
+        </div>
+
+        <div class="form-group">
+          <%= form.label :comments_format, "Comments Export Format" %>
+          <%= form.select :comments_format, [["YAML", "yaml"], ["JSON", "json"]], {}, class: "form-control" %>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <%= form.check_box :export_comments %>
+          Export Comments
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <%= form.check_box :include_social_comments %>
+          Include Social Media Comments
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <%= form.check_box :download_remote_images %>
+          Download Remote Images
+        </label>
+        <small class="form-text">Download and save remote images locally</small>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <h3>Front Matter Mapping (JSON)</h3>
+      <div class="form-group">
+        <%= form.text_area :front_matter_mapping, class: "form-control", rows: 5, placeholder: '{"custom_field": "jekyll_field"}' %>
+        <small class="form-text">Custom mapping of Rables fields to Jekyll front matter fields</small>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <%= form.submit "Save Settings", class: "btn btn-primary" %>
+      <%= link_to "Verify Configuration", verify_admin_jekyll_path, method: :post, class: "btn btn-secondary" %>
+    </div>
+  <% end %>
+</div>
+
+<div class="admin-container" style="margin-top: 2rem;">
+  <h2>Sync Actions</h2>
+
+  <div class="sync-status">
+    <% if @setting.configured? %>
+      <p class="status-badge status-publish">Configured</p>
+      <% if @setting.last_sync_at %>
+        <p>Last sync: <%= time_ago_in_words(@setting.last_sync_at) %> ago</p>
+      <% else %>
+        <p>Never synced</p>
+      <% end %>
+    <% else %>
+      <p class="status-badge status-draft">Not Configured</p>
+    <% end %>
+  </div>
+
+  <div class="form-actions" style="margin-top: 1rem;">
+    <%= link_to "Full Sync", sync_admin_jekyll_path, method: :post, class: "btn btn-primary", data: { confirm: "Start a full sync of all published content?" } %>
+    <%= link_to "View Sync History", admin_jekyll_sync_records_path, class: "btn btn-secondary" %>
+  </div>
+</div>
+
+<% if @sync_records.any? %>
+<div class="admin-container" style="margin-top: 2rem;">
+  <h2>Recent Sync Records</h2>
+
+  <div class="table-container">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Articles</th>
+          <th>Pages</th>
+          <th>Duration</th>
+          <th>Started</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @sync_records.each do |record| %>
+          <tr>
+            <td><%= record.sync_type %></td>
+            <td>
+              <span class="status-badge status-<%= record.status %>">
+                <%= record.status %>
+              </span>
+            </td>
+            <td><%= record.articles_count %></td>
+            <td><%= record.pages_count %></td>
+            <td><%= record.duration_in_words || "-" %></td>
+            <td><%= record.started_at&.strftime("%Y-%m-%d %H:%M") || "-" %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+</div>
+<% end %>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const repoType = document.getElementById('jekyll_setting_repository_type');
+  const gitSettings = document.getElementById('git-settings');
+
+  if (repoType && gitSettings) {
+    repoType.addEventListener('change', function() {
+      gitSettings.style.display = this.value === 'git' ? '' : 'none';
+    });
+  }
+});
+</script>

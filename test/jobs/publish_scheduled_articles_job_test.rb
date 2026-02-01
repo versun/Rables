@@ -81,4 +81,60 @@ class PublishScheduledArticlesJobTest < ActiveJob::TestCase
       PublishScheduledArticlesJob.schedule_at(article)
     end
   end
+
+  # Jekyll sync integration tests
+  test "triggers jekyll sync when sync_on_publish is enabled" do
+    setting = JekyllSetting.instance
+    temp_dir = Dir.mktmpdir("jekyll_test")
+    setting.update!(
+      jekyll_path: temp_dir,
+      repository_type: "local",
+      sync_on_publish: true,
+      redirect_export_format: "netlify",
+      comments_format: "yaml"
+    )
+
+    article = Article.create!(
+      title: "Scheduled Jekyll Test",
+      slug: "scheduled-jekyll-test-#{Time.current.to_i}",
+      status: :schedule,
+      scheduled_at: 1.hour.ago,
+      content_type: :html,
+      html_content: "<p>Test content</p>"
+    )
+
+    assert_enqueued_with(job: JekyllSingleSyncJob) do
+      PublishScheduledArticlesJob.perform_now(article.id)
+    end
+
+    FileUtils.rm_rf(temp_dir)
+  end
+
+  test "does not trigger jekyll sync when sync_on_publish is disabled" do
+    setting = JekyllSetting.instance
+    temp_dir = Dir.mktmpdir("jekyll_test")
+    setting.update!(
+      jekyll_path: temp_dir,
+      repository_type: "local",
+      sync_on_publish: false,
+      redirect_export_format: "netlify",
+      comments_format: "yaml"
+    )
+
+    article = Article.create!(
+      title: "Scheduled No Sync Test",
+      slug: "scheduled-no-sync-test-#{Time.current.to_i}",
+      status: :schedule,
+      scheduled_at: 1.hour.ago,
+      content_type: :html,
+      html_content: "<p>Test content</p>"
+    )
+
+    # Should not enqueue JekyllSingleSyncJob
+    assert_no_enqueued_jobs(only: JekyllSingleSyncJob) do
+      PublishScheduledArticlesJob.perform_now(article.id)
+    end
+
+    FileUtils.rm_rf(temp_dir)
+  end
 end

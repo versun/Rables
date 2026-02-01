@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_01_28_004824) do
+ActiveRecord::Schema[8.1].define(version: 2026_01_31_230328) do
   create_table "action_text_rich_texts", force: :cascade do |t|
     t.text "body"
     t.datetime "created_at", null: false
@@ -144,6 +144,50 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_28_004824) do
     t.datetime "updated_at", null: false
     t.string "username"
     t.index ["provider"], name: "index_git_integrations_on_provider", unique: true
+  end
+
+  create_table "jekyll_settings", force: :cascade do |t|
+    t.string "assets_directory", default: "assets/images"
+    t.boolean "auto_sync_enabled", default: false
+    t.string "branch", default: "main"
+    t.string "comments_format", default: "yaml"
+    t.datetime "created_at", null: false
+    t.boolean "download_remote_images", default: true
+    t.boolean "export_comments", default: true
+    t.text "front_matter_mapping"
+    t.string "images_directory", default: "assets/images/posts"
+    t.boolean "include_pending_comments", default: false
+    t.boolean "include_social_comments", default: true
+    t.string "jekyll_path"
+    t.datetime "last_sync_at"
+    t.string "pages_directory", default: "_pages"
+    t.string "posts_directory", default: "_posts"
+    t.boolean "preserve_original_paths", default: false
+    t.string "redirect_export_format", default: "netlify"
+    t.string "repository_type", default: "local"
+    t.string "repository_url"
+    t.string "static_files_directory", default: "assets"
+    t.boolean "sync_on_publish", default: true
+    t.datetime "updated_at", null: false
+  end
+
+  create_table "jekyll_sync_records", force: :cascade do |t|
+    t.integer "articles_count", default: 0
+    t.integer "attachments_count", default: 0
+    t.datetime "completed_at"
+    t.datetime "created_at", null: false
+    t.text "details"
+    t.text "error_message"
+    t.string "git_commit_sha"
+    t.integer "pages_count", default: 0
+    t.datetime "started_at"
+    t.string "status", default: "pending"
+    t.string "sync_type", null: false
+    t.string "triggered_by"
+    t.datetime "updated_at", null: false
+    t.index ["created_at"], name: "index_jekyll_sync_records_on_created_at"
+    t.index ["status"], name: "index_jekyll_sync_records_on_status"
+    t.index ["sync_type"], name: "index_jekyll_sync_records_on_sync_type"
   end
 
   create_table "listmonks", force: :cascade do |t|

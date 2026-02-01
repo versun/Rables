@@ -9,7 +9,15 @@ This file provides guidance to coding agents (Codex CLI / Claude Code / etc.) wh
 
 ## Project Overview
 
-Rables is a Rails 8.1 personal blog system with article management, social media crossposting, email newsletters, and static site generation. Uses SQLite for all databases (primary, cache, queue, cable).
+Rables is a Rails 8.1 CMS backend for Jekyll static sites. It provides article management, social media crossposting, email newsletters, and Jekyll synchronization. Uses SQLite for all databases (primary, cache, queue, cable).
+
+**Key Features:**
+- Content management (articles, pages, tags)
+- Jekyll integration with automatic sync
+- Social media crossposting (Twitter/X, Mastodon, Bluesky)
+- Email newsletter management
+- Comment management (local + social media imports)
+- URL redirects and static file management
 
 ## Common Commands
 
@@ -67,8 +75,18 @@ bin/rails jobs:work               # Process jobs
 - **Page**: Static pages with similar structure to articles
 - **Tag**: Categorization with slugs, supports subscriber notifications
 
-### Static Site Generation
-Static site generation has been removed from this repository.
+### Jekyll Integration
+Located in `app/services/` and `app/models/`:
+- **JekyllSetting**: Configuration for Jekyll project path, Git repository, sync options
+- **JekyllSyncService**: Exports articles/pages to Jekyll-compatible Markdown with front matter
+- **JekyllSyncRecord**: Tracks sync history and status
+- **JekyllCommentsExporter**: Exports comments to YAML/JSON data files
+- **JekyllRedirectsExporter**: Exports redirects to Netlify/Vercel/htaccess/nginx formats
+- **JekyllStaticFilesExporter**: Exports static files to Jekyll assets directory
+
+Key jobs:
+- `JekyllSyncJob`: Full sync of all published content
+- `JekyllSingleSyncJob`: Sync single article/page on publish
 
 ### Social Media Integration
 Located in `app/services/`:
@@ -82,17 +100,22 @@ Key jobs in `app/jobs/`:
 - `NativeNewsletterSenderJob`: Send newsletters to subscribers
 - `FetchSocialCommentsJob`: Import comments from social posts
 - `PublishScheduledArticlesJob`: Auto-publish scheduled articles
+- `JekyllSyncJob`: Sync content to Jekyll project
+- `JekyllSingleSyncJob`: Sync single item to Jekyll
 
 ### Admin Interface
 All admin routes under `/admin/` namespace. Key controllers handle:
 - Article/Page CRUD with batch operations
 - Comment moderation (approve/reject)
 - Settings, newsletter config, crosspost config
+- Jekyll integration settings and sync
 - Static file management, redirects
 - Import/Export (WordPress, RSS, ZIP)
 
 ### Key Models
 - `Setting`: Site-wide configuration (singleton pattern via `first_or_create`)
+- `JekyllSetting`: Jekyll integration configuration (singleton pattern)
+- `JekyllSyncRecord`: Sync operation history
 - `Subscriber`: Newsletter subscribers with tag-based subscriptions
 - `Redirect`: URL redirect rules with regex support
 - `StaticFile`: User-uploaded files for static hosting
@@ -100,8 +123,8 @@ All admin routes under `/admin/` namespace. Key controllers handle:
 ### Frontend
 - Uses Hotwire (Turbo + Stimulus)
 - Importmap for JS modules
-- Trix editor for rich text (ActionText)
-- CSS in `application.css`
+- TinyMCE editor for rich text editing
+- CSS in `admin.css`
 
 ### Storage
 - ActiveStorage with local disk or S3 (configurable)

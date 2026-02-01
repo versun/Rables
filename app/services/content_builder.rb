@@ -136,13 +136,11 @@ module ContentBuilder
     # 确保URL有scheme
     site_url = "https://#{site_url}" unless site_url.match?(%r{^https?://})
 
-    # 解析获取host和scheme
-    uri = URI.parse(site_url)
+    # Build path manually since frontend routes are removed
+    prefix = Rails.application.config.x.article_route_prefix.to_s
+    prefix = "/#{prefix}" unless prefix.start_with?("/")
+    prefix = "" if prefix == "/"
 
-    Rails.application.routes.url_helpers.article_url(
-      slug,
-      host: uri.host,
-      protocol: uri.scheme
-    )
+    "#{site_url}#{prefix}/#{slug}"
   end
 end

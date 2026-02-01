@@ -180,7 +180,11 @@ class NewsletterMailerTest < ActionMailer::TestCase
       text_body = email.text_part.body.decoded
       html_body = email.html_part.body.decoded
 
-      expected_url = "https://settings.example.com#{Rails.application.routes.url_helpers.article_path(article)}"
+      # Build expected path manually since frontend routes are removed
+      prefix = Rails.application.config.x.article_route_prefix.to_s
+      prefix = "/#{prefix}" unless prefix.start_with?("/")
+      prefix = "" if prefix == "/"
+      expected_url = "https://settings.example.com#{prefix}/#{article.slug}"
 
       assert_includes text_body, expected_url
       assert_includes html_body, expected_url

@@ -1,0 +1,13 @@
+<h1>Jekyll Preview: <%= @article.title %></h1>
+
+<div class="admin-container">
+  <div class="form-actions">
+    <%= link_to "Back to Jekyll Settings", admin_jekyll_path, class: "btn btn-secondary" %>
+    <%= link_to "Edit Article", edit_admin_article_path(@article), class: "btn btn-secondary" %>
+  </div>
+
+  <div style="margin-top: 1rem;">
+    <h3>Generated Markdown</h3>
+    <pre style="background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;"><code><%= @preview_content %></code></pre>
+  </div>
+</div>

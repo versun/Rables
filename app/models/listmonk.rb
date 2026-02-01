@@ -180,7 +180,7 @@ class Listmonk < ApplicationRecord
     return base_body unless article.has_source?
 
     reference_html = ApplicationController.renderer.render(
-      partial: "articles/source_reference",
+      partial: "newsletter_mailer/source_reference",
       locals: { article: article }
     )
 

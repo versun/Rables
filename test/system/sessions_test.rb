@@ -35,6 +35,7 @@ class SessionsTest < ApplicationSystemTestCase
     # Click the logout link/button in the page
     click_link "Logout"
 
-    assert_current_path root_path
+    # After logout, user is redirected to login page (root redirects to /admin which requires login)
+    assert_current_path new_session_path
   end
 end
