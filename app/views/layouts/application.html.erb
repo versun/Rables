@@ -22,6 +22,12 @@
     <link rel="apple-touch-icon" href="/static/favicon.png">
     <link rel="alternate" type="application/rss+xml" title="<%= site_settings[:title] %>" href="/feed">
 
+    <%# DNS prefetch and preconnect for external CDN resources %>
+    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
 

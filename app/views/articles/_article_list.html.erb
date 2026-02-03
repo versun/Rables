@@ -3,7 +3,7 @@
 <% list_classes << "is-home" if request.path == root_path %>
 <div class="<%= list_classes.join(' ') %>">
   <% articles.each do |article| %>
-    <% cache ["article-list-item", article, site_url] do %>
+    <% cache ["article-list-item", article.cache_key_with_version, site_url] do %>
       <% article_url = "#{site_url}#{article_path(article)}" %>
       <article class="timeline-item" data-article-id="<%= article.id %>">
         <div class="timeline-marker"></div>

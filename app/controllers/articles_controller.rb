@@ -13,11 +13,22 @@ class ArticlesController < ApplicationController
         @articles = base_article_scope
                     .order(created_at: :desc)
                     .paginate(page: @page, per_page: @per_page)
+
+        # Set cache headers for the home page
+        # Cache for 5 minutes, allow CDN/shared cache for 15 minutes
+        headers["Cache-Control"] = "public, max-age=300, s-maxage=900"
+
+        # Add fresh_when support based on the most recent article
+        if @articles.any?
+          fresh_when(last_modified: @articles.maximum(:updated_at), etag: @articles.map(&:cache_key_with_version).join)
+        end
       }
 
       format.rss {
         @articles = base_article_scope.order(created_at: :desc)
         headers["Content-Type"] = "application/xml; charset=utf-8"
+        # RSS feed can be cached longer since content updates less frequently
+        headers["Cache-Control"] = "public, max-age=600, s-maxage=1800"
         render layout: false
       }
     end
