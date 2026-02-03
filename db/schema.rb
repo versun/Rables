@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_01_28_004824) do
+ActiveRecord::Schema[8.1].define(version: 2026_02_03_000000) do
   create_table "action_text_rich_texts", force: :cascade do |t|
     t.text "body"
     t.datetime "created_at", null: false
@@ -86,6 +86,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_28_004824) do
     t.string "title"
     t.datetime "updated_at", null: false
     t.index ["slug"], name: "index_articles_on_slug", unique: true
+    t.index ["status", "created_at"], name: "index_articles_on_status_and_created_at"
     t.index ["status"], name: "index_articles_on_status"
   end
 

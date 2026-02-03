@@ -10,26 +10,13 @@ class ArticlesController < ApplicationController
         @page = params[:page].present? ? params[:page].to_i : 1
         @per_page = 10
 
-        if params[:q].present?
-          # 使用SQLite搜索
-          @articles = Article.search_content(params[:q])
-                             .published
-                             .includes(:rich_text_content, :tags)
-                             .order(created_at: :desc)
-                             .paginate(page: @page, per_page: @per_page)
-          @total_count = @articles.total_entries
-        else
-          # 不搜索，只分页
-          @articles = Article.published
-                             .includes(:rich_text_content, :tags)
-                             .order(created_at: :desc)
-                             .paginate(page: @page, per_page: @per_page)
-          @total_count = @articles.total_entries
-        end
+        @articles = base_article_scope
+                    .order(created_at: :desc)
+                    .paginate(page: @page, per_page: @per_page)
       }
 
       format.rss {
-        @articles = Article.published.includes(:rich_text_content, :tags).order(created_at: :desc)
+        @articles = base_article_scope.order(created_at: :desc)
         headers["Content-Type"] = "application/xml; charset=utf-8"
         render layout: false
       }
@@ -110,12 +97,25 @@ class ArticlesController < ApplicationController
 
   private
 
+  def base_article_scope
+    scope = params[:q].present? ? Article.search_content(params[:q]) : Article.all
+    scope = scope.published.includes(:tags)
+
+    if scope.respond_to?(:with_rich_text_content_and_embeds)
+      scope.with_rich_text_content_and_embeds
+    elsif scope.respond_to?(:with_rich_text_content)
+      scope.with_rich_text_content.preload(rich_text_content: { embeds_attachments: :blob })
+    else
+      scope.preload(rich_text_content: { embeds_attachments: :blob })
+    end
+  end
+
   def set_article
     @article = Article.includes(
-      :rich_text_content,
       :tags,
       :social_media_posts,
-      comments: [ :replies ]
+      comments: [ :replies ],
+      rich_text_content: { embeds_attachments: :blob }
     ).find_by(slug: params[:slug])
   end
 
