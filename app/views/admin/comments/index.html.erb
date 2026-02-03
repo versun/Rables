@@ -126,6 +126,9 @@
                 </td>
                 <td class="col-title">
                   <strong><%= comment.author_name %></strong>
+                  <% if comment.author_email.present? %>
+                    <br><small><%= comment.author_email %></small>
+                  <% end %>
                   <% if comment.author_url.present? %>
                     <br><small><%= link_to comment.author_url, comment.author_url, target: "_blank", style: "color: #666;" %></small>
                   <% end %>
