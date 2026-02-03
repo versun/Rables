@@ -19,7 +19,8 @@ Rails.application.configure do
   config.public_file_server.headers = { "cache-control" => "public, max-age=#{1.year.to_i}" }
 
   # Enable serving of images, stylesheets, and JavaScripts from an asset server.
-  # config.asset_host = "http://assets.example.com"
+  # 配置 CDN 域名，用于加速所有静态资源（JS/CSS/图片）
+  # config.asset_host = ENV["CDN_HOST"].presence
 
   # Store uploaded files on the local file system (see config/storage.yml for options).
   config.active_storage.service = ENV.fetch("ACTIVE_STORAGE_SERVICE", :local)
@@ -45,6 +46,9 @@ Rails.application.configure do
 
   # Don't log any deprecations.
   config.active_support.report_deprecations = false
+
+  # Enable gzip and brotli compression for responses
+  config.middleware.use Rack::Deflater
 
   # Replace the default in-process memory cache store with a durable alternative.
   config.cache_store = :solid_cache_store
