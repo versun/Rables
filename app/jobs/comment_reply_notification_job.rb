@@ -17,6 +17,14 @@ class CommentReplyNotificationJob < ApplicationJob
     apply_smtp_config_to_mail(mail, newsletter_setting) unless Rails.env.test?
 
     mail.deliver_now
+    ActivityLog.log!(
+      action: :sent,
+      target: :comment_reply_notification,
+      level: :info,
+      comment_id: comment.id,
+      email: comment.parent&.author_email,
+      author: comment.author_name
+    )
     Rails.event.notify "comment_reply_notification_job.email_sent",
       level: "info",
       component: "CommentReplyNotificationJob",
@@ -24,6 +32,14 @@ class CommentReplyNotificationJob < ApplicationJob
       parent_comment_id: comment.parent_id,
       recipient_email: comment.parent&.author_email
   rescue => e
+    ActivityLog.log!(
+      action: :failed,
+      target: :comment_reply_notification,
+      level: :error,
+      comment_id: comment_id,
+      email: comment&.parent&.author_email,
+      error: e.message
+    )
     Rails.event.notify "comment_reply_notification_job.email_failed",
       level: "error",
       component: "CommentReplyNotificationJob",
