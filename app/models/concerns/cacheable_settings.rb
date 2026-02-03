@@ -2,7 +2,7 @@ module CacheableSettings
   extend ActiveSupport::Concern
 
   def self.site_info
-    Rails.cache.fetch("site_info", expires_in: 1.hour) do
+    Rails.cache.fetch("site_info", expires_in: 24.hours) do
       setting = Setting.first
       return {} unless setting
 
@@ -23,7 +23,7 @@ module CacheableSettings
   end
 
   def self.navbar_items
-    Rails.cache.fetch("navbar_items", expires_in: 1.hour) do
+    Rails.cache.fetch("navbar_items", expires_in: 24.hours) do
       Page.published.order(page_order: :desc).select(:id, :title, :slug, :redirect_url)
     end
   end
@@ -46,7 +46,7 @@ module CacheableSettings
   # Cached fields: enabled, native
   # Remember to bump version if changing the returned hash structure
   def self.newsletter_setting
-    Rails.cache.fetch("newsletter_setting:v1", expires_in: 1.hour) do
+    Rails.cache.fetch("newsletter_setting:v1", expires_in: 24.hours) do
       setting = NewsletterSetting.first
       {
         enabled: setting&.enabled || false,

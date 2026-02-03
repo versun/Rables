@@ -140,14 +140,18 @@ class Article < ApplicationRecord
 
   # 根据content_type返回相应的内容
   def rendered_content
-    raw_html = if html?
-      sanitize_html(html_content)
-    else
-      content.to_s
-    end
+    cache_key = "#{cache_key_with_version}/rendered_content"
 
-    # Add loading="lazy" to all images
-    add_lazy_loading_to_images(raw_html.to_s)
+    Rails.cache.fetch(cache_key, expires_in: 7.days) do
+      raw_html = if html?
+        sanitize_html(html_content)
+      else
+        content.to_s
+      end
+
+      # Add loading="lazy" to all images
+      add_lazy_loading_to_images(raw_html.to_s)
+    end
   end
 
   # Sanitize HTML content to remove dangerous tags while preserving allowed tags
