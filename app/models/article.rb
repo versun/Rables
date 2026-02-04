@@ -14,7 +14,10 @@ class Article < ApplicationRecord
   enum :status, [ :draft, :publish, :schedule, :trash, :shared ]
   enum :content_type, { rich_text: "rich_text", html: "html" }, default: "rich_text"
 
+  EXCERPT_LENGTH = 200
+
   before_validation :generate_slug
+  before_validation :sync_excerpt
   validates :slug, presence: true, uniqueness: true
   validates :scheduled_at, presence: true, if: :schedule?
   validates :html_content, presence: true, if: -> { html? }
@@ -41,10 +44,10 @@ class Article < ApplicationRecord
 
     # 搜索标题、slug、描述和内容
     where(
-      "title LIKE :term OR
-       slug LIKE :term OR
-       description LIKE :term OR
-       id IN (SELECT record_id FROM action_text_rich_texts
+      "articles.title LIKE :term OR
+       articles.slug LIKE :term OR
+       articles.description LIKE :term OR
+       articles.id IN (SELECT record_id FROM action_text_rich_texts
               WHERE record_type = 'Article' AND name = 'content' AND body LIKE :term)",
       term: search_term
     )
@@ -211,8 +214,12 @@ class Article < ApplicationRecord
       image_attachment = first_image_attachment
       if image_attachment
         if image_attachment.is_a?(ActiveStorage::Blob)
-          # 返回相对路径，在视图中转换为绝对路径
-          Rails.application.routes.url_helpers.rails_blob_path(image_attachment, only_path: true)
+          # 公共对象直接返回服务 URL，私有对象返回相对路径
+          if image_attachment.service.public?
+            image_attachment.url
+          else
+            Rails.application.routes.url_helpers.rails_blob_path(image_attachment, only_path: true)
+          end
         elsif image_attachment.class.name == "ActionText::Attachables::RemoteImage"
           image_attachment.try(:url)
         end
@@ -359,6 +366,18 @@ class Article < ApplicationRecord
         errors.add(:content, "can't be blank")
       end
     end
+  end
+
+  def sync_excerpt
+    self.excerpt = build_excerpt
+  end
+
+  def build_excerpt
+    source = description.presence || plain_text_content
+    text = source.to_s.squish
+    return nil if text.blank?
+
+    text.truncate(EXCERPT_LENGTH, separator: /\s/)
   end
 
   def add_lazy_loading_to_images(html)

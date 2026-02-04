@@ -5,6 +5,7 @@
   <% articles.each do |article| %>
     <% cache ["article-list-item", article.cache_key_with_version, site_url] do %>
       <% article_url = "#{site_url}#{article_path(article)}" %>
+      <% summary_text = article.description.presence || (article.title.present? ? article.excerpt : nil) %>
       <article class="timeline-item" data-article-id="<%= article.id %>">
         <div class="timeline-marker"></div>
         <div class="timeline-content">
@@ -28,9 +29,9 @@
             <h2 class="post-title">
               <%= link_to article.title, article_url %>
             </h2>
-            <% if article.description.present? %>
+            <% if summary_text.present? %>
               <div class="post-description">
-                <%= simple_format(article.description) %>
+                <%= simple_format(summary_text) %>
               </div>
             <% else %>
               <div class="post-content">
@@ -39,9 +40,9 @@
             <% end %>
           <% else %>
             <%= render 'articles/source_reference', article: article %>
-            <% if article.description.present? %>
+            <% if summary_text.present? %>
               <div class="post-description">
-                <%= simple_format(article.description) %>
+                <%= simple_format(summary_text) %>
               </div>
             <% else %>
               <div class="post-content">

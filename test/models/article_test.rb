@@ -266,6 +266,41 @@ class ArticleTest < ActiveSupport::TestCase
     assert_equal "fallback desc", fallback_article.seo_meta_description
   end
 
+  test "generates excerpt from description or content" do
+    described = Article.create!(
+      title: "Described",
+      slug: "described",
+      status: :draft,
+      content_type: :html,
+      html_content: "<p>Body</p>",
+      description: "Short description"
+    )
+    assert_equal "Short description", described.excerpt
+
+    content_only = Article.create!(
+      title: "Content Only",
+      slug: "content-only",
+      status: :draft,
+      content_type: :html,
+      html_content: "<p>Hello world</p>"
+    )
+    assert_equal "Hello world", content_only.excerpt
+  end
+
+  test "truncates excerpt to configured length" do
+    long_text = ("word " * 200).strip
+    article = Article.create!(
+      title: "Long Excerpt",
+      slug: "long-excerpt",
+      status: :draft,
+      content_type: :html,
+      html_content: "<p>#{long_text}</p>"
+    )
+
+    assert article.excerpt.length <= Article::EXCERPT_LENGTH
+    assert article.excerpt.end_with?("...")
+  end
+
   test "extracts TinyMCE images from HTML content for crosspost" do
     # Create blob for TinyMCE uploaded image
     blob = ActiveStorage::Blob.create_and_upload!(

@@ -8,8 +8,10 @@ class StaticFilesController < ApplicationController
     static_file = StaticFile.find_by(filename: filename)
 
     if static_file&.file&.attached?
-      # 重定向到 Active Storage 的服务 URL
-      redirect_to rails_blob_path(static_file.file), allow_other_host: true
+      # 公共对象直接跳转服务 URL，避免 302 二次跳转
+      blob = static_file.file.blob
+      url = blob.service.public? ? blob.url : rails_blob_path(blob)
+      redirect_to url, allow_other_host: true
     else
       head :not_found
     end

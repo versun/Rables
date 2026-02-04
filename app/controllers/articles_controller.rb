@@ -25,7 +25,7 @@ class ArticlesController < ApplicationController
       }
 
       format.rss {
-        @articles = base_article_scope.order(created_at: :desc)
+        @articles = base_article_scope.order(created_at: :desc).limit(50)
         headers["Content-Type"] = "application/xml; charset=utf-8"
         # RSS feed can be cached longer since content updates less frequently
         headers["Cache-Control"] = "public, max-age=600, s-maxage=1800"

@@ -15,7 +15,7 @@ xml.rss version: "2.0",
       xml.item do
         fallback_title = article.plain_text_content.to_s.squish[0, 20]
         xml.title article.title.presence || fallback_title.presence || article.created_at.strftime("%Y-%m-%d")
-        xml.description article.description
+        xml.description article.description.presence || article.excerpt
 
         # Build content with source reference if available
         content_html = if article.html?
