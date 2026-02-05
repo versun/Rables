@@ -182,6 +182,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
 
     assert_equal "image/jpeg", request_seen["Content-Type"]
     assert_equal resized_data, request_seen.body
+  end
   test "post uploads all images for bluesky" do
     Crosspost.bluesky.update!(
       enabled: true,
