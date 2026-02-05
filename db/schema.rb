@@ -18,7 +18,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.bigint "record_id", null: false
     t.string "record_type", null: false
     t.datetime "updated_at", null: false
-    t.index ["record_type", "record_id", "name"], name: "index_action_text_rich_texts_uniqueness", unique: true
+    t.index [ "record_type", "record_id", "name" ], name: "index_action_text_rich_texts_uniqueness", unique: true
   end
 
   create_table "active_storage_attachments", force: :cascade do |t|
@@ -27,8 +27,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.string "name", null: false
     t.bigint "record_id", null: false
     t.string "record_type", null: false
-    t.index ["blob_id"], name: "index_active_storage_attachments_on_blob_id"
-    t.index ["record_type", "record_id", "name", "blob_id"], name: "index_active_storage_attachments_uniqueness", unique: true
+    t.index [ "blob_id" ], name: "index_active_storage_attachments_on_blob_id"
+    t.index [ "record_type", "record_id", "name", "blob_id" ], name: "index_active_storage_attachments_uniqueness", unique: true
   end
 
   create_table "active_storage_blobs", force: :cascade do |t|
@@ -40,13 +40,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.string "key", null: false
     t.text "metadata"
     t.string "service_name", null: false
-    t.index ["key"], name: "index_active_storage_blobs_on_key", unique: true
+    t.index [ "key" ], name: "index_active_storage_blobs_on_key", unique: true
   end
 
   create_table "active_storage_variant_records", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.string "variation_digest", null: false
-    t.index ["blob_id", "variation_digest"], name: "index_active_storage_variant_records_uniqueness", unique: true
+    t.index [ "blob_id", "variation_digest" ], name: "index_active_storage_variant_records_uniqueness", unique: true
   end
 
   create_table "activity_logs", force: :cascade do |t|
@@ -63,9 +63,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.datetime "created_at", null: false
     t.integer "tag_id", null: false
     t.datetime "updated_at", null: false
-    t.index ["article_id", "tag_id"], name: "index_article_tags_on_article_id_and_tag_id", unique: true
-    t.index ["article_id"], name: "index_article_tags_on_article_id"
-    t.index ["tag_id"], name: "index_article_tags_on_tag_id"
+    t.index [ "article_id", "tag_id" ], name: "index_article_tags_on_article_id_and_tag_id", unique: true
+    t.index [ "article_id" ], name: "index_article_tags_on_article_id"
+    t.index [ "tag_id" ], name: "index_article_tags_on_tag_id"
   end
 
   create_table "articles", force: :cascade do |t|
@@ -86,9 +86,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.integer "status", default: 0, null: false
     t.string "title"
     t.datetime "updated_at", null: false
-    t.index ["slug"], name: "index_articles_on_slug", unique: true
-    t.index ["status", "created_at"], name: "index_articles_on_status_and_created_at"
-    t.index ["status"], name: "index_articles_on_status"
+    t.index [ "slug" ], name: "index_articles_on_slug", unique: true
+    t.index [ "status", "created_at" ], name: "index_articles_on_status_and_created_at"
+    t.index [ "status" ], name: "index_articles_on_status"
   end
 
   create_table "comments", force: :cascade do |t|
@@ -109,10 +109,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.integer "status", default: 0, null: false
     t.datetime "updated_at", null: false
     t.string "url"
-    t.index ["article_id", "platform", "external_id"], name: "index_comments_on_article_platform_external_id", unique: true, where: "platform IS NOT NULL AND external_id IS NOT NULL"
-    t.index ["article_id"], name: "index_comments_on_article_id"
-    t.index ["commentable_type", "commentable_id"], name: "index_comments_on_commentable"
-    t.index ["parent_id"], name: "index_comments_on_parent_id"
+    t.index [ "article_id", "platform", "external_id" ], name: "index_comments_on_article_platform_external_id", unique: true, where: "platform IS NOT NULL AND external_id IS NOT NULL"
+    t.index [ "article_id" ], name: "index_comments_on_article_id"
+    t.index [ "commentable_type", "commentable_id" ], name: "index_comments_on_commentable"
+    t.index [ "parent_id" ], name: "index_comments_on_parent_id"
   end
 
   create_table "crossposts", force: :cascade do |t|
@@ -133,7 +133,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.text "settings"
     t.datetime "updated_at", null: false
     t.string "username"
-    t.index ["platform"], name: "index_crossposts_on_platform", unique: true
+    t.index [ "platform" ], name: "index_crossposts_on_platform", unique: true
   end
 
   create_table "git_integrations", force: :cascade do |t|
@@ -145,7 +145,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.string "server_url"
     t.datetime "updated_at", null: false
     t.string "username"
-    t.index ["provider"], name: "index_git_integrations_on_provider", unique: true
+    t.index [ "provider" ], name: "index_git_integrations_on_provider", unique: true
   end
 
   create_table "listmonks", force: :cascade do |t|
@@ -185,8 +185,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.integer "status", default: 0, null: false
     t.string "title"
     t.datetime "updated_at", null: false
-    t.index ["slug"], name: "index_pages_on_slug", unique: true
-    t.index ["status"], name: "index_pages_on_status"
+    t.index [ "slug" ], name: "index_pages_on_slug", unique: true
+    t.index [ "status" ], name: "index_pages_on_status"
   end
 
   create_table "redirects", force: :cascade do |t|
@@ -196,7 +196,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.string "regex", null: false
     t.string "replacement", null: false
     t.datetime "updated_at", null: false
-    t.index ["enabled"], name: "index_redirects_on_enabled"
+    t.index [ "enabled" ], name: "index_redirects_on_enabled"
   end
 
   create_table "sessions", force: :cascade do |t|
@@ -205,7 +205,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.datetime "updated_at", null: false
     t.string "user_agent"
     t.integer "user_id", null: false
-    t.index ["user_id"], name: "index_sessions_on_user_id"
+    t.index [ "user_id" ], name: "index_sessions_on_user_id"
   end
 
   create_table "settings", force: :cascade do |t|
@@ -242,8 +242,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.string "platform", null: false
     t.datetime "updated_at", null: false
     t.string "url", null: false
-    t.index ["article_id", "platform"], name: "index_social_media_posts_on_article_id_and_platform", unique: true
-    t.index ["article_id"], name: "index_social_media_posts_on_article_id"
+    t.index [ "article_id", "platform" ], name: "index_social_media_posts_on_article_id_and_platform", unique: true
+    t.index [ "article_id" ], name: "index_social_media_posts_on_article_id"
   end
 
   create_table "static_files", force: :cascade do |t|
@@ -251,7 +251,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.text "description"
     t.text "filename"
     t.datetime "updated_at", null: false
-    t.index ["filename"], name: "index_static_files_on_filename", unique: true
+    t.index [ "filename" ], name: "index_static_files_on_filename", unique: true
   end
 
   create_table "subscriber_tags", force: :cascade do |t|
@@ -259,9 +259,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.integer "subscriber_id", null: false
     t.integer "tag_id", null: false
     t.datetime "updated_at", null: false
-    t.index ["subscriber_id", "tag_id"], name: "index_subscriber_tags_on_subscriber_id_and_tag_id", unique: true
-    t.index ["subscriber_id"], name: "index_subscriber_tags_on_subscriber_id"
-    t.index ["tag_id"], name: "index_subscriber_tags_on_tag_id"
+    t.index [ "subscriber_id", "tag_id" ], name: "index_subscriber_tags_on_subscriber_id_and_tag_id", unique: true
+    t.index [ "subscriber_id" ], name: "index_subscriber_tags_on_subscriber_id"
+    t.index [ "tag_id" ], name: "index_subscriber_tags_on_tag_id"
   end
 
   create_table "subscribers", force: :cascade do |t|
@@ -272,9 +272,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.string "unsubscribe_token"
     t.datetime "unsubscribed_at"
     t.datetime "updated_at", null: false
-    t.index ["confirmation_token"], name: "index_subscribers_on_confirmation_token", unique: true
-    t.index ["email"], name: "index_subscribers_on_email", unique: true
-    t.index ["unsubscribe_token"], name: "index_subscribers_on_unsubscribe_token", unique: true
+    t.index [ "confirmation_token" ], name: "index_subscribers_on_confirmation_token", unique: true
+    t.index [ "email" ], name: "index_subscribers_on_email", unique: true
+    t.index [ "unsubscribe_token" ], name: "index_subscribers_on_unsubscribe_token", unique: true
   end
 
   create_table "tags", force: :cascade do |t|
@@ -282,8 +282,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.string "name", null: false
     t.string "slug", null: false
     t.datetime "updated_at", null: false
-    t.index ["name"], name: "index_tags_on_name", unique: true
-    t.index ["slug"], name: "index_tags_on_slug", unique: true
+    t.index [ "name" ], name: "index_tags_on_name", unique: true
+    t.index [ "slug" ], name: "index_tags_on_slug", unique: true
   end
 
   create_table "users", force: :cascade do |t|
@@ -291,7 +291,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_03_133000) do
     t.string "password_digest", null: false
     t.datetime "updated_at", null: false
     t.string "user_name", null: false
-    t.index ["user_name"], name: "index_users_on_user_name", unique: true
+    t.index [ "user_name" ], name: "index_users_on_user_name", unique: true
   end
 
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"

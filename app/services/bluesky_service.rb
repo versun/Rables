@@ -452,6 +452,9 @@ class BlueskyService
     end
   end
 
+  # Bluesky 最大图片大小限制 (略低于 976.56KB 以留有余地)
+  MAX_IMAGE_SIZE = 950.kilobytes
+
   def upload_blob(blob)
     return nil unless blob
 
@@ -462,9 +465,12 @@ class BlueskyService
       # 下载图片数据
       image_data = blob.download
 
+      # 如果图片太大，进行压缩
+      image_data, content_type = resize_image_if_needed(image_data, blob.content_type)
+
       uri = URI("#{@server_url}/com.atproto.repo.uploadBlob")
       request = Net::HTTP::Post.new(uri)
-      request["Content-Type"] = blob.content_type
+      request["Content-Type"] = content_type
       request["Authorization"] = "Bearer #{@token}"
       request.body = image_data
 
@@ -520,6 +526,9 @@ class BlueskyService
       image_data = image_response.body
       content_type = image_response["content-type"] || "image/jpeg"
 
+      # 如果图片太大，进行压缩
+      image_data, content_type = resize_image_if_needed(image_data, content_type)
+
       # 上传到 Bluesky
       upload_uri = URI("#{@server_url}/com.atproto.repo.uploadBlob")
       request = Net::HTTP::Post.new(upload_uri)
@@ -552,6 +561,95 @@ class BlueskyService
         error_message: e.message,
         backtrace: e.backtrace.join("\n")
       nil
+    end
+  end
+
+  # 如果图片太大，使用 ruby-vips 压缩
+  def resize_image_if_needed(image_data, content_type)
+    return [ image_data, content_type ] if image_data.bytesize <= MAX_IMAGE_SIZE
+
+    original_path = nil
+    compressed_path = nil
+
+    begin
+      Rails.event.notify "bluesky_service.resizing_image",
+        level: "info",
+        component: "BlueskyService",
+        original_size: image_data.bytesize,
+        max_size: MAX_IMAGE_SIZE
+
+      # 创建临时文件保存原始图片
+      extension = content_type.to_s.split("/").last
+      extension = "jpg" if extension.blank? || extension == "jpeg"
+      extension = extension.downcase
+
+      temp_dir = Rails.root.join("tmp", "bluesky_uploads")
+      FileUtils.mkdir_p(temp_dir)
+
+      original_path = temp_dir.join("original_#{SecureRandom.hex(8)}.#{extension}")
+      File.binwrite(original_path, image_data)
+
+      # 使用 Vips 处理图片
+      image = Vips::Image.new_from_file(original_path.to_s)
+
+      # 计算缩放比例
+      # 首先尝试降低质量压缩
+      quality = 85
+      compressed_path = temp_dir.join("compressed_#{SecureRandom.hex(8)}.jpg")
+
+      loop do
+        image.write_to_file(compressed_path.to_s, Q: quality, strip: true)
+        compressed_size = File.size(compressed_path)
+
+        if compressed_size <= MAX_IMAGE_SIZE || quality <= 50
+          break
+        end
+
+        # 如果还是太大，继续降低质量
+        quality -= 10
+        File.delete(compressed_path) if File.exist?(compressed_path)
+      end
+
+      # 如果质量降到50还是太大，尝试缩放尺寸
+      if File.size(compressed_path) > MAX_IMAGE_SIZE
+        File.delete(compressed_path) if File.exist?(compressed_path)
+
+        # 计算需要缩小的比例
+        scale_factor = Math.sqrt(MAX_IMAGE_SIZE.to_f / image_data.bytesize) * 0.9
+        new_width = (image.width * scale_factor).to_i
+        new_height = (image.height * scale_factor).to_i
+
+        # 确保不小于最小尺寸
+        new_width = [ new_width, 100 ].max
+        new_height = [ new_height, 100 ].max
+
+        resized = image.resize(scale_factor)
+        resized.write_to_file(compressed_path.to_s, Q: 85, strip: true)
+      end
+
+      result_data = File.binread(compressed_path)
+      result_type = "image/jpeg"
+
+      Rails.event.notify "bluesky_service.image_resized",
+        level: "info",
+        component: "BlueskyService",
+        original_size: image_data.bytesize,
+        final_size: result_data.bytesize,
+        quality: quality
+
+      [ result_data, result_type ]
+    rescue => e
+      Rails.event.notify "bluesky_service.resize_failed",
+        level: "error",
+        component: "BlueskyService",
+        error_message: e.message,
+        backtrace: e.backtrace.join("\n")
+
+      # 压缩失败时返回原图，让 Bluesky 决定是否接受
+      [ image_data, content_type ]
+    ensure
+      File.delete(original_path) if original_path && File.exist?(original_path)
+      File.delete(compressed_path) if compressed_path && File.exist?(compressed_path)
     end
   end
 
