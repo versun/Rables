@@ -65,39 +65,55 @@ class Article < ApplicationRecord
 
   # 提取文章内容中的第一张图片，用于crosspost
   def first_image_attachment
+    all_image_attachments.first
+  end
+
+  # 提取文章内容中的所有图片，用于crosspost
+  # 各平台限制：Twitter/X、Mastodon、Bluesky 都最多支持4张图片
+  def all_image_attachments(limit = 4)
+    images = []
+
     # 首先尝试从 ActionText attachables 中查找（Trix 编辑器上传的图片）
     if content.present? && content.body.respond_to?(:attachables)
-      attachable = content.body.attachables.find do |a|
-        if a.is_a?(ActiveStorage::Blob)
-          a.content_type&.start_with?("image/")
+      content.body.attachables.each do |a|
+        break if images.size >= limit
+
+        if a.is_a?(ActiveStorage::Blob) && a.content_type&.start_with?("image/")
+          images << a
         elsif a.class.name == "ActionText::Attachables::RemoteImage"
           url = a.try(:url)
-          url.present? && url.is_a?(String)
-        else
-          false
+          images << a if url.present? && url.is_a?(String)
         end
       end
-      return attachable if attachable
     end
 
-    # 对于 TinyMCE 编辑器，从 HTML 中提取第一个图片 URL
-    html = html? ? html_content : content.to_s
-    return nil if html.blank?
+    # 对于 TinyMCE 编辑器，从 HTML 中提取所有图片 URL
+    if images.size < limit
+      existing_blob_ids = images.filter_map { |img| img.is_a?(ActiveStorage::Blob) ? img.id : nil }
+      html = html? ? html_content : content.to_s
+      if html.present?
+        doc = Nokogiri::HTML5.fragment(html)
+        doc.css("img").each do |img|
+          break if images.size >= limit
 
-    # 解析 HTML 查找第一个 img 标签
-    doc = Nokogiri::HTML5.fragment(html)
-    img = doc.at_css("img")
-    return nil unless img
+          src = img["src"].to_s.strip
+          next if src.blank?
 
-    src = img["src"].to_s.strip
-    return nil if src.blank?
+          # 如果是 ActiveStorage 的 blob URL，尝试找到对应的 Blob
+          blob = find_blob_from_url(src)
+          if blob
+            next if existing_blob_ids.include?(blob.id)
 
-    # 如果是 ActiveStorage 的 blob URL，尝试找到对应的 Blob
-    blob = find_blob_from_url(src)
-    return blob if blob
+            images << blob
+            existing_blob_ids << blob.id
+          else
+            images << RemoteImageWrapper.new(src)
+          end
+        end
+      end
+    end
 
-    # 否则返回 RemoteImage-like 对象
-    RemoteImageWrapper.new(src)
+    images
   end
 
   # 从 ActiveStorage URL 中查找 Blob
@@ -118,14 +134,23 @@ class Article < ApplicationRecord
       end
     end
 
-    # 匹配 /rails/active_storage/representations/.../:blob_id/...
+    # 匹配 /rails/active_storage/representations/.../:signed_blob_id/...
     if url =~ /\/rails\/active_storage\/representations\/[^\/]+\/([^\/]+)/
-      blob_id = $1
+      signed_id = $1
       begin
-        blob = ActiveStorage::Blob.find_by(id: blob_id)
+        blob = ActiveStorage::Blob.find_signed(signed_id)
         return blob if blob&.content_type&.start_with?("image/")
       rescue => e
-        Rails.logger.warn "Failed to find blob from blob_id: #{blob_id}, error: #{e.message}"
+        Rails.logger.warn "Failed to find blob from signed_id: #{signed_id}, error: #{e.message}"
+      end
+
+      if signed_id =~ /\A\d+\z/
+        begin
+          blob = ActiveStorage::Blob.find_by(id: signed_id)
+          return blob if blob&.content_type&.start_with?("image/")
+        rescue => e
+          Rails.logger.warn "Failed to find blob from blob_id: #{signed_id}, error: #{e.message}"
+        end
       end
     end
 

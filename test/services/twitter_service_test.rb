@@ -47,4 +47,42 @@ class TwitterServiceTest < ActiveSupport::TestCase
     assert_equal "https://x.com/tester/status/999", result
     client.verify
   end
+
+  test "post uploads all images for twitter" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
+      access_token: "access_token",
+      access_token_secret: "access_token_secret"
+    )
+
+    article = create_published_article
+    images = [ Object.new, Object.new ]
+    article.define_singleton_method(:all_image_attachments) { |_limit| images }
+
+    client = Minitest::Mock.new
+    client.expect(:get, { "data" => { "username" => "tester" } }, [ "users/me" ])
+    client.expect(:post, { "data" => { "id" => "999" } }) do |endpoint, body|
+      assert_equal "tweets", endpoint
+
+      payload = JSON.parse(body)
+      assert_equal %w[media-1 media-2], payload.dig("media", "media_ids")
+      true
+    end
+
+    service = TwitterService.new
+    sequence = 0
+    service.define_singleton_method(:create_client) { client }
+    service.define_singleton_method(:upload_image) do |_client, _image|
+      sequence += 1
+      "media-#{sequence}"
+    end
+
+    result = service.post(article)
+
+    assert_equal 2, sequence
+    assert_equal "https://x.com/tester/status/999", result
+    client.verify
+  end
 end

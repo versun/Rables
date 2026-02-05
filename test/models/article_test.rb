@@ -347,6 +347,32 @@ class ArticleTest < ActiveSupport::TestCase
     assert_equal "https://example.com/external-image.jpg", remote_article.seo_meta_image
   end
 
+  test "all_image_attachments does not require url options when deduping blobs" do
+    blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new("fake-rich-image"),
+      filename: "rich-image.png",
+      content_type: "image/png"
+    )
+    attachment_html = ActionText::Attachment.from_attachable(blob).to_html
+    rich_article = Article.create!(
+      title: "Rich Article With Image",
+      slug: "rich-article-with-image",
+      status: :publish,
+      content: "<p>Hi</p>#{attachment_html}",
+      description: "rich image desc"
+    )
+
+    original_url_options = ActiveStorage::Current.url_options
+    ActiveStorage::Current.url_options = nil
+
+    images = rich_article.all_image_attachments
+
+    assert_equal 1, images.size
+    assert_equal blob, images.first
+  ensure
+    ActiveStorage::Current.url_options = original_url_options
+  end
+
   test "handles articles without images for crosspost" do
     no_image_article = Article.create!(
       title: "No Image Article",
