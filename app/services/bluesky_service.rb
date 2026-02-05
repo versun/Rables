@@ -362,7 +362,7 @@ class BlueskyService
   end
 
   def upload_image_embed(attachable)
-    upload_images_embed([attachable])
+    upload_images_embed([ attachable ])
   end
 
   def upload_images_embed(attachables)
