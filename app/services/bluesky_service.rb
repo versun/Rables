@@ -56,27 +56,27 @@ class BlueskyService
     max_length = @settings.effective_max_characters || 300
     content = build_content(article: article, max_length: max_length)
 
-    # 获取文章第一张图片
-    first_image = article.first_image_attachment
-    Rails.event.notify "bluesky_service.first_image",
+    # 获取文章所有图片（Bluesky最多支持4张）
+    images = article.all_image_attachments(4)
+    Rails.event.notify "bluesky_service.images_count",
       level: "info",
       component: "BlueskyService",
-      image_type: first_image.class.to_s
+      count: images.size
 
     embed = nil
 
-    if first_image
-      Rails.event.notify "bluesky_service.upload_image_attempt",
+    if images.any?
+      Rails.event.notify "bluesky_service.upload_images_attempt",
         level: "info",
         component: "BlueskyService",
-        image_type: first_image.class.to_s
-      embed = upload_image_embed(first_image)
-      Rails.event.notify "bluesky_service.upload_image_result",
+        images_count: images.size
+      embed = upload_images_embed(images)
+      Rails.event.notify "bluesky_service.upload_images_result",
         level: "info",
         component: "BlueskyService",
         result: embed.present? ? "success" : "failed"
     else
-      Rails.event.notify "bluesky_service.no_image",
+      Rails.event.notify "bluesky_service.no_images",
         level: "info",
         component: "BlueskyService"
     end
@@ -362,85 +362,101 @@ class BlueskyService
   end
 
   def upload_image_embed(attachable)
-    Rails.event.notify "bluesky_service.upload_image_embed_started",
+    upload_images_embed([attachable])
+  end
+
+  def upload_images_embed(attachables)
+    Rails.event.notify "bluesky_service.upload_images_embed_started",
       level: "info",
       component: "BlueskyService",
-      attachable_type: attachable.class.to_s
-    return nil unless attachable
+      count: attachables&.size || 0
+    return nil unless attachables.present?
 
     begin
-      blob_data = nil
-      filename = "image.jpg"
-      content_type = "image/jpeg"
+      images_data = []
 
-      # Handle ActiveStorage::Blob
-      if attachable.is_a?(ActiveStorage::Blob) && attachable.content_type&.start_with?("image/")
-        Rails.event.notify "bluesky_service.processing_blob",
-          level: "info",
-          component: "BlueskyService",
-          storage_type: "ActiveStorage::Blob"
-        blob_data = upload_blob(attachable)
-        filename = attachable.filename.to_s if attachable.respond_to?(:filename)
-      # Handle RemoteImage
-      elsif attachable.class.name == "ActionText::Attachables::RemoteImage"
-        Rails.event.notify "bluesky_service.processing_remote_image",
-          level: "info",
-          component: "BlueskyService",
-          storage_type: "RemoteImage"
-        image_url = attachable.try(:url)
-        Rails.event.notify "bluesky_service.remote_image_url",
-          level: "info",
-          component: "BlueskyService",
-          image_url: image_url
+      attachables.each_with_index do |attachable, index|
+        blob_data = nil
+        filename = "image.jpg"
 
-        if image_url.present?
-          blob_data = upload_remote_image(image_url)
-          # Safely extract filename from URL
-          begin
-            filename = File.basename(URI.parse(image_url).path)
-            # Ensure we have a valid filename
-            filename = "image.jpg" if filename.blank? || filename == "/"
-          rescue URI::InvalidURIError => e
-            Rails.event.notify "bluesky_service.invalid_url_for_filename",
+        # Handle ActiveStorage::Blob
+        if attachable.is_a?(ActiveStorage::Blob) && attachable.content_type&.start_with?("image/")
+          Rails.event.notify "bluesky_service.processing_blob",
+            level: "info",
+            component: "BlueskyService",
+            index: index,
+            storage_type: "ActiveStorage::Blob"
+          blob_data = upload_blob(attachable)
+          filename = attachable.filename.to_s if attachable.respond_to?(:filename)
+        # Handle RemoteImage
+        elsif attachable.class.name == "ActionText::Attachables::RemoteImage"
+          Rails.event.notify "bluesky_service.processing_remote_image",
+            level: "info",
+            component: "BlueskyService",
+            index: index,
+            storage_type: "RemoteImage"
+          image_url = attachable.try(:url)
+
+          if image_url.present?
+            blob_data = upload_remote_image(image_url)
+            begin
+              filename = File.basename(URI.parse(image_url).path)
+              filename = "image.jpg" if filename.blank? || filename == "/"
+            rescue URI::InvalidURIError => e
+              Rails.event.notify "bluesky_service.invalid_url_for_filename",
+                level: "warn",
+                component: "BlueskyService",
+                image_url: image_url,
+                error_message: e.message
+              filename = "image.jpg"
+            end
+          else
+            Rails.event.notify "bluesky_service.remote_image_no_url",
               level: "warn",
               component: "BlueskyService",
-              image_url: image_url,
-              error_message: e.message
-            filename = "image.jpg"
+              index: index
+            next
           end
         else
-          Rails.event.notify "bluesky_service.remote_image_no_url",
+          Rails.event.notify "bluesky_service.unknown_attachable_type",
             level: "warn",
-            component: "BlueskyService"
-          return nil
+            component: "BlueskyService",
+            index: index,
+            attachable_type: attachable.class.to_s
+          next
         end
-      else
-        Rails.event.notify "bluesky_service.unknown_attachable_type",
-          level: "warn",
-          component: "BlueskyService",
-          attachable_type: attachable.class.to_s
-        return nil
+
+        if blob_data
+          images_data << { blob: blob_data, filename: filename }
+          Rails.event.notify "bluesky_service.image_uploaded",
+            level: "info",
+            component: "BlueskyService",
+            index: index,
+            total_uploaded: images_data.size
+        else
+          Rails.event.notify "bluesky_service.image_upload_failed",
+            level: "warn",
+            component: "BlueskyService",
+            index: index
+        end
       end
 
-      Rails.event.notify "bluesky_service.upload_blob_result",
-        level: "info",
-        component: "BlueskyService",
-        result: blob_data.present? ? "success" : "failed"
-      return nil unless blob_data
+      return nil if images_data.empty?
 
-      # 创建图片embed
+      # 创建多图片embed
       embed_result = {
         "$type" => "app.bsky.embed.images",
-        "images" => [
+        "images" => images_data.map do |img_data|
           {
-            "alt" => filename,
-            "image" => blob_data
+            "alt" => img_data[:filename],
+            "image" => img_data[:blob]
           }
-        ]
+        end
       }
       Rails.event.notify "bluesky_service.embed_created",
         level: "info",
-        component: "BlueskyService"
+        component: "BlueskyService",
+        images_count: images_data.size
       embed_result
     rescue => e
       Rails.event.notify "bluesky_service.embed_creation_error",
