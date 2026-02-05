@@ -1,22 +1,9 @@
 # frozen_string_literal: true
 
-require "simplecov"
-
-if ENV["TEST_ENV_NUMBER"].to_s.empty?
-  at_exit do
-    resultset_path = File.join(SimpleCov.coverage_path, ".resultset.json")
-    SimpleCov.collate([ resultset_path ], "rails") if File.exist?(resultset_path)
-  end
-end
-
-SimpleCov.start "rails"
-
-process_label = ENV["TEST_ENV_NUMBER"].to_s
-process_label = "main" if process_label.empty?
-SimpleCov.command_name "minitest-#{process_label}"
-
-SimpleCov.at_exit do
-  SimpleCov.result
+if defined?(SimpleCov) && SimpleCov.running
+  process_label = ENV["TEST_ENV_NUMBER"].to_s
+  process_label = Process.pid if process_label.empty?
+  SimpleCov.command_name "minitest-#{process_label}"
 end
 ENV["RAILS_ENV"] ||= "test"
 require_relative "../config/environment"
@@ -48,8 +35,10 @@ class ActiveSupport::TestCase
     clear_performed_jobs
   end
 
-  # Run tests in parallel with specified workers
-  parallelize(workers: :number_of_processors)
+  # Run tests in parallel with specified workers unless coverage is enabled.
+  unless defined?(SimpleCov) && SimpleCov.running
+    parallelize(workers: :number_of_processors)
+  end
 
   # Setup all fixtures in test/fixtures/*.yml for all tests in alphabetical order.
   fixtures :all

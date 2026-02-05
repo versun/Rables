@@ -207,16 +207,21 @@ namespace :export do
   def export_settings(export_dir)
     puts "Exporting settings..."
 
-    CSV.open(File.join(export_dir, "settings.csv"), "w", write_headers: true, headers: %w[id site_title site_description site_keywords social_links footer analytics_code created_at updated_at]) do |csv|
+    headers = %w[id title description author social_links footer head_code tool_code custom_css url time_zone created_at updated_at]
+    CSV.open(File.join(export_dir, "settings.csv"), "w", write_headers: true, headers: headers) do |csv|
       Setting.find_each do |setting|
         csv << [
           setting.id,
-          setting.site_title,
-          setting.site_description,
-          setting.site_keywords,
+          setting.title,
+          setting.description,
+          setting.author,
           setting.social_links&.to_json,
           setting.footer&.to_trix_html,
-          setting.analytics_code,
+          setting.head_code,
+          setting.tool_code,
+          setting.custom_css,
+          setting.url,
+          setting.time_zone,
           setting.created_at,
           setting.updated_at
         ]
@@ -248,12 +253,12 @@ namespace :export do
   def export_users(export_dir)
     puts "Exporting users..."
 
-    CSV.open(File.join(export_dir, "users.csv"), "w", write_headers: true, headers: %w[id user_name email created_at updated_at]) do |csv|
+    headers = %w[id user_name created_at updated_at]
+    CSV.open(File.join(export_dir, "users.csv"), "w", write_headers: true, headers: headers) do |csv|
       User.find_each do |user|
         csv << [
           user.id,
           user.user_name,
-          user.email,
           user.created_at,
           user.updated_at
         ]

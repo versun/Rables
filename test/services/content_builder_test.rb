@@ -169,4 +169,24 @@ class ContentBuilderTest < ActiveSupport::TestCase
     # 验证字符数不超过最大值
     assert_operator post.length, :<=, max_length, "Post length #{post.length} exceeds max_length #{max_length}"
   end
+
+  test "count_chars treats non-ascii as double" do
+    assert_equal 3, @builder.count_chars("a中", true)
+  end
+
+  test "truncate_text respects non-ascii width" do
+    assert_equal "a中", @builder.truncate_text("a中文", 3, true)
+  end
+
+  test "build_content returns link only when no space left" do
+    post = @builder.build_content("slug", "Title", "content", nil, max_length: 5, always_add_link: true)
+
+    assert_includes post, "Read more:"
+  end
+
+  test "build_content truncates long title when needed" do
+    post = @builder.build_content("slug", "VeryLongTitle", "content", nil, max_length: 40, always_add_link: true)
+
+    assert_includes post, "..."
+  end
 end

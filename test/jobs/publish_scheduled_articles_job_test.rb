@@ -81,4 +81,52 @@ class PublishScheduledArticlesJobTest < ActiveJob::TestCase
       PublishScheduledArticlesJob.schedule_at(article)
     end
   end
+
+  test "cancel_old_jobs discards matching scheduled jobs outside test env" do
+    article_id = 123
+
+    fake_job_class = Struct.new(:arguments, :discarded) do
+      def discard
+        self.discarded = true
+      end
+    end
+
+    matching_job = fake_job_class.new([ { "arguments" => [ article_id ] } ], false)
+    other_job = fake_job_class.new([ { "arguments" => [ 999 ] } ], false)
+
+    fake_job_set = Class.new do
+      def initialize(jobs)
+        @jobs = jobs
+      end
+
+      def scheduled
+        self
+      end
+
+      def where(job_class_name:)
+        @jobs
+      end
+    end.new([ matching_job, other_job ])
+
+    original_env = Rails.env
+
+    original_jobs_method = ActiveJob::Base.method(:jobs) if ActiveJob::Base.respond_to?(:jobs)
+
+    begin
+      Rails.define_singleton_method(:env) { ActiveSupport::StringInquirer.new("production") }
+      ActiveJob::Base.define_singleton_method(:jobs) { fake_job_set }
+
+      PublishScheduledArticlesJob.cancel_old_jobs(article_id)
+
+      assert_equal true, matching_job.discarded
+      assert_equal false, other_job.discarded
+    ensure
+      Rails.define_singleton_method(:env) { original_env }
+      if original_jobs_method
+        ActiveJob::Base.define_singleton_method(:jobs) { original_jobs_method.call }
+      else
+        ActiveJob::Base.singleton_class.send(:remove_method, :jobs)
+      end
+    end
+  end
 end

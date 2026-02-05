@@ -50,4 +50,18 @@ class NewsletterConfirmationJobTest < ActiveJob::TestCase
       NewsletterConfirmationJob.perform_now(@subscriber.id)
     end
   end
+
+  test "raises when mail delivery fails" do
+    mail = Object.new
+    mail.define_singleton_method(:deliver_now) { raise "boom" }
+
+    original_method = NewsletterMailer.method(:confirmation_email)
+    NewsletterMailer.define_singleton_method(:confirmation_email) { |*_args| mail }
+
+    assert_raises RuntimeError do
+      NewsletterConfirmationJob.perform_now(@subscriber.id)
+    end
+  ensure
+    NewsletterMailer.define_singleton_method(:confirmation_email, original_method) if original_method
+  end
 end
