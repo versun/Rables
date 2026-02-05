@@ -39,12 +39,28 @@ class MastodonService
     max_length = @settings.effective_max_characters || 500
     status_text = build_content(article: article, max_length: max_length)
 
-    # 获取文章第一张图片
-    first_image = article.first_image_attachment
-    media_id = nil
+    # 获取文章所有图片（Mastodon最多支持4张）
+    images = article.all_image_attachments(4)
+    Rails.event.notify "mastodon_service.images_count",
+      level: "info",
+      component: "MastodonService",
+      count: images.size
 
-    if first_image
-      media_id = upload_image(first_image)
+    media_ids = []
+    images.each do |image|
+      media_id = upload_image(image)
+      if media_id
+        media_ids << media_id
+        Rails.event.notify "mastodon_service.image_uploaded",
+          level: "info",
+          component: "MastodonService",
+          media_id: media_id,
+          total_uploaded: media_ids.size
+      else
+        Rails.event.notify "mastodon_service.image_upload_failed",
+          level: "warn",
+          component: "MastodonService"
+      end
     end
 
     uri = mastodon_api_uri("/api/v1/statuses")
@@ -55,13 +71,15 @@ class MastodonService
       http.use_ssl = uri.scheme == "https"
 
       request = Net::HTTP::Post.new(uri)
-      form_data = {
-        status: status_text,
-        visibility: "public"
-      }
+      form_data = [
+        [ "status", status_text ],
+        [ "visibility", "public" ]
+      ]
 
-      # 如果有图片，添加媒体ID
-      form_data[:"media_ids[]"] = media_id if media_id
+      # 添加所有媒体ID
+      media_ids.each do |media_id|
+        form_data << [ "media_ids[]", media_id ]
+      end
 
       request.set_form_data(form_data)
       request["Authorization"] = "Bearer #{@settings.access_token}"
