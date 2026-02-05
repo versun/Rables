@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "rake"
+require "minitest/mock"
 require "active_storage/service/mirror_service"
 
 class ActiveStorageMirrorTaskTest < ActiveSupport::TestCase
@@ -53,7 +54,7 @@ class ActiveStorageMirrorTaskTest < ActiveSupport::TestCase
   test "exits when storage is not a mirror service" do
     ActiveStorage::Blob.stub(:service, Object.new) do
       assert_raises(SystemExit) do
-        with_task_reenabled("active_storage:mirror", &:invoke)
+        invoke_task_silently("active_storage:mirror")
       end
     end
   end
@@ -63,7 +64,7 @@ class ActiveStorageMirrorTaskTest < ActiveSupport::TestCase
 
     ActiveStorage::Blob.stub(:service, fake_mirror) do
       assert_raises(SystemExit) do
-        with_task_reenabled("active_storage:mirror", &:invoke)
+        invoke_task_silently("active_storage:mirror")
       end
     end
   end
@@ -83,7 +84,7 @@ class ActiveStorageMirrorTaskTest < ActiveSupport::TestCase
     ActiveStorage::Blob.stub(:service, fake_mirror) do
       ActiveStorage::Blob.stub(:count, blobs.length) do
         ActiveStorage::Blob.stub(:find_each, blobs.each) do
-          with_task_reenabled("active_storage:mirror", &:invoke)
+          invoke_task_silently("active_storage:mirror")
         end
       end
     end
@@ -98,5 +99,11 @@ class ActiveStorageMirrorTaskTest < ActiveSupport::TestCase
     task = Rake::Task[task_name]
     task.reenable
     yield task
+  end
+
+  def invoke_task_silently(task_name)
+    capture_io do
+      with_task_reenabled(task_name, &:invoke)
+    end
   end
 end

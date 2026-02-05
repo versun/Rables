@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 
 class Admin::ArticlesControllerTest < ActionDispatch::IntegrationTest
   def setup
@@ -156,9 +157,52 @@ class Admin::ArticlesControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "should fetch comments" do
-    # This test would require mocking the social media services
-    # For now, we'll test the basic structure
-    skip "Requires social media service mocking"
+    social_post = @article.social_media_posts.create!(
+      platform: "mastodon",
+      url: "https://example.social/@tester/123"
+    )
+
+    now = Time.current
+    comments_payload = [
+      {
+        external_id: "c1",
+        author_name: "Alice",
+        author_username: "alice",
+        author_avatar_url: "https://example.social/alice.png",
+        content: "First!",
+        published_at: now,
+        url: "https://example.social/@tester/123#c1"
+      },
+      {
+        external_id: "c2",
+        parent_external_id: "c1",
+        author_name: "Bob",
+        author_username: "bob",
+        author_avatar_url: "https://example.social/bob.png",
+        content: "Replying",
+        published_at: now + 1.second,
+        url: "https://example.social/@tester/123#c2"
+      }
+    ]
+
+    service = Minitest::Mock.new
+    service.expect(:fetch_comments, { comments: comments_payload }, [ social_post.url ])
+
+    assert_difference "Comment.count", 2 do
+      MastodonService.stub(:new, service) do
+        post fetch_comments_admin_article_path(@article.slug)
+      end
+    end
+
+    assert_response :success
+    body = JSON.parse(response.body)
+    assert_equal true, body["success"]
+    assert_equal 2, body["results"].sum { |result| result["fetched"] }
+
+    parent = @article.comments.find_by!(platform: "mastodon", external_id: "c1")
+    child = @article.comments.find_by!(platform: "mastodon", external_id: "c2")
+    assert_equal parent.id, child.parent_id
+    service.verify
   end
 
   test "should batch crosspost with enabled platforms" do

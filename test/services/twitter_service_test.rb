@@ -97,7 +97,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
     )
 
     article = create_published_article
-    article.define_singleton_method(:first_image_attachment) { :image }
+    article.define_singleton_method(:all_image_attachments) { |_limit| [ :image ] }
 
     client = Minitest::Mock.new
     client.expect(:get, { "data" => { "username" => "tester" } }, [ "users/me" ])
@@ -127,7 +127,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
     )
 
     article = create_published_article
-    article.define_singleton_method(:first_image_attachment) { :image }
+    article.define_singleton_method(:all_image_attachments) { |_limit| [ :image ] }
 
     client = Minitest::Mock.new
     client.expect(:get, { "data" => { "username" => "tester" } }, [ "users/me" ])
@@ -163,7 +163,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
     )
 
     article = create_published_article
-    article.define_singleton_method(:first_image_attachment) { nil }
+    article.define_singleton_method(:all_image_attachments) { |_limit| [] }
 
     client = Minitest::Mock.new
     client.expect(:get, { "data" => { "username" => "tester" } }, [ "users/me" ])
