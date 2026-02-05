@@ -54,34 +54,37 @@ class TwitterService
       user = client.get("users/me")
       username = user["data"]["username"] if user && user["data"]
 
-      # 获取文章第一张图片
-      first_image = article.first_image_attachment
-      Rails.event.notify "twitter_service.first_image",
+      # 获取文章所有图片（Twitter最多支持4张）
+      images = article.all_image_attachments(4)
+      Rails.event.notify "twitter_service.images_count",
         level: "info",
         component: "TwitterService",
-        image_type: first_image.class.to_s
+        count: images.size
 
       media_ids = []
-      if first_image
+      images.each do |image|
         Rails.event.notify "twitter_service.upload_image_attempt",
           level: "info",
           component: "TwitterService",
-          image_type: first_image.class.to_s
-        media_id = upload_image(client, first_image)
+          image_type: image.class.to_s
+        media_id = upload_image(client, image)
         if media_id
           media_ids << media_id
           Rails.event.notify "twitter_service.image_uploaded",
             level: "info",
             component: "TwitterService",
-            media_id: media_id
+            media_id: media_id,
+            total_uploaded: media_ids.size
         else
           Rails.event.notify "twitter_service.image_upload_failed",
             level: "warn",
             component: "TwitterService"
         end
-      else
-        Rails.event.notify "twitter_service.no_image",
-          level: "info",
+      end
+
+      if media_ids.empty? && images.any?
+        Rails.event.notify "twitter_service.no_images_uploaded",
+          level: "warn",
           component: "TwitterService"
       end
 
