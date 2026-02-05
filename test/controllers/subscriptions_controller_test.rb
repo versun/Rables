@@ -46,6 +46,28 @@ class SubscriptionsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  test "should allow resubscribe for unsubscribed subscriber" do
+    subscriber = subscribers(:unsubscribed_subscriber)
+    old_token = subscriber.confirmation_token
+
+    assert_no_difference "Subscriber.count" do
+      assert_enqueued_with(job: NewsletterConfirmationJob, args: [ subscriber.id ]) do
+        post subscriptions_path, params: {
+          subscription: {
+            email: subscriber.email
+          }
+        }.merge(captcha_params), as: :json
+      end
+    end
+
+    assert_response :success
+
+    subscriber.reload
+    assert_nil subscriber.confirmed_at
+    assert_nil subscriber.unsubscribed_at
+    assert_not_equal old_token, subscriber.confirmation_token
+  end
+
   test "should confirm subscription with valid token" do
     subscriber = subscribers(:unconfirmed_subscriber)
 

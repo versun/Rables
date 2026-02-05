@@ -30,7 +30,7 @@ class SubscriptionsController < ApplicationController
 
     @subscriber = Subscriber.find_or_initialize_by(email: email)
 
-    if @subscriber.persisted? && @subscriber.confirmed?
+    if already_subscribed?(@subscriber)
       respond_to do |format|
         format.html do
           flash[:notice] = "您已经订阅了我们的邮件列表。"
@@ -39,6 +39,12 @@ class SubscriptionsController < ApplicationController
         format.json { render json: { success: true, message: "您已经订阅了我们的邮件列表。" } }
       end
       return
+    end
+
+    if @subscriber.persisted? && @subscriber.unsubscribed?
+      @subscriber.confirmed_at = nil
+      @subscriber.unsubscribed_at = nil
+      @subscriber.confirmation_token = SecureRandom.urlsafe_base64(32)
     end
 
     # 处理订阅的tags
@@ -134,4 +140,8 @@ class SubscriptionsController < ApplicationController
   end
 
   private
+
+  def already_subscribed?(subscriber)
+    subscriber.persisted? && subscriber.confirmed? && !subscriber.unsubscribed?
+  end
 end
