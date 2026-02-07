@@ -1,6 +1,9 @@
 require "net/http"
 require "json"
 class Listmonk < ApplicationRecord
+  # Singleton pattern - use implicit_order_column to avoid Rails 8.1 ordering warnings
+  self.implicit_order_column = :id
+
   validates :api_key, presence: true
   validates :username, presence: true
   validates :url, presence: true, format: { with: URI.regexp, message: "格式无效" }
