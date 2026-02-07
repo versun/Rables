@@ -110,7 +110,7 @@ class Export
         created_at updated_at
       ]
     ) do |csv|
-      Article.order(:id).find_each do |article|
+      Article.includes(:rich_text_content).order(:id).find_each do |article|
         # 处理文章内容和附件
         processed_content = process_article_content(article)
 
@@ -247,7 +247,7 @@ class Export
     Rails.event.notify("export.pages_started", component: "Export", level: "info")
 
     CSV.open(File.join(@export_dir, "pages.csv"), "w", write_headers: true, headers: %w[id title slug content status redirect_url page_order content_type html_content comment created_at updated_at]) do |csv|
-      Page.order(:id).find_each do |page|
+      Page.includes(:rich_text_content).order(:id).find_each do |page|
         # 处理页面内容（如果有富文本内容的话）
         content = page.content.present? ? process_page_content(page) : ""
 
@@ -294,7 +294,7 @@ class Export
         github_backup_branch created_at updated_at
       ]
     ) do |csv|
-      Setting.order(:id).find_each do |setting|
+      Setting.includes(:rich_text_footer).order(:id).find_each do |setting|
         # 处理footer内容（如果有富文本内容的话）
         footer_content = setting.footer.present? ? process_setting_footer(setting) : ""
 
@@ -344,7 +344,7 @@ class Export
     Rails.event.notify("export.social_media_posts_started", component: "Export", level: "info")
 
     CSV.open(File.join(@export_dir, "social_media_posts.csv"), "w", write_headers: true, headers: %w[id article_id article_slug platform url created_at updated_at]) do |csv|
-      SocialMediaPost.order(:id).find_each do |post|
+      SocialMediaPost.includes(:article).order(:id).find_each do |post|
         csv << [
           post.id,
           post.article_id,
@@ -382,7 +382,7 @@ class Export
     Rails.event.notify("export.comments_started", component: "Export", level: "info")
 
     CSV.open(File.join(@export_dir, "comments.csv"), "w", write_headers: true, headers: %w[id article_id article_slug parent_id author_name author_url author_username author_avatar_url content platform external_id status published_at url created_at updated_at]) do |csv|
-      Comment.order(:id).find_each do |comment|
+      Comment.includes(:article).order(:id).find_each do |comment|
         csv << [
           comment.id,
           comment.article_id,
@@ -411,7 +411,7 @@ class Export
     Rails.event.notify("export.static_files_started", component: "Export", level: "info")
 
     CSV.open(File.join(@export_dir, "static_files.csv"), "w", write_headers: true, headers: %w[id filename blob_filename description created_at updated_at]) do |csv|
-      StaticFile.order(:id).find_each do |static_file|
+      StaticFile.includes(file_attachment: :blob).order(:id).find_each do |static_file|
         unless static_file.file.attached?
           Rails.event.notify("export.static_file_skipped", component: "Export", static_file_id: static_file.id, reason: "no_attached_file", level: "warn")
           next
@@ -470,7 +470,7 @@ class Export
     Rails.event.notify("export.newsletter_settings_started", component: "Export", level: "info")
 
     CSV.open(File.join(@export_dir, "newsletter_settings.csv"), "w", write_headers: true, headers: %w[id provider enabled smtp_address smtp_port smtp_user_name smtp_password smtp_domain smtp_authentication smtp_enable_starttls from_email footer created_at updated_at]) do |csv|
-      NewsletterSetting.order(:id).find_each do |setting|
+      NewsletterSetting.includes(:rich_text_footer).order(:id).find_each do |setting|
         # 处理footer内容（如果有富文本内容的话）
         footer_content = setting.footer.present? ? process_newsletter_setting_footer(setting) : ""
 
@@ -528,7 +528,7 @@ class Export
     Rails.event.notify("export.article_tags_started", component: "Export", level: "info")
 
     CSV.open(File.join(@export_dir, "article_tags.csv"), "w", write_headers: true, headers: %w[id article_id article_slug tag_id tag_name tag_slug created_at updated_at]) do |csv|
-      ArticleTag.order(:id).find_each do |article_tag|
+      ArticleTag.includes(:article, :tag).order(:id).find_each do |article_tag|
         csv << [
           article_tag.id,
           article_tag.article_id,
@@ -549,7 +549,7 @@ class Export
     Rails.event.notify("export.subscriber_tags_started", component: "Export", level: "info")
 
     CSV.open(File.join(@export_dir, "subscriber_tags.csv"), "w", write_headers: true, headers: %w[id subscriber_id subscriber_email tag_id tag_name tag_slug created_at updated_at]) do |csv|
-      SubscriberTag.order(:id).find_each do |subscriber_tag|
+      SubscriberTag.includes(:subscriber, :tag).order(:id).find_each do |subscriber_tag|
         csv << [
           subscriber_tag.id,
           subscriber_tag.subscriber_id,

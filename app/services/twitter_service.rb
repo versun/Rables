@@ -6,6 +6,7 @@ require "json"
 
 class TwitterService
   include ContentBuilder
+  include HttpRedirectHandler
 
   def initialize
     @settings = Crosspost.twitter
@@ -403,25 +404,25 @@ class TwitterService
   def upload_image(client, attachable)
     return nil unless attachable
 
+    temp_file = nil
     begin
       # 创建临时文件来存储图片数据
       temp_file = create_temp_image_file(attachable)
       return nil unless temp_file
 
       # 使用 Twitter API v1.1 上传媒体
-      media_id = upload_media_to_twitter(client, temp_file.path)
-
-      # 清理临时文件
-      temp_file.close
-      temp_file.unlink
-
-      media_id
+      upload_media_to_twitter(client, temp_file.path)
     rescue => e
       Rails.event.notify "twitter_service.upload_image_error",
         level: "error",
         component: "TwitterService",
         error_message: e.message
       nil
+    ensure
+      if temp_file
+        temp_file.close rescue nil
+        temp_file.unlink rescue nil
+      end
     end
   end
 
@@ -434,9 +435,6 @@ class TwitterService
 
     # 使用简单的媒体上传（非分块上传）
     begin
-      # 读取文件数据
-      file_data = File.binread(file_path)
-
       # 创建 multipart/form-data 请求
       boundary = SecureRandom.hex
       upload_body = construct_upload_body(file_path, boundary)
@@ -513,61 +511,25 @@ class TwitterService
     image_url = remote_image.url
     return nil unless image_url.present?
 
-    # 处理相对URL
-    if image_url.start_with?("/")
-      site_url = Setting.first&.url.presence || "http://localhost:3000"
-      image_url = "#{site_url}#{image_url}"
-    end
+    result = download_remote_image_with_redirect(image_url)
+    return nil unless result
 
-    # 下载图片，支持重定向
-    uri = URI.parse(image_url)
-    response = fetch_with_redirect(uri)
+    result.first # Return just the image data
+  end
 
-    if response.is_a?(Net::HTTPSuccess)
-      response.body
-    else
-      Rails.event.notify "twitter_service.download_remote_image_failed",
-        level: "error",
-        component: "TwitterService",
-        response_code: response.code
-      nil
-    end
-  rescue => e
+  def log_redirect(redirect_uri)
+    Rails.event.notify "twitter_service.following_redirect",
+      level: "info",
+      component: "TwitterService",
+      redirect_uri: redirect_uri.to_s
+  end
+
+  def log_download_error(error, url)
     Rails.event.notify "twitter_service.download_remote_image_error",
       level: "error",
       component: "TwitterService",
-      error_message: e.message
-    nil
-  end
-
-  def fetch_with_redirect(uri, limit = 5)
-    raise "Too many HTTP redirects" if limit == 0
-
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = (uri.scheme == "https")
-    http.open_timeout = 10
-    http.read_timeout = 10
-
-    request = Net::HTTP::Get.new(uri.path + (uri.query ? "?#{uri.query}" : ""))
-    response = http.request(request)
-
-    case response
-    when Net::HTTPSuccess
-      response
-    when Net::HTTPRedirection
-      redirect_uri = URI.parse(response["location"])
-      # 处理相对URL重定向
-      if redirect_uri.relative?
-        redirect_uri = URI.join("#{uri.scheme}://#{uri.host}:#{uri.port}", response["location"])
-      end
-      Rails.event.notify "twitter_service.following_redirect",
-        level: "info",
-        component: "TwitterService",
-        redirect_uri: redirect_uri.to_s
-      fetch_with_redirect(redirect_uri, limit - 1)
-    else
-      response
-    end
+      error_message: error.message,
+      url: url
   end
 
   # Build OAuth 1.0a authorization header for Twitter API
@@ -617,15 +579,6 @@ class TwitterService
       "Content-Type: image/jpeg\r\n\r\n" \
       "#{file_data}\r\n" \
       "--#{boundary}--\r\n"
-  end
-
-  def check_media_status(client, media_id)
-    # 简化媒体状态检查 - 由于API限制，我们假设上传的媒体是可用的
-    # 实际的状态检查可能需要更高级的API访问权限
-    return true unless media_id
-
-    Rails.event.notify("twitter_service.media_status_check_skipped", level: "info", component: "TwitterService", media_id: media_id, reason: "API limitations")
-    true
   end
 
   def quote_tweet_id_for_article(article)

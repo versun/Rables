@@ -1,6 +1,7 @@
 # COPY from: https://t27duck.com/posts/17-a-bluesky-at-proto-api-example-in-ruby
 class BlueskyService
   include ContentBuilder
+  include HttpRedirectHandler
 
   TOKEN_CACHE_KEY = :bluesky_token_data
 
@@ -230,19 +231,6 @@ class BlueskyService
 
   private
 
-
-
-  def retrieve_server_token
-    token_data = Rails.cache.read(TOKEN_CACHE_KEY)
-    if token_data.present?
-      process_tokens(token_data)
-      @token
-    else
-      verify_tokens
-      @token
-    end
-  end
-
   def link_facets(message)
     [].tap do |facets|
       matches = []
@@ -267,20 +255,6 @@ class BlueskyService
         facets << {
           "index" => { "byteStart" => start, "byteEnd" => stop },
           "features" => [ { "uri" => url, "$type" => "app.bsky.richtext.facet#link" } ]
-        }
-      end
-    end
-  end
-
-  def tag_facets(message)
-    [].tap do |facets|
-      matches = []
-      message.scan(/(^|[^\w])(#[\w\-]+)/) { matches << Regexp.last_match }
-      matches.each do |match|
-        start, stop = match.byteoffset(2)
-        facets << {
-          "index" => { "byteStart" => start, "byteEnd" => stop },
-          "features" => [ { "tag" => match[2].delete_prefix("#"), "$type" => "app.bsky.richtext.facet#tag" } ]
         }
       end
     end
@@ -521,26 +495,10 @@ class BlueskyService
       # 确保token有效
       verify_tokens
 
-      # 将相对 URL 转换为绝对 URL
-      if image_url.start_with?("/")
-        site_url = Setting.first&.url.presence || "http://localhost:3000"
-        image_url = "#{site_url}#{image_url}"
-      end
+      result = download_remote_image_with_redirect(image_url)
+      return nil unless result
 
-      # 下载远程图片，支持重定向（ActiveStorage redirect URLs)
-      uri = URI.parse(image_url)
-      image_response = fetch_with_redirect(uri)
-
-      unless image_response.is_a?(Net::HTTPSuccess)
-        Rails.event.notify "bluesky_service.remote_image_download_failed",
-          level: "error",
-          component: "BlueskyService",
-          response_code: image_response.code
-        return nil
-      end
-
-      image_data = image_response.body
-      content_type = image_response["content-type"] || "image/jpeg"
+      image_data, content_type = result
 
       # 如果图片太大，进行压缩
       image_data, content_type = resize_image_if_needed(image_data, content_type)
@@ -578,6 +536,13 @@ class BlueskyService
         backtrace: e.backtrace.join("\n")
       nil
     end
+  end
+
+  def log_redirect(redirect_uri)
+    Rails.event.notify "bluesky_service.following_redirect",
+      level: "info",
+      component: "BlueskyService",
+      redirect_uri: redirect_uri.to_s
   end
 
   # 如果图片太大，使用 ruby-vips 压缩

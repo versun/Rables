@@ -68,10 +68,6 @@ class ImportZip
     FileUtils.rm_rf(@import_dir) if @import_dir && File.directory?(@import_dir)
   end
 
-  def error_message
-    @error_message
-  end
-
   private
 
   def extract_zip_file

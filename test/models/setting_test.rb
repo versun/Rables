@@ -19,4 +19,12 @@ class SettingTest < ActiveSupport::TestCase
     setting.update!(setup_completed: false)
     assert Setting.setup_incomplete?
   end
+
+  test "registers cache invalidation on commit callback" do
+    save_after_filters = Setting._save_callbacks.select { |callback| callback.kind == :after }.map(&:filter)
+    commit_after_filters = Setting._commit_callbacks.select { |callback| callback.kind == :after }.map(&:filter)
+
+    refute_includes save_after_filters, :clear_settings_cache
+    assert_includes commit_after_filters, :clear_settings_cache
+  end
 end
