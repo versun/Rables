@@ -1,4 +1,7 @@
 class NewsletterSetting < ApplicationRecord
+  # Singleton pattern - use implicit_order_column to avoid Rails 8.1 ordering warnings
+  self.implicit_order_column = :id
+
   has_rich_text :footer
 
   validates :provider, inclusion: { in: %w[native listmonk] }

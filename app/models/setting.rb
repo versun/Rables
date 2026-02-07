@@ -1,4 +1,7 @@
 class Setting < ApplicationRecord
+  # Singleton pattern - use implicit_order_column to avoid Rails 8.1 ordering warnings
+  self.implicit_order_column = :id
+
   has_rich_text :footer
   before_save :parse_social_links_json
   after_commit :clear_settings_cache

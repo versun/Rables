@@ -22,7 +22,30 @@
         22
       ],
       "note": "False positive: File.basename strips path components, empty/dotfile names are rejected, file existence is verified, and realpath comparison prevents symlink attacks"
+    },
+    {
+      "warning_type": "Redirect",
+      "warning_code": 18,
+      "fingerprint": "e59ff285510291be0b51955be54c839f8d2b1c84254b6bd6a82f1f29b5ea7755",
+      "check_name": "Redirect",
+      "message": "Possible unprotected redirect",
+      "file": "app/controllers/static_files_controller.rb",
+      "line": 14,
+      "link": "https://brakemanscanner.org/docs/warning_types/redirect/",
+      "code": "redirect_to((StaticFile.find_by(:filename => ((params[:filename].join(\"/\") or params[:filename]))).file.blob.url or rails_blob_path(StaticFile.find_by(:filename => ((params[:filename].join(\"/\") or params[:filename]))).file.blob)), :allow_other_host => true)",
+      "render_path": null,
+      "location": {
+        "type": "method",
+        "class": "StaticFilesController",
+        "method": "show"
+      },
+      "user_input": "StaticFile.find_by(:filename => ((params[:filename].join(\"/\") or params[:filename]))).file.blob.url",
+      "confidence": "Weak",
+      "cwe_id": [
+        601
+      ],
+      "note": "False positive: URL is from ActiveStorage blob associated with StaticFile record in database, not user-controlled input. allow_other_host is required for S3/external storage redirects."
     }
   ],
-  "brakeman_version": "7.1.1"
+  "brakeman_version": "8.0.2"
 }
