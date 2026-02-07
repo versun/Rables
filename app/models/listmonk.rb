@@ -22,12 +22,6 @@ class Listmonk < ApplicationRecord
       end
 
       if response.is_a?(Net::HTTPSuccess)
-        # ActivityLog.create!(
-        #   action: "newsletter",
-        #   target: "newsletter",
-        #   level: :info,
-        #   description: "Fetch Lists successfully!"
-        # )
         JSON.parse(response.body)["data"]["results"]
       else
         raise "Fetch Lists failed! #{response.code} - #{response.body}"
@@ -55,12 +49,6 @@ class Listmonk < ApplicationRecord
       end
 
       if response.is_a?(Net::HTTPSuccess)
-        # ActivityLog.create!(
-        #   action: "newsletter",
-        #   target: "newsletter",
-        #   level: :info,
-        #   description: "Fetch Templates successfully!"
-        # )
         JSON.parse(response.body)["data"]
       else
         raise "Fetch Template failed! #{response.code} - #{response.body}"

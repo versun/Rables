@@ -3,6 +3,7 @@ require "uri"
 
 class MastodonService
   include ContentBuilder
+  include HttpRedirectHandler
 
   def initialize
     @settings = Crosspost.mastodon
@@ -201,13 +202,6 @@ class MastodonService
   end
 
   private
-
-  # def create_client
-  #   Mastodon::REST::Client.new(
-  #     base_url: @settings[:server_url],
-  #     bearer_token: @settings.access_token
-  #   )
-  # end
 
   def upload_image(attachable)
     Rails.event.notify "mastodon_service.upload_image_started",
@@ -447,69 +441,23 @@ class MastodonService
 
   # Download remote image with redirect support
   def download_remote_image(image_url)
-    return nil unless image_url.present?
-
-    begin
-      # 将相对 URL 转换为绝对 URL
-      if image_url.start_with?("/")
-        site_url = Setting.first&.url.presence || "http://localhost:3000"
-        image_url = "#{site_url}#{image_url}"
-      end
-
-      # 下载远程图片，支持重定向（ActiveStorage redirect URLs)
-      uri = URI.parse(image_url)
-      image_response = fetch_with_redirect(uri)
-
-      unless image_response.is_a?(Net::HTTPSuccess)
-        Rails.event.notify "mastodon_service.remote_image_download_failed",
-          level: "error",
-          component: "MastodonService",
-          response_code: image_response.code
-        return nil
-      end
-
-      image_data = image_response.body
-      content_type = image_response["content-type"] || "image/jpeg"
-
-      [ image_data, content_type ]
-    rescue => e
-      Rails.event.notify "mastodon_service.remote_image_download_error",
-        level: "error",
-        component: "MastodonService",
-        error_message: e.message,
-        backtrace: e.backtrace.join("\n")
-      nil
-    end
+    result = download_remote_image_with_redirect(image_url)
+    return nil unless result
+    result
   end
 
-  # 跟随HTTP重定向获取图片
-  def fetch_with_redirect(uri, limit = 5)
-    raise "Too many HTTP redirects" if limit == 0
+  def log_redirect(redirect_uri)
+    Rails.event.notify "mastodon_service.following_redirect",
+      level: "info",
+      component: "MastodonService",
+      redirect_uri: redirect_uri.to_s
+  end
 
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = (uri.scheme == "https")
-    http.open_timeout = 10
-    http.read_timeout = 10
-
-    request = Net::HTTP::Get.new(uri.path + (uri.query ? "?#{uri.query}" : ""))
-    response = http.request(request)
-
-    case response
-    when Net::HTTPSuccess
-      response
-    when Net::HTTPRedirection
-      redirect_uri = URI.parse(response["location"])
-      # 如果是相对URL，补全域名
-      if redirect_uri.relative?
-        redirect_uri = URI.join("#{uri.scheme}://#{uri.host}:#{uri.port}", response["location"])
-      end
-      Rails.event.notify "mastodon_service.following_redirect",
-        level: "info",
-        component: "MastodonService",
-        redirect_uri: redirect_uri.to_s
-      fetch_with_redirect(redirect_uri, limit - 1)
-    else
-      response
-    end
+  def log_download_error(error, url)
+    Rails.event.notify "mastodon_service.remote_image_download_error",
+      level: "error",
+      component: "MastodonService",
+      error_message: error.message,
+      url: url
   end
 end

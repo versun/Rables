@@ -22,6 +22,7 @@ class Comment < ApplicationRecord
 
   # Validate that parent comment belongs to the same commentable
   validate :parent_belongs_to_same_commentable, if: :parent_id?
+  validate :parent_is_not_self, if: :parent_id?
 
   # Scopes
   enum :status, { pending: 0, approved: 1, rejected: 2 }, default: :pending
@@ -62,6 +63,10 @@ class Comment < ApplicationRecord
     if parent_record.commentable_type != commentable_type || parent_record.commentable_id != commentable_id
       errors.add(:parent_id, "must belong to the same #{commentable_type}")
     end
+  end
+
+  def parent_is_not_self
+    errors.add(:parent_id, "cannot reference itself") if parent_id == id
   end
 
   def enqueue_reply_notification

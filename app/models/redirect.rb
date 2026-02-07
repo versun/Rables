@@ -1,4 +1,6 @@
 class Redirect < ApplicationRecord
+  REGEX_TIMEOUT = 1 # seconds
+
   validates :regex, presence: true
   validates :replacement, presence: true
   validate :validate_regex_pattern
@@ -13,18 +15,20 @@ class Redirect < ApplicationRecord
 
   def match?(path)
     return false unless enabled?
-    compiled_regex.match?(path)
-  rescue RegexpError
+    Timeout.timeout(REGEX_TIMEOUT) { compiled_regex.match?(path) }
+  rescue RegexpError, Timeout::Error
     false
   end
 
   def apply_to(path)
     return nil unless match?(path)
-    result = path.sub(compiled_regex, replacement)
-    # If the regex matched the entire path (common case), return the replacement directly
-    # Otherwise return the substituted result
-    result
-  rescue RegexpError
+    Timeout.timeout(REGEX_TIMEOUT) do
+      result = path.sub(compiled_regex, replacement)
+      # If the regex matched the entire path (common case), return the replacement directly
+      # Otherwise return the substituted result
+      result
+    end
+  rescue RegexpError, Timeout::Error
     nil
   end
 

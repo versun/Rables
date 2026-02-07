@@ -26,6 +26,7 @@ class FetchSocialCommentsJob < ApplicationJob
 
     articles = Article.published
                       .joins(:social_media_posts)
+                      .includes(:comments)
                       .where(social_media_posts: { platform: "mastodon" })
                       .where.not(social_media_posts: { url: nil })
                       .distinct
@@ -41,6 +42,7 @@ class FetchSocialCommentsJob < ApplicationJob
 
     articles = Article.published
                       .joins(:social_media_posts)
+                      .includes(:comments)
                       .where(social_media_posts: { platform: "bluesky" })
                       .where.not(social_media_posts: { url: nil })
                       .distinct

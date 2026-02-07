@@ -1,6 +1,7 @@
 class Setting < ApplicationRecord
   has_rich_text :footer
   before_save :parse_social_links_json
+  after_commit :clear_settings_cache
   validates :url, presence: true, if: :setup_completed?
 
   # Virtual attribute for JSON textarea input
@@ -24,5 +25,9 @@ class Setting < ApplicationRecord
         throw :abort
       end
     end
+  end
+
+  def clear_settings_cache
+    CacheableSettings.refresh_site_info
   end
 end
