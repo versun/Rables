@@ -56,7 +56,7 @@ module HttpRedirectHandler
 
     return nil unless response.is_a?(Net::HTTPSuccess)
 
-    [response.body, response["content-type"] || "image/jpeg"]
+    [ response.body, response["content-type"] || "image/jpeg" ]
   rescue StandardError => e
     log_download_error(e, image_url) if respond_to?(:log_download_error, true)
     nil
