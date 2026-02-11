@@ -161,7 +161,7 @@ class Export
       write_headers: true,
       headers: %w[
         id platform server_url client_key client_secret
-        access_token access_token_secret api_key api_key_secret
+        access_token refresh_token client_id
         username app_password enabled auto_fetch_comments
         comment_fetch_schedule max_characters settings
         created_at updated_at
@@ -175,9 +175,8 @@ class Export
           crosspost.client_key,
           crosspost.client_secret,
           crosspost.access_token,
-          crosspost.access_token_secret,
-          crosspost.api_key,
-          crosspost.api_key_secret,
+          crosspost.refresh_token,
+          crosspost.client_id,
           crosspost.username,
           crosspost.app_password,
           crosspost.enabled,

@@ -19,7 +19,7 @@ class AdminCrosspostsTest < ApplicationSystemTestCase
 
     click_link "X (Twitter)"
     assert_text "X (Twitter)"
-    assert_text "API Key"
+    assert_text "OAuth 2.0 Client ID"
 
     click_link "Bluesky"
     assert_text "Bluesky"

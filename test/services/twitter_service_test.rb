@@ -10,7 +10,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
     result = service.verify({})
 
     assert_equal false, result[:success]
-    assert_match "Please fill in all information", result[:error]
+    assert_match "Please provide complete OAuth 2.0 credentials", result[:error]
   end
 
   test "post returns nil when crosspost is disabled" do
@@ -23,16 +23,15 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post uses quote_tweet_id when source_url is x.com" do
     Crosspost.twitter.update!(
       enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
+      client_id: "client_id",
+      client_secret: "client_secret",
       access_token: "access_token",
-      access_token_secret: "access_token_secret"
+      refresh_token: "refresh_token"
     )
 
     article = create_published_article(source_url: "https://x.com/example/status/1234567890")
 
     client = Minitest::Mock.new
-    client.expect(:get, { "data" => { "username" => "tester" } }, [ "users/me" ])
     client.expect(:post, { "data" => { "id" => "999" } }) do |endpoint, body|
       assert_equal "tweets", endpoint
 
@@ -45,17 +44,17 @@ class TwitterServiceTest < ActiveSupport::TestCase
     service = TwitterService.new
     result = service.stub(:create_client, client) { service.post(article) }
 
-    assert_equal "https://x.com/tester/status/999", result
+    assert_equal "https://x.com/i/web/status/999", result
     client.verify
   end
 
   test "post uploads all images for twitter" do
     Crosspost.twitter.update!(
       enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
+      client_id: "client_id",
+      client_secret: "client_secret",
       access_token: "access_token",
-      access_token_secret: "access_token_secret"
+      refresh_token: "refresh_token"
     )
 
     article = create_published_article
@@ -63,7 +62,6 @@ class TwitterServiceTest < ActiveSupport::TestCase
     article.define_singleton_method(:all_image_attachments) { |_limit| images }
 
     client = Minitest::Mock.new
-    client.expect(:get, { "data" => { "username" => "tester" } }, [ "users/me" ])
     client.expect(:post, { "data" => { "id" => "999" } }) do |endpoint, body|
       assert_equal "tweets", endpoint
 
@@ -73,9 +71,11 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
 
     service = TwitterService.new
+    media_uploader = service.instance_variable_get(:@media_uploader)
     sequence = 0
+
     service.define_singleton_method(:create_client) { client }
-    service.define_singleton_method(:upload_image) do |_client, _image|
+    media_uploader.define_singleton_method(:upload) do |_client, _image|
       sequence += 1
       "media-#{sequence}"
     end
@@ -83,24 +83,23 @@ class TwitterServiceTest < ActiveSupport::TestCase
     result = service.post(article)
 
     assert_equal 2, sequence
-    assert_equal "https://x.com/tester/status/999", result
+    assert_equal "https://x.com/i/web/status/999", result
     client.verify
   end
 
   test "post returns url when media upload succeeds" do
     Crosspost.twitter.update!(
       enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
+      client_id: "client_id",
+      client_secret: "client_secret",
       access_token: "access_token",
-      access_token_secret: "access_token_secret"
+      refresh_token: "refresh_token"
     )
 
     article = create_published_article
     article.define_singleton_method(:all_image_attachments) { |_limit| [ :image ] }
 
     client = Minitest::Mock.new
-    client.expect(:get, { "data" => { "username" => "tester" } }, [ "users/me" ])
     client.expect(:post, { "data" => { "id" => "123" } }) do |endpoint, body|
       payload = JSON.parse(body)
       assert_equal "tweets", endpoint
@@ -109,28 +108,30 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
 
     service = TwitterService.new
+    media_uploader = service.instance_variable_get(:@media_uploader)
+    media_uploader.define_singleton_method(:upload) { |_client, _image| "media_id" }
+
     result = service.stub(:create_client, client) do
-      service.stub(:upload_image, "media_id") { service.post(article) }
+      service.post(article)
     end
 
-    assert_equal "https://x.com/tester/status/123", result
+    assert_equal "https://x.com/i/web/status/123", result
     client.verify
   end
 
   test "post falls back to text only when media tweet fails" do
     Crosspost.twitter.update!(
       enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
+      client_id: "client_id",
+      client_secret: "client_secret",
       access_token: "access_token",
-      access_token_secret: "access_token_secret"
+      refresh_token: "refresh_token"
     )
 
     article = create_published_article
     article.define_singleton_method(:all_image_attachments) { |_limit| [ :image ] }
 
     client = Minitest::Mock.new
-    client.expect(:get, { "data" => { "username" => "tester" } }, [ "users/me" ])
     client.expect(:post, { "errors" => [ { "message" => "media failed" } ] }) do |endpoint, body|
       payload = JSON.parse(body)
       assert_equal "tweets", endpoint
@@ -145,28 +146,30 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
 
     service = TwitterService.new
+    media_uploader = service.instance_variable_get(:@media_uploader)
+    media_uploader.define_singleton_method(:upload) { |_client, _image| "media_id" }
+
     result = service.stub(:create_client, client) do
-      service.stub(:upload_image, "media_id") { service.post(article) }
+      service.post(article)
     end
 
-    assert_equal "https://x.com/tester/status/456", result
+    assert_equal "https://x.com/i/web/status/456", result
     client.verify
   end
 
   test "post returns nil when tweet fails without media" do
     Crosspost.twitter.update!(
       enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
+      client_id: "client_id",
+      client_secret: "client_secret",
       access_token: "access_token",
-      access_token_secret: "access_token_secret"
+      refresh_token: "refresh_token"
     )
 
     article = create_published_article
     article.define_singleton_method(:all_image_attachments) { |_limit| [] }
 
     client = Minitest::Mock.new
-    client.expect(:get, { "data" => { "username" => "tester" } }, [ "users/me" ])
     client.expect(:post, { "errors" => [ { "message" => "bad request" } ] }) { |_endpoint, _body| true }
 
     service = TwitterService.new
@@ -179,15 +182,15 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post returns nil when client raises" do
     Crosspost.twitter.update!(
       enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
+      client_id: "client_id",
+      client_secret: "client_secret",
       access_token: "access_token",
-      access_token_secret: "access_token_secret"
+      refresh_token: "refresh_token"
     )
 
     article = create_published_article
     client = Minitest::Mock.new
-    client.expect(:get, nil) { |_endpoint| raise "boom" }
+    client.expect(:post, nil) { |_endpoint, _body| raise "boom" }
 
     service = TwitterService.new
     result = service.stub(:create_client, client) { service.post(article) }
@@ -251,65 +254,41 @@ class TwitterServiceTest < ActiveSupport::TestCase
     assert_equal "root", comments.last[:parent_external_id]
   end
 
-  test "make_rate_limited_request_with_retry returns nil after max retries" do
-    service = TwitterService.new
+  test "rate_limiter returns nil after max retries" do
+    rate_limiter = TwitterApi::RateLimiter.new
     client = Minitest::Mock.new
     response = { "errors" => [ { "title" => "Too Many Requests" } ] }
     client.expect(:get, response, [ String ])
 
-    service.stub(:sleep, nil) do
-      service.stub(:calculate_backoff_time, 0) do
-        result, rate_limit = service.send(:make_rate_limited_request_with_retry, client, "tweets/1", max_retries: 0)
+    rate_limiter.stub(:sleep, nil) do
+      result, rate_limit = rate_limiter.make_request_with_info(client, "tweets/1", max_retries: 0)
 
-        assert_nil result
-        assert_equal 0, rate_limit[:remaining]
-      end
+      assert_nil result
+      assert_equal 0, rate_limit[:remaining]
     end
   end
 
-  test "make_rate_limited_request raises after max retries" do
-    service = TwitterService.new
+  test "rate_limiter raises after max retries" do
+    rate_limiter = TwitterApi::RateLimiter.new
     client = Minitest::Mock.new
     client.expect(:get, { "errors" => [ { "title" => "Too Many Requests" } ] }, [ "tweets/1" ])
 
-    handled = false
-    service.stub(:sleep, nil) do
-      service.stub(:calculate_backoff_time, 0) do
-        service.stub(:handle_rate_limit_exceeded, ->(_info) { handled = true }) do
-          assert_raises RuntimeError do
-            service.send(:make_rate_limited_request, client, "tweets/1", max_retries: 0)
-          end
-        end
+    rate_limiter.stub(:sleep, nil) do
+      assert_raises RuntimeError do
+        rate_limiter.make_request(client, "tweets/1", max_retries: 0)
       end
     end
-
-    assert handled
   end
 
-  test "build_oauth_header includes required oauth params" do
-    Crosspost.twitter.update!(
-      enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
-      access_token: "access_token",
-      access_token_secret: "access_token_secret"
-    )
-
-    service = TwitterService.new
-    header = service.send(:build_oauth_header, "POST", "https://upload.twitter.com/1.1/media/upload.json")
-
-    assert_includes header, "oauth_consumer_key"
-    assert_includes header, "oauth_signature"
-  end
-
-  test "create_temp_image_file supports remote images" do
-    service = TwitterService.new
+  test "media_uploader creates temp file for remote images" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
     remote_image = Object.new
     remote_image.define_singleton_method(:url) { "http://example.com/image.jpg" }
     remote_image.define_singleton_method(:class) { Struct.new(:name).new("ActionText::Attachables::RemoteImage") }
 
-    service.stub(:download_remote_image, "image-data") do
-      temp_file = service.send(:create_temp_image_file, remote_image)
+    uploader.stub(:download_remote_image, "image-data") do
+      temp_file = uploader.send(:create_temp_file, remote_image)
 
       assert temp_file.is_a?(Tempfile)
       assert_equal "image-data", temp_file.read
@@ -318,36 +297,29 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
   end
 
-  test "upload_media_to_twitter returns media id" do
+  test "media_uploader uploads to twitter and returns media id" do
     Crosspost.twitter.update!(
       enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
+      client_id: "client_id",
+      client_secret: "client_secret",
       access_token: "access_token",
-      access_token_secret: "access_token_secret"
+      refresh_token: "refresh_token"
     )
-    service = TwitterService.new
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
 
     file = Tempfile.new([ "upload", ".jpg" ])
     file.write("data")
     file.rewind
 
-    fake_client = Struct.new(:called) do
-      def post(endpoint, body, headers:)
-        self.called = { endpoint: endpoint, body: body, headers: headers }
-        { "media_id_string" => "media123" }
-      end
-    end.new
-
-    service.stub(:create_v1_client, fake_client) do
-      media_id = service.send(:upload_media_to_twitter, nil, file.path)
+    X::MediaUploader.stub(:upload, { "id" => "media123" }) do
+      media_id = uploader.send(:upload_to_twitter, nil, file.path)
 
       assert_equal "media123", media_id
-      assert_equal "media/upload.json", fake_client.called[:endpoint]
     end
   ensure
-    file.close
-    file.unlink
+    file&.close
+    file&.unlink
   end
 
   test "fetch_with_redirect follows redirects" do
@@ -372,8 +344,9 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
   end
 
-  test "download_remote_image returns data for relative urls" do
-    service = TwitterService.new
+  test "media_uploader download_remote_image returns data for relative urls" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
 
     remote_image = Object.new
     remote_image.define_singleton_method(:url) { "/image.png" }
@@ -382,14 +355,14 @@ class TwitterServiceTest < ActiveSupport::TestCase
     response.instance_variable_set(:@read, true)
     response.instance_variable_set(:@body, "image-data")
 
-    service.stub(:fetch_with_redirect, response) do
-      data = service.send(:download_remote_image, remote_image)
+    uploader.stub(:fetch_with_redirect, response) do
+      data = uploader.send(:download_remote_image, remote_image)
 
       assert_equal "image-data", data
     end
   end
 
-  test "verify succeeds with valid credentials" do
+  test "verify succeeds with valid oauth2 credentials" do
     client = Object.new
     client.define_singleton_method(:get) { |_endpoint| { "data" => { "id" => "123" } } }
 
@@ -397,18 +370,54 @@ class TwitterServiceTest < ActiveSupport::TestCase
       service = TwitterService.new
       result = service.verify(
         access_token: "token",
-        access_token_secret: "secret",
-        api_key: "api",
-        api_key_secret: "api-secret"
+        refresh_token: "refresh-token",
+        client_id: "client-id",
+        client_secret: "client-secret"
       )
 
       assert_equal true, result[:success]
     end
   end
 
+
+  test "post retries when create tweet is rate limited" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token"
+    )
+
+    article = create_published_article
+    article.define_singleton_method(:all_image_attachments) { |_limit| [] }
+
+    service = TwitterService.new
+    calls = 0
+    client = Object.new
+    client.define_singleton_method(:post) do |_endpoint, _body|
+      calls += 1
+      raise "429 Too Many Requests" if calls == 1
+
+      { "data" => { "id" => "123" } }
+    end
+
+    service.stub(:create_client, client) do
+      service.stub(:sleep, nil) do
+        service.stub(:calculate_backoff_time, 0) do
+          result = service.post(article)
+
+          assert_equal "https://x.com/i/web/status/123", result
+          assert_equal 2, calls
+        end
+      end
+    end
+  end
+
   test "fetch_comments aggregates replies and quote tweets" do
     Crosspost.twitter.update!(enabled: true)
     service = TwitterService.new
+    rate_limiter = service.instance_variable_get(:@rate_limiter)
 
     replies_response = {
       "data" => [
@@ -461,11 +470,11 @@ class TwitterServiceTest < ActiveSupport::TestCase
       }
     }
 
-    service.define_singleton_method(:make_rate_limited_request) do |_client, _endpoint, **_opts|
+    rate_limiter.define_singleton_method(:make_request) do |_client, _endpoint, **_opts|
       { "data" => { "conversation_id" => "conv-root" } }
     end
 
-    service.define_singleton_method(:make_rate_limited_request_with_retry) do |_client, endpoint, **_opts|
+    rate_limiter.define_singleton_method(:make_request_with_info) do |_client, endpoint, **_opts|
       if endpoint.include?("is%3Areply") && endpoint.include?("conv-q1")
         [ quote_replies_response, { limit: 180, remaining: 50, reset_at: Time.current + 15.minutes } ]
       elsif endpoint.include?("is%3Areply")
@@ -484,15 +493,77 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
   end
 
+  test "fetch_comments preserves rate_limit when quote tweet has no conversation id" do
+    Crosspost.twitter.update!(enabled: true)
+    service = TwitterService.new
+    rate_limiter = service.instance_variable_get(:@rate_limiter)
+
+    replies_response = {
+      "data" => [
+        {
+          "id" => "r1",
+          "author_id" => "u1",
+          "text" => "reply",
+          "created_at" => Time.current.iso8601,
+          "referenced_tweets" => [ { "type" => "replied_to", "id" => "123" } ]
+        }
+      ],
+      "includes" => {
+        "users" => [
+          { "id" => "u1", "username" => "alice", "name" => "Alice", "profile_image_url" => "http://example.com/a.png" }
+        ]
+      }
+    }
+
+    quote_response = {
+      "data" => [
+        {
+          "id" => "q1",
+          "author_id" => "u2",
+          "text" => "quote",
+          "created_at" => Time.current.iso8601
+        }
+      ],
+      "includes" => {
+        "users" => [
+          { "id" => "u2", "username" => "bob", "name" => "Bob", "profile_image_url" => "http://example.com/b.png" }
+        ]
+      }
+    }
+
+    expected_rate_limit = { limit: 180, remaining: 42, reset_at: Time.current + 15.minutes }
+
+    rate_limiter.define_singleton_method(:make_request) do |_client, _endpoint, **_opts|
+      { "data" => { "conversation_id" => "conv-root" } }
+    end
+
+    rate_limiter.define_singleton_method(:make_request_with_info) do |_client, endpoint, **_opts|
+      if endpoint.include?("is%3Areply")
+        [ replies_response, expected_rate_limit ]
+      else
+        [ quote_response, expected_rate_limit ]
+      end
+    end
+
+    service.stub(:create_client, Object.new) do
+      result = service.fetch_comments("https://x.com/user/status/123")
+
+      assert_equal 2, result[:comments].length
+      assert_equal expected_rate_limit[:limit], result.dig(:rate_limit, :limit)
+      assert_equal expected_rate_limit[:remaining], result.dig(:rate_limit, :remaining)
+      assert_in_delta expected_rate_limit[:reset_at].to_i, result.dig(:rate_limit, :reset_at).to_i, 1
+    end
+  end
+
   test "verify returns failure when client raises" do
     service = TwitterService.new
 
     X::Client.stub(:new, ->(**_args) { raise "boom" }) do
       result = service.verify(
         access_token: "token",
-        access_token_secret: "secret",
-        api_key: "api",
-        api_key_secret: "api-secret"
+        refresh_token: "refresh-token",
+        client_id: "client-id",
+        client_secret: "client-secret"
       )
 
       assert_equal false, result[:success]
@@ -500,43 +571,176 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
   end
 
-  test "upload_media_to_twitter returns nil when file missing" do
-    service = TwitterService.new
-
-    assert_nil service.send(:upload_media_to_twitter, nil, "/tmp/does-not-exist.jpg")
-  end
-
-  test "upload_media_to_twitter returns nil when response missing media id" do
+  test "oauth_service token_needs_refresh returns true when expires_at is nil" do
     Crosspost.twitter.update!(
       enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
+      client_id: "client_id",
+      client_secret: "client_secret",
       access_token: "access_token",
-      access_token_secret: "access_token_secret"
+      refresh_token: "refresh_token",
+      token_expires_at: nil
     )
+
+    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
+
+    assert oauth_service.token_needs_refresh?
+  end
+
+  test "oauth_service token_needs_refresh returns true when token is about to expire" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token",
+      token_expires_at: Time.current + 2.minutes # Less than 5 minute buffer
+    )
+
+    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
+
+    assert oauth_service.token_needs_refresh?
+  end
+
+  test "oauth_service token_needs_refresh returns false when token is still valid" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token",
+      token_expires_at: Time.current + 1.hour
+    )
+
+    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
+
+    refute oauth_service.token_needs_refresh?
+  end
+
+  test "oauth_service refresh_token updates tokens in database" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "old_access_token",
+      refresh_token: "old_refresh_token",
+      token_expires_at: Time.current - 1.hour
+    )
+
+    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
+
+    success_response = Net::HTTPSuccess.new("1.1", "200", "OK")
+    success_response.instance_variable_set(:@read, true)
+    success_response.instance_variable_set(:@body, {
+      access_token: "new_access_token",
+      refresh_token: "new_refresh_token",
+      expires_in: 7200
+    }.to_json)
+
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| success_response }
+
+    Net::HTTP.stub(:new, fake_http) do
+      oauth_service.refresh_token!
+    end
+
+    @settings = Crosspost.twitter.reload
+    assert_equal "new_access_token", @settings.access_token
+    assert_equal "new_refresh_token", @settings.refresh_token
+    assert_in_delta Time.current + 7200, @settings.token_expires_at, 5
+  end
+
+  test "oauth_service refresh_token raises on failure response" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token",
+      token_expires_at: Time.current - 1.hour
+    )
+
+    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
+
+    error_response = Net::HTTPBadRequest.new("1.1", "400", "Bad Request")
+    error_response.instance_variable_set(:@read, true)
+    error_response.instance_variable_set(:@body, {
+      error: "invalid_grant",
+      error_description: "Refresh token has been revoked"
+    }.to_json)
+
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| error_response }
+
+    Net::HTTP.stub(:new, fake_http) do
+      error = assert_raises(RuntimeError) do
+        oauth_service.refresh_token!
+      end
+
+      assert_match "Refresh token has been revoked", error.message
+    end
+  end
+
+  test "create_client refreshes token when needed via oauth_service" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token",
+      token_expires_at: Time.current - 1.hour # Expired
+    )
+
     service = TwitterService.new
+    oauth_service = service.instance_variable_get(:@oauth_service)
+    refresh_called = false
+
+    oauth_service.define_singleton_method(:refresh_if_needed!) do
+      refresh_called = true
+    end
+    oauth_service.define_singleton_method(:build_client) do
+      Object.new
+    end
+
+    service.send(:create_client)
+
+    assert refresh_called
+  end
+
+  test "media_uploader returns nil when file missing" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
+
+    assert_nil uploader.send(:upload_to_twitter, nil, "/tmp/does-not-exist.jpg")
+  end
+
+  test "media_uploader returns nil when response missing media id" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token"
+    )
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
 
     file = Tempfile.new([ "upload", ".jpg" ])
     file.write("data")
     file.rewind
 
-    fake_client = Struct.new(:called) do
-      def post(_endpoint, _body, headers:)
-        self.called = headers
-        {}
-      end
-    end.new
-
-    service.stub(:create_v1_client, fake_client) do
-      assert_nil service.send(:upload_media_to_twitter, nil, file.path)
+    X::MediaUploader.stub(:upload, {}) do
+      assert_nil uploader.send(:upload_to_twitter, nil, file.path)
     end
   ensure
-    file.close
-    file.unlink
+    file&.close
+    file&.unlink
   end
 
-  test "create_temp_image_file returns nil for non-image blob" do
-    service = TwitterService.new
+  test "media_uploader returns nil for non-image blob" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
 
     blob = ActiveStorage::Blob.create_and_upload!(
       io: StringIO.new("data"),
@@ -544,11 +748,12 @@ class TwitterServiceTest < ActiveSupport::TestCase
       content_type: "text/plain"
     )
 
-    assert_nil service.send(:create_temp_image_file, blob)
+    assert_nil uploader.send(:create_temp_file, blob)
   end
 
-  test "download_remote_image returns nil on non-success response" do
-    service = TwitterService.new
+  test "media_uploader download_remote_image returns nil on non-success response" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
 
     remote_image = Object.new
     remote_image.define_singleton_method(:url) { "http://example.com/bad.png" }
@@ -557,8 +762,8 @@ class TwitterServiceTest < ActiveSupport::TestCase
     response.instance_variable_set(:@read, true)
     response.instance_variable_set(:@body, "missing")
 
-    service.stub(:fetch_with_redirect, response) do
-      assert_nil service.send(:download_remote_image, remote_image)
+    uploader.stub(:fetch_with_redirect, response) do
+      assert_nil uploader.send(:download_remote_image, remote_image)
     end
   end
 
@@ -589,8 +794,8 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
   end
 
-  test "make_rate_limited_request retries and succeeds" do
-    service = TwitterService.new
+  test "rate_limiter retries and succeeds" do
+    rate_limiter = TwitterApi::RateLimiter.new
     calls = 0
     client = Object.new
     client.define_singleton_method(:get) do |_endpoint|
@@ -602,30 +807,18 @@ class TwitterServiceTest < ActiveSupport::TestCase
       end
     end
 
-    service.stub(:sleep, nil) do
-      response = service.send(:make_rate_limited_request, client, "tweets/1", max_retries: 1)
+    rate_limiter.stub(:sleep, nil) do
+      response = rate_limiter.make_request(client, "tweets/1", max_retries: 1)
 
       assert_equal({ "data" => { "id" => "ok" } }, response)
     end
   end
 
-  test "log_rate_limit_status notifies on warn and info thresholds" do
-    service = TwitterService.new
-
-    ActivityLog.stub(:log!, true) do
-      warn_result = service.send(:log_rate_limit_status, { remaining: 10, limit: 180, reset_at: Time.current + 15.minutes })
-      info_result = service.send(:log_rate_limit_status, { remaining: 30, limit: 180, reset_at: Time.current + 15.minutes })
-
-      assert_equal true, warn_result
-      assert_nil info_result
-    end
-  end
-
-  test "handle_rate_limit_exceeded logs activity" do
-    service = TwitterService.new
+  test "rate_limiter logs activity on exceeded" do
+    rate_limiter = TwitterApi::RateLimiter.new
 
     ActivityLog.stub(:log!, :logged) do
-      result = service.send(:handle_rate_limit_exceeded, { limit: 180, remaining: 0, reset_at: Time.current + 15.minutes })
+      result = rate_limiter.send(:log_rate_limit_exceeded, { limit: 180, remaining: 0, reset_at: Time.current + 15.minutes })
 
       assert_equal :logged, result
     end

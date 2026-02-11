@@ -6,9 +6,7 @@ class CreateCrossposts < ActiveRecord::Migration[8.1]
       t.string :client_key
       t.string :client_secret
       t.string :access_token
-      t.string :access_token_secret
-      t.string :api_key
-      t.string :api_key_secret
+      t.string :refresh_token
       t.string :username
       t.string :app_password
       t.boolean :enabled, default: false, null: false
@@ -23,4 +21,3 @@ class CreateCrossposts < ActiveRecord::Migration[8.1]
     add_index :crossposts, :platform, unique: true
   end
 end
-

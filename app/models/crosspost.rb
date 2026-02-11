@@ -1,6 +1,7 @@
 class Crosspost < ApplicationRecord
-  #  encrypts :access_token, :access_token_secret, :client_id, :client_secret,
-  #          :client_key, :api_key, :api_key_secret, :app_password, :username
+  # encrypts :access_token, :refresh_token, :client_id, :client_secret,
+  #          :client_key, :app_password, :username
+  # Uncomment when Active Record encryption is configured
   PLATFORMS = %w[mastodon twitter bluesky xiaohongshu].freeze
 
   PLATFORM_ICONS = {
@@ -15,7 +16,7 @@ class Crosspost < ApplicationRecord
                       inclusion: { in: PLATFORMS }
 
   validates :client_key, :client_secret, :access_token, presence: true, if: -> { mastodon? && enabled? }
-  validates :access_token, :access_token_secret, :api_key, :api_key_secret, presence: true, if: -> { twitter? && enabled? }
+  validate :twitter_credentials_presence, if: -> { twitter? && enabled? }
   validates :username, :app_password, presence: true, if: -> { bluesky? && enabled? }
   validate :server_url_http_format, if: -> { server_url.present? }
 
@@ -64,6 +65,13 @@ class Crosspost < ApplicationRecord
   end
 
   private
+
+  def twitter_credentials_presence
+    oauth2_valid = client_id.present? && client_secret.present? && access_token.present? && refresh_token.present?
+    return if oauth2_valid
+
+    errors.add(:base, "Twitter requires OAuth 2.0 credentials (client id/secret + access token + refresh token)")
+  end
 
   def server_url_http_format
     uri = URI.parse(server_url.to_s.strip)

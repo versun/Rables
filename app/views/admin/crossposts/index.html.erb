@@ -19,7 +19,7 @@
   <div class="form-section compact">
     <h3>Mastodon</h3>
     <small>Get credentials: Open Mastodon → Preferences → Development → New application | Scope: profile,write:statuses</small>
-    
+
     <%= form_with(model: @mastodon, url: admin_crosspost_path(@mastodon.platform), method: :patch) do |f| %>
       <%= f.hidden_field :platform, value: 'mastodon' %>
 
@@ -66,7 +66,7 @@
       </div>
       <div class="field">
         <%= f.label :comment_fetch_schedule, "Comment Fetch Schedule" %>
-        <%= f.select :comment_fetch_schedule, 
+        <%= f.select :comment_fetch_schedule,
             options_for_select([
               ['Disabled', ''],
               ['Daily at 12:00 AM', 'daily'],
@@ -102,8 +102,8 @@
   <% if @active_platform == "twitter" %>
   <div class="form-section compact">
     <h3>X (Twitter)</h3>
-    <small>First, obtain X credentials from <%= link_to "https://developer.x.com", "https://developer.x.com", target: "_blank" %></small>
-    
+    <small>Get OAuth 2.0 credentials from <%= link_to "X Developer Portal", "https://developer.x.com", target: "_blank" %>. Set callback URL to: <code><%= twitter_callback_admin_crossposts_url %></code></small>
+
     <%= form_with(model: @twitter, url: admin_crosspost_path(@twitter.platform), method: :patch) do |f| %>
       <%= f.hidden_field :platform, value: 'twitter' %>
 
@@ -114,27 +114,40 @@
 
       <div class="form-grid form-grid-2">
         <div class="field">
-          <%= f.label :access_token, "Access Token" %>
-          <%= f.text_field :access_token %>
+          <%= f.label :client_id, "OAuth 2.0 Client ID" %>
+          <%= f.text_field :client_id %>
         </div>
 
         <div class="field">
-          <%= f.label :access_token_secret, "Access Token Secret" %>
-          <%= f.text_field :access_token_secret %>
+          <%= f.label :client_secret, "OAuth 2.0 Client Secret" %>
+          <%= f.password_field :client_secret, value: @twitter.client_secret, placeholder: @twitter.client_secret.present? ? "••••••••" : "" %>
         </div>
       </div>
 
-      <div class="form-grid form-grid-2">
-        <div class="field">
-          <%= f.label :api_key, "API Key" %>
-          <%= f.text_field :api_key %>
-        </div>
+      <% twitter_authorized = @twitter.client_id.present? && @twitter.client_secret.present? && @twitter.access_token.present? && @twitter.refresh_token.present? %>
 
+      <% if twitter_authorized %>
         <div class="field">
-          <%= f.label :api_key_secret, "API Key Secret" %>
-          <%= f.text_field :api_key_secret %>
+          <label>Authorization Status</label>
+          <div class="authorization-status authorized">
+            <span class="status-icon">✓</span>
+            <span class="status-text">Authorized</span>
+            <% if @twitter.token_expires_at.present? %>
+              <small class="expires-info">
+                (Token expires: <%= @twitter.token_expires_at.strftime("%Y-%m-%d %H:%M") %>)
+              </small>
+            <% end %>
+          </div>
         </div>
-      </div>
+      <% else %>
+        <div class="field">
+          <label>Authorization Status</label>
+          <div class="authorization-status not-authorized">
+            <span class="status-icon">○</span>
+            <span class="status-text">Not authorized - Click "Authorize with X" after saving Client ID/Secret</span>
+          </div>
+        </div>
+      <% end %>
 
       <div class="field">
         <%= f.label :max_characters, "Max Characters", for: 'crosspost_max_characters_twitter' %>
@@ -146,18 +159,21 @@
 
       <div class="form-actions">
         <%= f.submit "Save", class: 'btn btn-primary' %>
-        <div id="verify-button-twitter">
-          <%= button_tag "Verify", type: 'submit', class: 'btn btn-secondary', form: "verify-form-twitter", data: { turbo_frame: "_top" } %>
-        </div>
+        <%= link_to "Authorize with X", twitter_authorize_admin_crossposts_path, class: "btn btn-secondary", data: { turbo: false } %>
+        <% if twitter_authorized %>
+          <div id="verify-button-twitter">
+            <%= button_tag "Verify", type: 'submit', class: 'btn btn-outline', form: "verify-form-twitter", data: { turbo_frame: "_top" } %>
+          </div>
+        <% end %>
       </div>
     <% end %>
 
     <%= form_with(url: verify_admin_crosspost_path('twitter'), method: :post, data: { turbo: true }, id: "verify-form-twitter") do |vf| %>
       <%= hidden_field_tag 'crosspost[platform]', 'twitter' %>
       <%= hidden_field_tag 'crosspost[access_token]', @twitter.access_token, id: 'verify_access_token_twitter' %>
-      <%= hidden_field_tag 'crosspost[access_token_secret]', @twitter.access_token_secret, id: 'verify_access_token_secret_twitter' %>
-      <%= hidden_field_tag 'crosspost[api_key]', @twitter.api_key, id: 'verify_api_key_twitter' %>
-      <%= hidden_field_tag 'crosspost[api_key_secret]', @twitter.api_key_secret, id: 'verify_api_key_secret_twitter' %>
+      <%= hidden_field_tag 'crosspost[refresh_token]', @twitter.refresh_token, id: 'verify_refresh_token_twitter' %>
+      <%= hidden_field_tag 'crosspost[client_id]', @twitter.client_id, id: 'verify_client_id_twitter' %>
+      <%= hidden_field_tag 'crosspost[client_secret]', @twitter.client_secret, id: 'verify_client_secret_twitter' %>
     <% end %>
     <div id="verify-messages-twitter"></div>
   </div>
@@ -167,7 +183,7 @@
   <div class="form-section compact">
     <h3>Bluesky</h3>
     <small>Get credentials: Log in to your Bluesky account and generate an App Password in settings.</small>
-    
+
     <%= form_with(model: @bluesky, url: admin_crosspost_path(@bluesky.platform), method: :patch) do |f| %>
       <%= f.hidden_field :platform, value: 'bluesky' %>
 
@@ -207,7 +223,7 @@
       </div>
       <div class="field">
         <%= f.label :comment_fetch_schedule, "Comment Fetch Schedule" %>
-        <%= f.select :comment_fetch_schedule, 
+        <%= f.select :comment_fetch_schedule,
             options_for_select([
               ['Disabled', ''],
               ['Daily at 12:00 AM', 'daily'],
@@ -319,7 +335,7 @@
         // 使用事件委托，避免重复绑定
         mainForm.addEventListener('input', () => syncFormValues(platform), { once: false });
         mainForm.addEventListener('change', () => syncFormValues(platform), { once: false });
-        
+
         // 在 verify 表单提交前同步值
         const verifyForm = document.getElementById(`verify-form-${platform}`);
         if (verifyForm) {
