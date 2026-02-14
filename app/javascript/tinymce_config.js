@@ -26,7 +26,7 @@ function initTinyMCE() {
     remove_script_host: false,
     convert_urls: false,
 
-    // Image upload configuration
+    // File upload configuration
     images_upload_url: '/admin/editor_images',
     images_upload_credentials: true,
     automatic_uploads: true,
@@ -74,25 +74,52 @@ function initTinyMCE() {
       });
     },
 
-    // File picker configuration for external images
-    file_picker_types: 'image',
+    // File picker configuration for all supported file types
+    file_picker_types: 'file image media',
     file_picker_callback: function (cb, value, meta) {
       var input = document.createElement('input');
       input.setAttribute('type', 'file');
-      input.setAttribute('accept', 'image/*');
+      input.setAttribute('accept', meta.filetype === 'image' ? 'image/*' : '*/*');
 
       input.onchange = function () {
         var file = this.files[0];
-        var reader = new FileReader();
-        reader.onload = function () {
-          var id = 'blobid' + (new Date()).getTime();
-          var blobCache =  tinymce.activeEditor.editorUpload.blobCache;
-          var base64 = reader.result.split(',')[1];
-          var blobInfo = blobCache.create(id, file, base64);
-          blobCache.add(blobInfo);
-          cb(blobInfo.blobUri(), { title: file.name });
+        var formData = new FormData();
+        formData.append('file', file);
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/admin/editor_images');
+
+        var csrfToken = document.querySelector('meta[name="csrf-token"]');
+        if (csrfToken) {
+          xhr.setRequestHeader('X-CSRF-Token', csrfToken.getAttribute('content'));
+        }
+
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            try {
+              var json = JSON.parse(xhr.responseText);
+              if (json && json.location) {
+                var options = { title: file.name };
+                if (meta.filetype === 'file') {
+                  options.text = file.name;
+                }
+                cb(json.location, options);
+              } else {
+                console.error('Invalid JSON:', xhr.responseText);
+              }
+            } catch (e) {
+              console.error('Invalid JSON:', xhr.responseText);
+            }
+          } else {
+            console.error('HTTP Error:', xhr.status);
+          }
         };
-        reader.readAsDataURL(file);
+
+        xhr.onerror = function() {
+          console.error('Upload failed due to network error');
+        };
+
+        xhr.send(formData);
       };
 
       input.click();

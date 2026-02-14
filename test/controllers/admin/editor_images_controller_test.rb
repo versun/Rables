@@ -8,11 +8,11 @@ class Admin::EditorImagesControllerTest < ActionDispatch::IntegrationTest
     sign_in(@user)
   end
 
-  test "successfully uploads a valid image file" do
-    image_file = fixture_file_upload("test_image.png", "image/png")
+  test "successfully uploads a valid file of any type" do
+    text_file = fixture_file_upload("sample.txt", "text/plain")
 
     assert_difference "ActiveStorage::Blob.count", 1 do
-      post admin_editor_images_path, params: { file: image_file }
+      post admin_editor_images_path, params: { file: text_file }
     end
 
     assert_response :success
@@ -30,25 +30,21 @@ class Admin::EditorImagesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "No file provided", json_response["error"]
   end
 
-  test "returns error for invalid file type" do
+  test "supports non-image MIME types" do
     text_file = fixture_file_upload("sample.txt", "text/plain")
 
-    assert_no_difference "ActiveStorage::Blob.count" do
+    assert_difference "ActiveStorage::Blob.count", 1 do
       post admin_editor_images_path, params: { file: text_file }
     end
 
-    assert_response :bad_request
-    json_response = JSON.parse(response.body)
-    assert_match /Invalid file type/, json_response["error"]
+    assert_response :success
   end
 
-  test "accepts file based on declared content type, not extension" do
-    # The controller validates content_type header, not file extension or content
-    # A text file uploaded with image/png content-type will be accepted
-    text_file_as_png = fixture_file_upload("sample.txt", "image/png")
+  test "continues to accept image files" do
+    image_file = fixture_file_upload("test_image.png", "image/png")
 
     assert_difference "ActiveStorage::Blob.count", 1 do
-      post admin_editor_images_path, params: { file: text_file_as_png }
+      post admin_editor_images_path, params: { file: image_file }
     end
 
     assert_response :success
