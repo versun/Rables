@@ -32,7 +32,7 @@ class CrosspostArticleJobTest < ActiveJob::TestCase
     Crosspost.twitter.update!(enabled: true)
 
     mock_service = Minitest::Mock.new
-    mock_service.expect :post, "https://twitter.com/user/status/123", [ Article ]
+    mock_service.expect :post, "https://x.com/user/status/123", [ Article ]
 
     TwitterService.stub :new, mock_service do
       CrosspostArticleJob.perform_now(@article.id, "twitter")

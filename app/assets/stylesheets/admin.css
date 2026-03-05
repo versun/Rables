@@ -1240,3 +1240,50 @@ a:hover {
         display: none;
     }
 }
+
+/* Authorization Status */
+.authorization-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.authorization-status.authorized {
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    color: #065f46;
+}
+
+.authorization-status.not-authorized {
+    background: #fef3c7;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+}
+
+.authorization-status .status-icon {
+    font-weight: bold;
+    font-size: 16px;
+}
+
+.authorization-status .status-text {
+    font-weight: 500;
+}
+
+.authorization-status .expires-info {
+    color: #6b7280;
+    font-weight: normal;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+
+.btn-outline:hover {
+    background: var(--bg-hover);
+}
+

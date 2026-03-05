@@ -93,6 +93,10 @@ Rails.application.routes.draw do
       member do
         post :verify
       end
+      collection do
+        get :twitter_authorize
+        get :twitter_callback
+      end
     end
     resources :git_integrations, only: [ :index, :update ] do
       member do

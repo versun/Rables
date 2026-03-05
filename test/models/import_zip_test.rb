@@ -181,7 +181,7 @@ class ImportZipTest < ActiveSupport::TestCase
 
     crossposts_csv = CSV.generate(
       write_headers: true,
-      headers: %w[id platform server_url client_key client_secret access_token access_token_secret api_key api_key_secret username app_password enabled created_at updated_at]
+      headers: %w[id platform server_url client_key client_secret access_token refresh_token client_id username app_password enabled created_at updated_at]
     ) do |csv|
       csv << [
         1,
@@ -190,7 +190,6 @@ class ImportZipTest < ActiveSupport::TestCase
         "test_client_key",
         "test_client_secret",
         "test_access_token",
-        "",
         "",
         "",
         "",
@@ -204,11 +203,10 @@ class ImportZipTest < ActiveSupport::TestCase
         "twitter",
         "",
         "",
-        "",
+        "twitter_client_secret",
         "twitter_access_token",
-        "twitter_access_token_secret",
-        "twitter_api_key",
-        "twitter_api_key_secret",
+        "twitter_refresh_token",
+        "twitter_client_id",
         "",
         "",
         true,
@@ -233,9 +231,9 @@ class ImportZipTest < ActiveSupport::TestCase
     twitter = Crosspost.find_by!(platform: "twitter")
     assert twitter.enabled?
     assert_equal "twitter_access_token", twitter.access_token
-    assert_equal "twitter_access_token_secret", twitter.access_token_secret
-    assert_equal "twitter_api_key", twitter.api_key
-    assert_equal "twitter_api_key_secret", twitter.api_key_secret
+    assert_equal "twitter_refresh_token", twitter.refresh_token
+    assert_equal "twitter_client_id", twitter.client_id
+    assert_equal "twitter_client_secret", twitter.client_secret
   ensure
     File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
   end
@@ -376,13 +374,12 @@ class ImportZipTest < ActiveSupport::TestCase
 
     crossposts_csv = CSV.generate(
       write_headers: true,
-      headers: %w[id platform server_url client_key client_secret access_token access_token_secret api_key api_key_secret username app_password enabled auto_fetch_comments comment_fetch_schedule max_characters settings created_at updated_at]
+      headers: %w[id platform server_url client_key client_secret access_token refresh_token client_id username app_password enabled auto_fetch_comments comment_fetch_schedule max_characters settings created_at updated_at]
     ) do |csv|
       csv << [
         1,
         "mastodon",
         "https://mastodon.example.com",
-        "",
         "",
         "",
         "",

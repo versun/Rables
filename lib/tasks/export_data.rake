@@ -139,17 +139,16 @@ namespace :export do
   def export_crossposts(export_dir)
     puts "Exporting crossposts..."
 
-    CSV.open(File.join(export_dir, "crossposts.csv"), "w", write_headers: true, headers: %w[id platform client_key client_secret access_token access_token_secret api_key api_key_secret username app_password enabled created_at updated_at]) do |csv|
+    CSV.open(File.join(export_dir, "crossposts.csv"), "w", write_headers: true, headers: %w[id platform client_key client_secret client_id access_token refresh_token username app_password enabled created_at updated_at]) do |csv|
       Crosspost.find_each do |crosspost|
         csv << [
           crosspost.id,
           crosspost.platform,
           crosspost.client_key,
           crosspost.client_secret,
+          crosspost.client_id,
           crosspost.access_token,
-          crosspost.access_token_secret,
-          crosspost.api_key,
-          crosspost.api_key_secret,
+          crosspost.refresh_token,
           crosspost.username,
           crosspost.app_password,
           crosspost.enabled,

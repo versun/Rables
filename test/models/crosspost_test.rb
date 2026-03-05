@@ -110,16 +110,26 @@ class CrosspostTest < ActiveSupport::TestCase
     crosspost = Crosspost.new(
       platform: "twitter",
       enabled: true,
-      api_key: nil,
-      api_key_secret: nil,
+      client_id: nil,
+      client_secret: nil,
       access_token: nil,
-      access_token_secret: nil
+      refresh_token: nil
     )
     assert_not crosspost.valid?
-    assert_includes crosspost.errors[:api_key], "can't be blank"
-    assert_includes crosspost.errors[:api_key_secret], "can't be blank"
-    assert_includes crosspost.errors[:access_token], "can't be blank"
-    assert_includes crosspost.errors[:access_token_secret], "can't be blank"
+    assert_includes crosspost.errors[:base], "Twitter requires OAuth 2.0 credentials (client id/secret + access token + refresh token)"
+  end
+
+  test "accepts oauth2 twitter credentials when enabled" do
+    crosspost = Crosspost.twitter
+    crosspost.assign_attributes(
+      enabled: true,
+      client_id: "client-id",
+      client_secret: "client-secret",
+      access_token: "token",
+      refresh_token: "refresh-token"
+    )
+
+    assert crosspost.valid?
   end
 
   test "validates bluesky credentials when enabled" do
