@@ -69,7 +69,7 @@ class Admin::CrosspostsController < Admin::BaseController
         crosspost[:server_url] = "https://mastodon.social" if crosspost[:server_url].blank?
         MastodonService.new.verify(crosspost)
       when "twitter"
-        TwitterService.new.verify(crosspost)
+        TwitterService.new.verify(Crosspost.twitter.attributes.symbolize_keys)
       when "bluesky"
         # Set default server_url if not provided
         crosspost[:server_url] = "https://bsky.social/xrpc" if crosspost[:server_url].blank?
@@ -133,7 +133,7 @@ class Admin::CrosspostsController < Admin::BaseController
       code_challenge_method: "S256"
     }
 
-    auth_url = "https://twitter.com/i/oauth2/authorize?#{auth_params.to_query}"
+    auth_url = "https://x.com/i/oauth2/authorize?#{auth_params.to_query}"
 
     redirect_to auth_url, allow_other_host: true
   end
@@ -229,6 +229,8 @@ class Admin::CrosspostsController < Admin::BaseController
     uri = URI("https://api.x.com/2/oauth2/token")
     http = Net::HTTP.new(uri.host, uri.port)
     http.use_ssl = true
+    http.open_timeout = 10
+    http.read_timeout = 15
 
     request = Net::HTTP::Post.new(uri)
     request["Content-Type"] = "application/x-www-form-urlencoded"

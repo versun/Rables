@@ -170,10 +170,6 @@
 
     <%= form_with(url: verify_admin_crosspost_path('twitter'), method: :post, data: { turbo: true }, id: "verify-form-twitter") do |vf| %>
       <%= hidden_field_tag 'crosspost[platform]', 'twitter' %>
-      <%= hidden_field_tag 'crosspost[access_token]', @twitter.access_token, id: 'verify_access_token_twitter' %>
-      <%= hidden_field_tag 'crosspost[refresh_token]', @twitter.refresh_token, id: 'verify_refresh_token_twitter' %>
-      <%= hidden_field_tag 'crosspost[client_id]', @twitter.client_id, id: 'verify_client_id_twitter' %>
-      <%= hidden_field_tag 'crosspost[client_secret]', @twitter.client_secret, id: 'verify_client_secret_twitter' %>
     <% end %>
     <div id="verify-messages-twitter"></div>
   </div>

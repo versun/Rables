@@ -97,7 +97,7 @@
         <a href="#" data-action="click->share#copy" class="share-menu-item">
           <i class="fas fa-link"></i> Copy Link
         </a>
-        <a href="https://twitter.com/intent/tweet?url=<%= URI.encode_www_form_component(article_full_url) %>&text=<%= URI.encode_www_form_component(@article.title) %>" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
+        <a href="https://x.com/intent/tweet?url=<%= URI.encode_www_form_component(article_full_url) %>&text=<%= URI.encode_www_form_component(@article.title) %>" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
           <i class="fab fa-square-x-twitter"></i> Twitter
         </a>
         <a href="https://mastodon.social/share?text=<%= URI.encode_www_form_component("#{@article.title} #{article_full_url}") %>" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">

@@ -96,7 +96,7 @@ class Admin::CrosspostsControllerTest < ActionDispatch::IntegrationTest
     assert_response :redirect
     redirect_url = response.location
 
-    assert redirect_url.start_with?("https://twitter.com/i/oauth2/authorize")
+    assert redirect_url.start_with?("https://x.com/i/oauth2/authorize")
     assert_includes redirect_url, "client_id=test_client_id"
     assert_includes redirect_url, "response_type=code"
     assert_includes redirect_url, "code_challenge_method=S256"
@@ -169,12 +169,13 @@ class Admin::CrosspostsControllerTest < ActionDispatch::IntegrationTest
     captured_request_body = nil
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) do |req|
       captured_request_body = req.body
       success_response
     end
 
-    # We need to set session before the request, using a controller test approach
     original_new = Net::HTTP.method(:new)
     Net::HTTP.define_singleton_method(:new) { |*args| fake_http }
 
@@ -219,13 +220,14 @@ class Admin::CrosspostsControllerTest < ActionDispatch::IntegrationTest
 
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) { |_req| error_response }
 
     original_new = Net::HTTP.method(:new)
     Net::HTTP.define_singleton_method(:new) { |*args| fake_http }
 
     begin
-      # First set up the session via authorize
       get twitter_authorize_admin_crossposts_path
       stored_state = session[:twitter_oauth_state]
 

@@ -48,7 +48,8 @@ class TwitterService
     end
 
     begin
-      # 获取文章所有图片（Twitter最多支持4张）
+      username = fetch_username(client)
+
       images = article.all_image_attachments(4)
       Rails.event.notify "twitter_service.images_count",
         level: "info",
@@ -57,7 +58,6 @@ class TwitterService
 
       media_ids = upload_article_images(client, images)
 
-      # 构建推文数据
       tweet_data = build_tweet_data(tweet, quote_tweet_id, media_ids)
 
       Rails.event.notify "twitter_service.sending_tweet",
@@ -67,7 +67,7 @@ class TwitterService
 
       response = create_tweet_with_retry(client, tweet_data)
 
-      handle_tweet_response(response, article, tweet, quote_tweet_id, media_ids, client)
+      handle_tweet_response(response, article, tweet, quote_tweet_id, media_ids, client, username)
     rescue => e
       log_post_error(e, article)
       nil
@@ -136,6 +136,17 @@ class TwitterService
     @oauth_service.build_client
   end
 
+  def fetch_username(client)
+    user = client.get("users/me")
+    user&.dig("data", "username")
+  rescue => e
+    Rails.event.notify "twitter_service.fetch_username_failed",
+      level: "warn",
+      component: "TwitterService",
+      error_message: e.message
+    nil
+  end
+
   def upload_article_images(client, images)
     media_ids = []
     images.each do |image|
@@ -182,11 +193,11 @@ class TwitterService
     end
   end
 
-  def handle_tweet_response(response, article, tweet, quote_tweet_id, media_ids, client)
+  def handle_tweet_response(response, article, tweet, quote_tweet_id, media_ids, client, username = nil)
     if response && response["data"] && response["data"]["id"]
       id = response["data"]["id"]
       log_successful_post(article, id)
-      build_tweet_url(id)
+      build_tweet_url(id, username)
     else
       error_message = response&.dig("errors")&.first&.dig("message") || "Unknown error"
       Rails.event.notify "twitter_service.tweet_failed",
@@ -196,7 +207,7 @@ class TwitterService
 
       # If media tweet failed, try text-only
       if media_ids.any? && error_message.include?("media")
-        try_text_only_tweet(client, tweet, quote_tweet_id, article, error_message)
+        try_text_only_tweet(client, tweet, quote_tweet_id, article, error_message, username)
       else
         log_failed_post(article, error_message)
         nil
@@ -204,7 +215,7 @@ class TwitterService
     end
   end
 
-  def try_text_only_tweet(client, tweet, quote_tweet_id, article, original_error)
+  def try_text_only_tweet(client, tweet, quote_tweet_id, article, original_error, username = nil)
     Rails.event.notify "twitter_service.media_tweet_failed",
       level: "warn",
       component: "TwitterService"
@@ -237,7 +248,7 @@ class TwitterService
           status: "text_only",
           error: "media_upload_failed"
         )
-        build_tweet_url(id)
+        build_tweet_url(id, username)
       else
         raise "Fallback text tweet also failed"
       end
@@ -452,10 +463,14 @@ class TwitterService
     match ? match[1] : nil
   end
 
-  def build_tweet_url(tweet_id)
+  def build_tweet_url(tweet_id, username = nil)
     return if tweet_id.blank?
 
-    "https://x.com/i/web/status/#{tweet_id}"
+    if username.present?
+      "https://x.com/#{username}/status/#{tweet_id}"
+    else
+      "https://x.com/i/web/status/#{tweet_id}"
+    end
   end
 
   # Delegate methods for backward compatibility with tests

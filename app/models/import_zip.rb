@@ -275,17 +275,13 @@ class ImportZip
       crosspost = Crosspost.find_or_initialize_by(platform: platform)
       is_new_record = crosspost.new_record?
 
-      # Legacy import compatibility note:
-      # old crossposts.csv files may include api_key/api_key_secret columns;
-      # they are ignored because Twitter now uses OAuth 2.0 only.
-
       crosspost.assign_attributes(
         server_url: row["server_url"],
         client_key: row["client_key"],
         client_secret: row["client_secret"],
         client_id: row["client_id"],
         access_token: row["access_token"],
-        refresh_token: row["refresh_token"].presence || row["access_token_secret"],
+        refresh_token: row["refresh_token"],
         username: row["username"],
         app_password: row["app_password"],
         enabled: cast_boolean(row["enabled"], default: false),

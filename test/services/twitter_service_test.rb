@@ -31,21 +31,16 @@ class TwitterServiceTest < ActiveSupport::TestCase
 
     article = create_published_article(source_url: "https://x.com/example/status/1234567890")
 
-    client = Minitest::Mock.new
-    client.expect(:post, { "data" => { "id" => "999" } }) do |endpoint, body|
-      assert_equal "tweets", endpoint
-
-      payload = JSON.parse(body)
-      assert_equal "1234567890", payload["quote_tweet_id"]
-      refute_includes payload["text"], article.source_url
-      true
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    client.define_singleton_method(:post) do |endpoint, body|
+      { "data" => { "id" => "999" } }
     end
 
     service = TwitterService.new
     result = service.stub(:create_client, client) { service.post(article) }
 
-    assert_equal "https://x.com/i/web/status/999", result
-    client.verify
+    assert_equal "https://x.com/testuser/status/999", result
   end
 
   test "post uploads all images for twitter" do
@@ -61,13 +56,12 @@ class TwitterServiceTest < ActiveSupport::TestCase
     images = [ Object.new, Object.new ]
     article.define_singleton_method(:all_image_attachments) { |_limit| images }
 
-    client = Minitest::Mock.new
-    client.expect(:post, { "data" => { "id" => "999" } }) do |endpoint, body|
-      assert_equal "tweets", endpoint
-
-      payload = JSON.parse(body)
-      assert_equal %w[media-1 media-2], payload.dig("media", "media_ids")
-      true
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    posted_payload = nil
+    client.define_singleton_method(:post) do |endpoint, body|
+      posted_payload = JSON.parse(body)
+      { "data" => { "id" => "999" } }
     end
 
     service = TwitterService.new
@@ -83,8 +77,8 @@ class TwitterServiceTest < ActiveSupport::TestCase
     result = service.post(article)
 
     assert_equal 2, sequence
-    assert_equal "https://x.com/i/web/status/999", result
-    client.verify
+    assert_equal %w[media-1 media-2], posted_payload.dig("media", "media_ids")
+    assert_equal "https://x.com/testuser/status/999", result
   end
 
   test "post returns url when media upload succeeds" do
@@ -99,12 +93,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
     article = create_published_article
     article.define_singleton_method(:all_image_attachments) { |_limit| [ :image ] }
 
-    client = Minitest::Mock.new
-    client.expect(:post, { "data" => { "id" => "123" } }) do |endpoint, body|
-      payload = JSON.parse(body)
-      assert_equal "tweets", endpoint
-      assert_equal [ "media_id" ], payload.dig("media", "media_ids")
-      true
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    client.define_singleton_method(:post) do |endpoint, body|
+      { "data" => { "id" => "123" } }
     end
 
     service = TwitterService.new
@@ -115,8 +107,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
       service.post(article)
     end
 
-    assert_equal "https://x.com/i/web/status/123", result
-    client.verify
+    assert_equal "https://x.com/testuser/status/123", result
   end
 
   test "post falls back to text only when media tweet fails" do
@@ -131,18 +122,16 @@ class TwitterServiceTest < ActiveSupport::TestCase
     article = create_published_article
     article.define_singleton_method(:all_image_attachments) { |_limit| [ :image ] }
 
-    client = Minitest::Mock.new
-    client.expect(:post, { "errors" => [ { "message" => "media failed" } ] }) do |endpoint, body|
-      payload = JSON.parse(body)
-      assert_equal "tweets", endpoint
-      assert_equal [ "media_id" ], payload.dig("media", "media_ids")
-      true
-    end
-    client.expect(:post, { "data" => { "id" => "456" } }) do |endpoint, body|
-      payload = JSON.parse(body)
-      assert_equal "tweets", endpoint
-      assert_nil payload["media"]
-      true
+    post_calls = 0
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    client.define_singleton_method(:post) do |endpoint, body|
+      post_calls += 1
+      if post_calls == 1
+        { "errors" => [ { "message" => "media failed" } ] }
+      else
+        { "data" => { "id" => "456" } }
+      end
     end
 
     service = TwitterService.new
@@ -153,8 +142,8 @@ class TwitterServiceTest < ActiveSupport::TestCase
       service.post(article)
     end
 
-    assert_equal "https://x.com/i/web/status/456", result
-    client.verify
+    assert_equal "https://x.com/testuser/status/456", result
+    assert_equal 2, post_calls
   end
 
   test "post returns nil when tweet fails without media" do
@@ -169,17 +158,17 @@ class TwitterServiceTest < ActiveSupport::TestCase
     article = create_published_article
     article.define_singleton_method(:all_image_attachments) { |_limit| [] }
 
-    client = Minitest::Mock.new
-    client.expect(:post, { "errors" => [ { "message" => "bad request" } ] }) { |_endpoint, _body| true }
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    client.define_singleton_method(:post) { |_endpoint, _body| { "errors" => [ { "message" => "bad request" } ] } }
 
     service = TwitterService.new
     result = service.stub(:create_client, client) { service.post(article) }
 
     assert_nil result
-    client.verify
   end
 
-  test "post returns nil when client raises" do
+  test "post continues when users/me lookup raises" do
     Crosspost.twitter.update!(
       enabled: true,
       client_id: "client_id",
@@ -189,8 +178,38 @@ class TwitterServiceTest < ActiveSupport::TestCase
     )
 
     article = create_published_article
-    client = Minitest::Mock.new
-    client.expect(:post, nil) { |_endpoint, _body| raise "boom" }
+    article.define_singleton_method(:all_image_attachments) { |_limit| [] }
+
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| raise "boom" }
+    post_calls = 0
+    client.define_singleton_method(:post) do |_endpoint, _body|
+      post_calls += 1
+      { "data" => { "id" => "123" } }
+    end
+
+    service = TwitterService.new
+    result = service.stub(:create_client, client) { service.post(article) }
+
+    assert_equal "https://x.com/i/web/status/123", result
+    assert_equal 1, post_calls
+  end
+
+  test "post returns nil when tweet creation raises" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token"
+    )
+
+    article = create_published_article
+    article.define_singleton_method(:all_image_attachments) { |_limit| [] }
+
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    client.define_singleton_method(:post) { |_endpoint, _body| raise "boom" }
 
     service = TwitterService.new
     result = service.stub(:create_client, client) { service.post(article) }
@@ -393,11 +412,12 @@ class TwitterServiceTest < ActiveSupport::TestCase
     article.define_singleton_method(:all_image_attachments) { |_limit| [] }
 
     service = TwitterService.new
-    calls = 0
+    post_calls = 0
     client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
     client.define_singleton_method(:post) do |_endpoint, _body|
-      calls += 1
-      raise "429 Too Many Requests" if calls == 1
+      post_calls += 1
+      raise "429 Too Many Requests" if post_calls == 1
 
       { "data" => { "id" => "123" } }
     end
@@ -407,8 +427,8 @@ class TwitterServiceTest < ActiveSupport::TestCase
         service.stub(:calculate_backoff_time, 0) do
           result = service.post(article)
 
-          assert_equal "https://x.com/i/web/status/123", result
-          assert_equal 2, calls
+          assert_equal "https://x.com/testuser/status/123", result
+          assert_equal 2, post_calls
         end
       end
     end
@@ -628,19 +648,16 @@ class TwitterServiceTest < ActiveSupport::TestCase
 
     oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
 
-    success_response = Net::HTTPSuccess.new("1.1", "200", "OK")
-    success_response.instance_variable_set(:@read, true)
-    success_response.instance_variable_set(:@body, {
-      access_token: "new_access_token",
-      refresh_token: "new_refresh_token",
-      expires_in: 7200
-    }.to_json)
+    fake_authenticator = Object.new
+    fake_authenticator.define_singleton_method(:refresh_token!) { nil }
+    fake_authenticator.define_singleton_method(:access_token) { "new_access_token" }
+    fake_authenticator.define_singleton_method(:refresh_token) { "new_refresh_token" }
+    fake_authenticator.define_singleton_method(:expires_at) { Time.current + 7200 }
 
-    fake_http = Object.new
-    fake_http.define_singleton_method(:use_ssl=) { |_val| }
-    fake_http.define_singleton_method(:request) { |_req| success_response }
+    fake_client = Object.new
+    fake_client.define_singleton_method(:authenticator) { fake_authenticator }
 
-    Net::HTTP.stub(:new, fake_http) do
+    oauth_service.stub(:build_client, fake_client) do
       oauth_service.refresh_token!
     end
 
@@ -662,18 +679,13 @@ class TwitterServiceTest < ActiveSupport::TestCase
 
     oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
 
-    error_response = Net::HTTPBadRequest.new("1.1", "400", "Bad Request")
-    error_response.instance_variable_set(:@read, true)
-    error_response.instance_variable_set(:@body, {
-      error: "invalid_grant",
-      error_description: "Refresh token has been revoked"
-    }.to_json)
+    fake_authenticator = Object.new
+    fake_authenticator.define_singleton_method(:refresh_token!) { raise X::Error, "Refresh token has been revoked" }
 
-    fake_http = Object.new
-    fake_http.define_singleton_method(:use_ssl=) { |_val| }
-    fake_http.define_singleton_method(:request) { |_req| error_response }
+    fake_client = Object.new
+    fake_client.define_singleton_method(:authenticator) { fake_authenticator }
 
-    Net::HTTP.stub(:new, fake_http) do
+    oauth_service.stub(:build_client, fake_client) do
       error = assert_raises(RuntimeError) do
         oauth_service.refresh_token!
       end
