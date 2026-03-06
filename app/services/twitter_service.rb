@@ -50,7 +50,7 @@ class TwitterService
     begin
       username = fetch_username(client)
 
-      images = article.all_image_attachments(4)
+      images = tweet_images_for_article(article, quote_tweet_id)
       Rails.event.notify "twitter_service.images_count",
         level: "info",
         component: "TwitterService",
@@ -194,19 +194,18 @@ class TwitterService
   end
 
   def handle_tweet_response(response, article, tweet, quote_tweet_id, media_ids, client, username = nil)
-    if response && response["data"] && response["data"]["id"]
+    if successful_tweet_response?(response)
       id = response["data"]["id"]
       log_successful_post(article, id)
       build_tweet_url(id, username)
     else
-      error_message = response&.dig("errors")&.first&.dig("message") || "Unknown error"
+      error_message = extract_error_message(response)
       Rails.event.notify "twitter_service.tweet_failed",
         level: "error",
         component: "TwitterService",
         error_message: error_message
 
-      # If media tweet failed, try text-only
-      if media_ids.any? && error_message.include?("media")
+      if media_ids.any? && media_error?(error_message)
         try_text_only_tweet(client, tweet, quote_tweet_id, article, error_message, username)
       else
         log_failed_post(article, error_message)
@@ -231,7 +230,7 @@ class TwitterService
     begin
       fallback_response = create_tweet_with_retry(client, text_only_data)
 
-      if fallback_response && fallback_response["data"] && fallback_response["data"]["id"]
+      if successful_tweet_response?(fallback_response)
         id = fallback_response["data"]["id"]
         Rails.event.notify "twitter_service.text_only_succeeded",
           level: "warn",
@@ -309,6 +308,18 @@ class TwitterService
       platform: "twitter",
       error: error.message
     )
+  end
+
+  def successful_tweet_response?(response)
+    response && response["data"] && response["data"]["id"]
+  end
+
+  def extract_error_message(response)
+    response&.dig("errors")&.first&.dig("message") || "Unknown error"
+  end
+
+  def media_error?(error_message)
+    error_message.to_s.downcase.include?("media")
   end
 
   def fetch_conversation_comments(client, response, tweet_id, post_url)
@@ -437,30 +448,67 @@ class TwitterService
     source_url = article&.source_url.to_s.strip
     return nil if source_url.blank?
 
-    host = extract_host_from_url(source_url)
-    return nil unless x_dot_com_host?(host)
+    parsed_url = parse_twitter_status_url(source_url)
+    return nil unless parsed_url
 
-    extract_tweet_id_from_url(source_url)
+    extract_tweet_id_from_path(parsed_url.path)
   end
 
-  def extract_host_from_url(url)
+  def normalize_url(url)
     normalized_url = url.match?(%r{^https?://}i) ? url : "https://#{url}"
-    URI.parse(normalized_url).host&.downcase
+    URI.parse(normalized_url)
   rescue URI::InvalidURIError
     nil
   end
 
-  def x_dot_com_host?(host)
+  def extract_host_from_url(url)
+    normalize_url(url)&.host&.downcase
+  end
+
+  def parse_twitter_status_url(url)
+    normalized_uri = normalize_url(url)
+    return nil unless normalized_uri
+
+    host = normalized_uri.host&.downcase
+    return nil unless twitter_host?(host)
+    return nil unless extract_tweet_id_from_path(normalized_uri.path)
+
+    normalized_uri
+  end
+
+  def twitter_host?(host)
     return false if host.blank?
 
-    host == "x.com" || host.end_with?(".x.com")
+    [ "x.com", "twitter.com" ].any? do |domain|
+      host == domain || host.end_with?(".#{domain}")
+    end
+  end
+
+  def extract_tweet_id_from_path(path)
+    return nil if path.blank?
+
+    match = path.match(%r{\A/(?:i/(?:web/)?status|[^/]+/status|statuses)/(\d+)(?:/.*)?\z}i)
+    match ? match[1] : nil
+  end
+
+  def tweet_images_for_article(article, quote_tweet_id)
+    if quote_tweet_id.present?
+      Rails.event.notify "twitter_service.skipping_media_for_quote_tweet",
+        level: "info",
+        component: "TwitterService",
+        article_id: article.id,
+        quote_tweet_id: quote_tweet_id
+      []
+    else
+      article.all_image_attachments(4)
+    end
   end
 
   def extract_tweet_id_from_url(url)
-    return nil if url.blank?
+    normalized_uri = normalize_url(url)
+    return nil unless normalized_uri
 
-    match = url.match(%r{(?:twitter\.com|x\.com)/(?:\w+/status|i/web/status)/(\d+)}i)
-    match ? match[1] : nil
+    extract_tweet_id_from_path(normalized_uri.path)
   end
 
   def build_tweet_url(tweet_id, username = nil)

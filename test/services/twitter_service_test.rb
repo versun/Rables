@@ -43,6 +43,111 @@ class TwitterServiceTest < ActiveSupport::TestCase
     assert_equal "https://x.com/testuser/status/999", result
   end
 
+  test "post uses quote_tweet_id when source_url is twitter.com" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token"
+    )
+
+    article = create_published_article(source_url: "https://twitter.com/example/status/1234567890?s=20")
+    article.define_singleton_method(:all_image_attachments) { |_limit| [] }
+
+    posted_payload = nil
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    client.define_singleton_method(:post) do |_endpoint, body|
+      posted_payload = JSON.parse(body)
+      { "data" => { "id" => "999" } }
+    end
+
+    service = TwitterService.new
+    result = service.stub(:create_client, client) { service.post(article) }
+
+    assert_equal "https://x.com/testuser/status/999", result
+    assert_equal "1234567890", posted_payload["quote_tweet_id"]
+  end
+
+  test "post returns nil when quote tweet is forbidden" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token"
+    )
+
+    article = create_published_article(
+      source_url: "https://x.com/example/status/1234567890",
+      title: "Quoted Source"
+    )
+    article.define_singleton_method(:all_image_attachments) { |_limit| [] }
+
+    payloads = []
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    client.define_singleton_method(:post) do |_endpoint, body|
+      payloads << JSON.parse(body)
+      if payloads.one?
+        {
+          "errors" => [
+            {
+              "message" => "Forbidden: Quoting this post is not allowed because you have not been mentioned or are not part of the conversation thread of the post you are quoting."
+            }
+          ]
+        }
+      else
+        { "data" => { "id" => "999" } }
+      end
+    end
+
+    service = TwitterService.new
+    result = service.stub(:create_client, client) { service.post(article) }
+
+    assert_nil result
+    assert_equal 1, payloads.length
+    assert_equal "1234567890", payloads.first["quote_tweet_id"]
+  end
+
+  test "post skips media when quote_tweet_id is present" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token"
+    )
+
+    article = create_published_article(source_url: "https://x.com/example/status/1234567890")
+    images = [ Object.new, Object.new ]
+    article.define_singleton_method(:all_image_attachments) { |_limit| images }
+
+    posted_payload = nil
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    client.define_singleton_method(:post) do |_endpoint, body|
+      posted_payload = JSON.parse(body)
+      { "data" => { "id" => "999" } }
+    end
+
+    service = TwitterService.new
+    media_uploader = service.instance_variable_get(:@media_uploader)
+    upload_called = false
+    media_uploader.define_singleton_method(:upload) do |_client, _image|
+      upload_called = true
+      "media_id"
+    end
+
+    result = service.stub(:create_client, client) { service.post(article) }
+
+    assert_equal "https://x.com/testuser/status/999", result
+    refute upload_called
+    assert_equal "1234567890", posted_payload["quote_tweet_id"]
+    refute posted_payload.key?("media")
+  end
+
   test "post uploads all images for twitter" do
     Crosspost.twitter.update!(
       enabled: true,
@@ -226,13 +331,19 @@ class TwitterServiceTest < ActiveSupport::TestCase
     assert_nil service.send(:extract_tweet_id_from_url, "https://example.com/other")
   end
 
-  test "quote_tweet_id_for_article only accepts x.com hosts" do
+  test "quote_tweet_id_for_article accepts x.com and twitter.com status urls" do
     service = TwitterService.new
 
     article = create_published_article(source_url: "https://x.com/user/status/123")
     assert_equal "123", service.send(:quote_tweet_id_for_article, article)
 
     article.update!(source_url: "https://twitter.com/user/status/456")
+    assert_equal "456", service.send(:quote_tweet_id_for_article, article)
+
+    article.update!(source_url: "https://mobile.x.com/i/status/789")
+    assert_equal "789", service.send(:quote_tweet_id_for_article, article)
+
+    article.update!(source_url: "https://example.com/post/456")
     assert_nil service.send(:quote_tweet_id_for_article, article)
   end
 
