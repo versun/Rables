@@ -102,7 +102,7 @@
   <% if @active_platform == "twitter" %>
   <div class="form-section compact">
     <h3>X (Twitter)</h3>
-    <small>Get OAuth 2.0 credentials from <%= link_to "X Developer Portal", "https://developer.x.com", target: "_blank" %>. Set callback URL to: <code><%= twitter_callback_admin_crossposts_url %></code></small>
+    <small>Get OAuth 2.0 credentials from <%= link_to "X Developer Portal", "https://developer.x.com", target: "_blank" %>. Set callback URL to: <code><%= twitter_callback_admin_crossposts_url %></code>. Required scopes: <code>tweet.read tweet.write users.read media.write offline.access</code>. If image upload still fails after an older authorization, click "Authorize with X" again to refresh scopes.</small>
 
     <%= form_with(model: @twitter, url: admin_crosspost_path(@twitter.platform), method: :patch) do |f| %>
       <%= f.hidden_field :platform, value: 'twitter' %>

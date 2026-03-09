@@ -101,6 +101,7 @@ class Admin::CrosspostsControllerTest < ActionDispatch::IntegrationTest
     assert_includes redirect_url, "response_type=code"
     assert_includes redirect_url, "code_challenge_method=S256"
     assert_includes redirect_url, "scope="
+    assert_includes redirect_url, "media.write"
 
     # Verify session contains PKCE data
     assert session[:twitter_oauth_state].present?

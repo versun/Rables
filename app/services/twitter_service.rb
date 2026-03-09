@@ -500,8 +500,39 @@ class TwitterService
         quote_tweet_id: quote_tweet_id
       []
     else
-      article.all_image_attachments(4)
+      limit_twitter_media_attachments(article.all_image_attachments(4))
     end
+  end
+
+  def limit_twitter_media_attachments(images)
+    animated_gif = images.find { |image| animated_gif_attachable?(image) }
+    return images unless animated_gif
+
+    Rails.event.notify "twitter_service.using_single_gif_attachment",
+      level: "info",
+      component: "TwitterService"
+
+    [ animated_gif ]
+  end
+
+  def animated_gif_attachable?(attachable)
+    case attachable
+    when ActiveStorage::Blob
+      attachable.content_type == "image/gif"
+    when ->(obj) { obj.class.name == "ActionText::Attachables::RemoteImage" }
+      remote_gif_attachable_url?(attachable.try(:url))
+    else
+      false
+    end
+  end
+
+  def remote_gif_attachable_url?(url)
+    return false if url.blank?
+
+    uri = URI.parse(url)
+    File.extname(uri.path).downcase == ".gif"
+  rescue URI::InvalidURIError
+    false
   end
 
   def extract_tweet_id_from_url(url)

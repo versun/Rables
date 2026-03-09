@@ -266,6 +266,101 @@ class TwitterServiceTest < ActiveSupport::TestCase
     assert_equal "https://x.com/testuser/status/999", result
   end
 
+  test "post only uploads a single animated gif for twitter" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token"
+    )
+
+    gif_blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new("GIF89a"),
+      filename: "animated.gif",
+      content_type: "image/gif"
+    )
+    jpeg_blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new("jpeg"),
+      filename: "photo.jpg",
+      content_type: "image/jpeg"
+    )
+
+    article = create_published_article
+    article.define_singleton_method(:all_image_attachments) { |_limit| [ gif_blob, jpeg_blob ] }
+
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    posted_payload = nil
+    client.define_singleton_method(:post) do |_endpoint, body|
+      posted_payload = JSON.parse(body)
+      { "data" => { "id" => "999" } }
+    end
+
+    service = TwitterService.new
+    media_uploader = service.instance_variable_get(:@media_uploader)
+    uploads = 0
+
+    service.define_singleton_method(:create_client) { client }
+    media_uploader.define_singleton_method(:upload) do |_client, _image|
+      uploads += 1
+      "media-#{uploads}"
+    end
+
+    result = service.post(article)
+
+    assert_equal 1, uploads
+    assert_equal [ "media-1" ], posted_payload.dig("media", "media_ids")
+    assert_equal "https://x.com/testuser/status/999", result
+  end
+
+  test "post only uploads a single remote animated gif for twitter" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      client_id: "client_id",
+      client_secret: "client_secret",
+      access_token: "access_token",
+      refresh_token: "refresh_token"
+    )
+
+    remote_gif = Object.new
+    remote_gif.define_singleton_method(:url) { "https://example.com/animated.gif?source=test" }
+    remote_gif.define_singleton_method(:class) { Struct.new(:name).new("ActionText::Attachables::RemoteImage") }
+
+    jpeg_blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new("jpeg"),
+      filename: "photo.jpg",
+      content_type: "image/jpeg"
+    )
+
+    article = create_published_article
+    article.define_singleton_method(:all_image_attachments) { |_limit| [ remote_gif, jpeg_blob ] }
+
+    client = Object.new
+    client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
+    posted_payload = nil
+    client.define_singleton_method(:post) do |_endpoint, body|
+      posted_payload = JSON.parse(body)
+      { "data" => { "id" => "999" } }
+    end
+
+    service = TwitterService.new
+    media_uploader = service.instance_variable_get(:@media_uploader)
+    uploads = 0
+
+    service.define_singleton_method(:create_client) { client }
+    media_uploader.define_singleton_method(:upload) do |_client, _image|
+      uploads += 1
+      "media-#{uploads}"
+    end
+
+    result = service.post(article)
+
+    assert_equal 1, uploads
+    assert_equal [ "media-1" ], posted_payload.dig("media", "media_ids")
+    assert_equal "https://x.com/testuser/status/999", result
+  end
+
   test "post returns url when media upload succeeds" do
     Crosspost.twitter.update!(
       enabled: true,
@@ -527,6 +622,25 @@ class TwitterServiceTest < ActiveSupport::TestCase
     assert_equal before, after
   end
 
+  test "media_uploader keeps gifs under twitter gif limit unchanged" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
+    gif_data = "g" * (6.megabytes)
+
+    result_data, result_type = uploader.send(:resize_image_if_needed, gif_data, "image/gif")
+
+    assert_equal gif_data, result_data
+    assert_equal "image/gif", result_type
+  end
+
+  test "media_uploader rejects gifs larger than twitter gif limit" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
+    gif_data = "g" * (TwitterApi::MediaUploader::MAX_GIF_SIZE + 1)
+
+    assert_nil uploader.send(:resize_image_if_needed, gif_data, "image/gif")
+  end
+
   test "media_uploader autorotates oversized jpeg images before stripping metadata" do
     settings = Crosspost.twitter
     uploader = TwitterApi::MediaUploader.new(settings)
@@ -553,7 +667,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
     assert pixel.all? { |channel| channel > 240 }, "Expected white background, got #{pixel.inspect}"
   end
 
-  test "media_uploader uploads to twitter and returns media id" do
+  test "media_uploader uploads to twitter with chunked upload and returns media id" do
     Crosspost.twitter.update!(
       enabled: true,
       client_id: "client_id",
@@ -568,10 +682,48 @@ class TwitterServiceTest < ActiveSupport::TestCase
     file.write("data")
     file.rewind
 
-    X::MediaUploader.stub(:upload, { "id" => "media123" }) do
+    captured_args = nil
+    X::MediaUploader.stub(:chunked_upload, ->(**kwargs) {
+      captured_args = kwargs
+      { "id" => "media123" }
+    }) do
       media_id = uploader.send(:upload_to_twitter, nil, file.path)
 
       assert_equal "media123", media_id
+      assert_equal "tweet_image", captured_args[:media_category]
+      assert_equal "image/jpeg", captured_args[:media_type]
+    end
+  ensure
+    file&.close
+    file&.unlink
+  end
+
+  test "media_uploader waits for processing when chunked upload returns processing info" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
+
+    file = Tempfile.new([ "upload", ".gif" ])
+    file.write("GIF89a")
+    file.rewind
+
+    await_called = false
+    captured_args = nil
+    X::MediaUploader.stub(:chunked_upload, ->(**kwargs) {
+      captured_args = kwargs
+      { "id" => "media123", "processing_info" => { "state" => "pending", "check_after_secs" => 1 } }
+    }) do
+      X::MediaUploader.stub(:await_processing!, ->(client:, media:) {
+        await_called = true
+        assert_equal "media123", media["id"]
+        { "id" => "media123", "processing_info" => { "state" => "succeeded" } }
+      }) do
+        media_id = uploader.send(:upload_to_twitter, Object.new, file.path)
+
+        assert_equal "media123", media_id
+        assert await_called
+        assert_equal "tweet_gif", captured_args[:media_category]
+        assert_equal "image/gif", captured_args[:media_type]
+      end
     end
   ensure
     file&.close
@@ -981,7 +1133,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
     file.write("data")
     file.rewind
 
-    X::MediaUploader.stub(:upload, {}) do
+    X::MediaUploader.stub(:chunked_upload, {}) do
       assert_nil uploader.send(:upload_to_twitter, nil, file.path)
     end
   ensure

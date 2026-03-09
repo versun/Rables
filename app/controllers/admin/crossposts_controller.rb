@@ -4,6 +4,7 @@ class Admin::CrosspostsController < Admin::BaseController
     tweet.read
     tweet.write
     users.read
+    media.write
     offline.access
   ].freeze
 
