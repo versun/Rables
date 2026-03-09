@@ -4,7 +4,82 @@ require "test_helper"
 require "minitest/mock"
 require "stringio"
 
+unless defined?(Vips)
+  module Vips
+    class Image
+      def self.new_from_file(*)
+      end
+    end
+  end
+end
+
+class FakeTwitterVipsImage
+  attr_reader :width, :height
+
+  def initialize(width: 1600, height: 1200, base_size: 14.megabytes)
+    @width = width
+    @height = height
+    @base_size = base_size
+  end
+
+  def write_to_file(path, **options)
+    size = (@base_size * (options.fetch(:Q).to_f / 100)).to_i
+    File.binwrite(path, "a" * size)
+  end
+
+  def resize(scale)
+    self.class.new(
+      width: (@width * scale).to_i,
+      height: (@height * scale).to_i,
+      base_size: (@base_size * scale * scale).to_i
+    )
+  end
+end
+
 class TwitterServiceTest < ActiveSupport::TestCase
+  private
+
+  def with_stubbed_method(object, method_name, replacement = nil, &block)
+    original = object.method(method_name) if object.respond_to?(method_name)
+    object.define_singleton_method(method_name) do |*args, &method_block|
+      if replacement.respond_to?(:call)
+        replacement.call(*args, &method_block)
+      else
+        replacement
+      end
+    end
+    yield
+  ensure
+    if original
+      object.define_singleton_method(method_name) { |*args, &method_block| original.call(*args, &method_block) }
+    else
+      object.singleton_class.remove_method(method_name)
+    end
+  end
+
+  def oversized_oriented_jpeg_data
+    Tempfile.create([ "twitter-oriented", ".jpg" ]) do |file|
+      noise = Vips::Image.gaussnoise(1800, 2500).cast(:uchar)
+      image = noise.bandjoin([ noise, noise ]).copy
+      image.set_type(GObject::GINT_TYPE, "orientation", 6)
+      image.write_to_file(file.path, Q: 100)
+      File.binread(file.path)
+    end
+  end
+
+  def oversized_transparent_png_data
+    Tempfile.create([ "twitter-transparent", ".png" ]) do |file|
+      noise = Vips::Image.gaussnoise(1200, 1200).cast(:uchar)
+      rgb = noise.bandjoin([ noise, noise ])
+      alpha = Vips::Image.black(1200, 1200).new_from_image([ 0 ])
+      rgba = rgb.bandjoin(alpha)
+      rgba.write_to_file(file.path, compression: 0)
+      File.binread(file.path)
+    end
+  end
+
+  public
+
   test "verify fails fast when required fields are blank" do
     service = TwitterService.new
     result = service.verify({})
@@ -148,7 +223,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
     refute posted_payload.key?("media")
   end
 
-  test "post uploads all images for twitter" do
+  test "post uploads the first four images for twitter" do
     Crosspost.twitter.update!(
       enabled: true,
       client_id: "client_id",
@@ -158,8 +233,12 @@ class TwitterServiceTest < ActiveSupport::TestCase
     )
 
     article = create_published_article
-    images = [ Object.new, Object.new ]
-    article.define_singleton_method(:all_image_attachments) { |_limit| images }
+    images = Array.new(5) { Object.new }
+    requested_limit = nil
+    article.define_singleton_method(:all_image_attachments) do |limit|
+      requested_limit = limit
+      images.first(limit)
+    end
 
     client = Object.new
     client.define_singleton_method(:get) { |_endpoint| { "data" => { "username" => "testuser" } } }
@@ -181,8 +260,9 @@ class TwitterServiceTest < ActiveSupport::TestCase
 
     result = service.post(article)
 
-    assert_equal 2, sequence
-    assert_equal %w[media-1 media-2], posted_payload.dig("media", "media_ids")
+    assert_equal 4, requested_limit
+    assert_equal 4, sequence
+    assert_equal %w[media-1 media-2 media-3 media-4], posted_payload.dig("media", "media_ids")
     assert_equal "https://x.com/testuser/status/999", result
   end
 
@@ -417,14 +497,60 @@ class TwitterServiceTest < ActiveSupport::TestCase
     remote_image.define_singleton_method(:url) { "http://example.com/image.jpg" }
     remote_image.define_singleton_method(:class) { Struct.new(:name).new("ActionText::Attachables::RemoteImage") }
 
-    uploader.stub(:download_remote_image, "image-data") do
+    uploader.stub(:download_remote_image, [ "image-data", "image/png" ]) do
       temp_file = uploader.send(:create_temp_file, remote_image)
 
       assert temp_file.is_a?(Tempfile)
+      assert_equal ".png", File.extname(temp_file.path)
       assert_equal "image-data", temp_file.read
       temp_file.close
       temp_file.unlink
     end
+  end
+
+  test "media_uploader compresses oversized images until they fit twitter limit" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
+    image_data = "a" * (TwitterApi::MediaUploader::MAX_IMAGE_SIZE + 1)
+    temp_dir = Rails.root.join("tmp", "twitter_uploads")
+    FileUtils.mkdir_p(temp_dir)
+    before = Dir.glob(temp_dir.join("{original,compressed}_*"))
+
+    with_stubbed_method(Vips::Image, :new_from_file, FakeTwitterVipsImage.new) do
+      result_data, result_type = uploader.send(:resize_image_if_needed, image_data, "image/png")
+
+      assert result_data.bytesize <= TwitterApi::MediaUploader::MAX_IMAGE_SIZE
+      assert_equal "image/jpeg", result_type
+    end
+
+    after = Dir.glob(temp_dir.join("{original,compressed}_*"))
+    assert_equal before, after
+  end
+
+  test "media_uploader autorotates oversized jpeg images before stripping metadata" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
+
+    result_data, result_type = uploader.send(:resize_image_if_needed, oversized_oriented_jpeg_data, "image/jpeg")
+    result_image = Vips::Image.new_from_buffer(result_data, "")
+    orientation = result_image.get("orientation") rescue nil
+
+    assert result_data.bytesize <= TwitterApi::MediaUploader::MAX_IMAGE_SIZE
+    assert_equal "image/jpeg", result_type
+    assert_operator result_image.width, :>, result_image.height
+    assert_nil orientation
+  end
+
+  test "media_uploader flattens oversized transparent images onto white before jpeg save" do
+    settings = Crosspost.twitter
+    uploader = TwitterApi::MediaUploader.new(settings)
+
+    result_data, result_type = uploader.send(:resize_image_if_needed, oversized_transparent_png_data, "image/png")
+    pixel = Vips::Image.new_from_buffer(result_data, "").getpoint(0, 0).first(3)
+
+    assert result_data.bytesize <= TwitterApi::MediaUploader::MAX_IMAGE_SIZE
+    assert_equal "image/jpeg", result_type
+    assert pixel.all? { |channel| channel > 240 }, "Expected white background, got #{pixel.inspect}"
   end
 
   test "media_uploader uploads to twitter and returns media id" do
@@ -484,11 +610,13 @@ class TwitterServiceTest < ActiveSupport::TestCase
     response = Net::HTTPSuccess.new("1.1", "200", "OK")
     response.instance_variable_set(:@read, true)
     response.instance_variable_set(:@body, "image-data")
+    response["content-type"] = "image/png"
 
     uploader.stub(:fetch_with_redirect, response) do
-      data = uploader.send(:download_remote_image, remote_image)
+      data, content_type = uploader.send(:download_remote_image, remote_image)
 
       assert_equal "image-data", data
+      assert_equal "image/png", content_type
     end
   end
 
