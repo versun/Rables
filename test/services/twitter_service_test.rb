@@ -85,7 +85,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
     result = service.verify({})
 
     assert_equal false, result[:success]
-    assert_match "Please provide complete OAuth 2.0 credentials", result[:error]
+    assert_match "Please fill in all information", result[:error]
   end
 
   test "post returns nil when crosspost is disabled" do
@@ -98,10 +98,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post uses quote_tweet_id when source_url is x.com" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article(source_url: "https://x.com/example/status/1234567890")
@@ -121,10 +121,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post uses quote_tweet_id when source_url is twitter.com" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article(source_url: "https://twitter.com/example/status/1234567890?s=20")
@@ -148,10 +148,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post returns nil when quote tweet is forbidden" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article(
@@ -189,10 +189,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post skips media when quote_tweet_id is present" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article(source_url: "https://x.com/example/status/1234567890")
@@ -226,10 +226,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post uploads the first four images for twitter" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article
@@ -269,10 +269,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post only uploads a single animated gif for twitter" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     gif_blob = ActiveStorage::Blob.create_and_upload!(
@@ -317,10 +317,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post only uploads a single remote animated gif for twitter" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     remote_gif = Object.new
@@ -364,10 +364,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post returns url when media upload succeeds" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article
@@ -393,10 +393,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post falls back to text only when media tweet fails" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article
@@ -429,10 +429,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post returns nil when tweet fails without media" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article
@@ -451,10 +451,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post continues when users/me lookup raises" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article
@@ -478,10 +478,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post returns nil when tweet creation raises" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article
@@ -670,10 +670,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "media_uploader uploads to twitter with chunked upload and returns media id" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
     settings = Crosspost.twitter
     uploader = TwitterApi::MediaUploader.new(settings)
@@ -772,7 +772,7 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
   end
 
-  test "verify succeeds with valid oauth2 credentials" do
+  test "verify succeeds with valid oauth1 credentials" do
     client = Object.new
     client.define_singleton_method(:get) { |_endpoint| { "data" => { "id" => "123" } } }
 
@@ -780,9 +780,9 @@ class TwitterServiceTest < ActiveSupport::TestCase
       service = TwitterService.new
       result = service.verify(
         access_token: "token",
-        refresh_token: "refresh-token",
-        client_id: "client-id",
-        client_secret: "client-secret"
+        access_token_secret: "token-secret",
+        api_key: "api-key",
+        api_key_secret: "api-key-secret"
       )
 
       assert_equal true, result[:success]
@@ -793,10 +793,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "post retries when create tweet is rate limited" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
 
     article = create_published_article
@@ -972,9 +972,9 @@ class TwitterServiceTest < ActiveSupport::TestCase
     X::Client.stub(:new, ->(**_args) { raise "boom" }) do
       result = service.verify(
         access_token: "token",
-        refresh_token: "refresh-token",
-        client_id: "client-id",
-        client_secret: "client-secret"
+        access_token_secret: "token-secret",
+        api_key: "api-key",
+        api_key_secret: "api-key-secret"
       )
 
       assert_equal false, result[:success]
@@ -982,133 +982,30 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
   end
 
-  test "oauth_service token_needs_refresh returns true when expires_at is nil" do
+  test "create_client builds x client with oauth1 credentials" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token",
-      token_expires_at: nil
+      access_token_secret: "access_token_secret"
     )
 
-    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
-
-    assert oauth_service.token_needs_refresh?
-  end
-
-  test "oauth_service token_needs_refresh returns true when token is about to expire" do
-    Crosspost.twitter.update!(
-      enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
-      access_token: "access_token",
-      refresh_token: "refresh_token",
-      token_expires_at: Time.current + 2.minutes # Less than 5 minute buffer
-    )
-
-    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
-
-    assert oauth_service.token_needs_refresh?
-  end
-
-  test "oauth_service token_needs_refresh returns false when token is still valid" do
-    Crosspost.twitter.update!(
-      enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
-      access_token: "access_token",
-      refresh_token: "refresh_token",
-      token_expires_at: Time.current + 1.hour
-    )
-
-    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
-
-    refute oauth_service.token_needs_refresh?
-  end
-
-  test "oauth_service refresh_token updates tokens in database" do
-    Crosspost.twitter.update!(
-      enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
-      access_token: "old_access_token",
-      refresh_token: "old_refresh_token",
-      token_expires_at: Time.current - 1.hour
-    )
-
-    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
-
-    fake_authenticator = Object.new
-    fake_authenticator.define_singleton_method(:refresh_token!) { nil }
-    fake_authenticator.define_singleton_method(:access_token) { "new_access_token" }
-    fake_authenticator.define_singleton_method(:refresh_token) { "new_refresh_token" }
-    fake_authenticator.define_singleton_method(:expires_at) { Time.current + 7200 }
-
+    captured_args = nil
     fake_client = Object.new
-    fake_client.define_singleton_method(:authenticator) { fake_authenticator }
-
-    oauth_service.stub(:build_client, fake_client) do
-      oauth_service.refresh_token!
-    end
-
-    @settings = Crosspost.twitter.reload
-    assert_equal "new_access_token", @settings.access_token
-    assert_equal "new_refresh_token", @settings.refresh_token
-    assert_in_delta Time.current + 7200, @settings.token_expires_at, 5
-  end
-
-  test "oauth_service refresh_token raises on failure response" do
-    Crosspost.twitter.update!(
-      enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
-      access_token: "access_token",
-      refresh_token: "refresh_token",
-      token_expires_at: Time.current - 1.hour
-    )
-
-    oauth_service = TwitterApi::OauthService.new(Crosspost.twitter)
-
-    fake_authenticator = Object.new
-    fake_authenticator.define_singleton_method(:refresh_token!) { raise X::Error, "Refresh token has been revoked" }
-
-    fake_client = Object.new
-    fake_client.define_singleton_method(:authenticator) { fake_authenticator }
-
-    oauth_service.stub(:build_client, fake_client) do
-      error = assert_raises(RuntimeError) do
-        oauth_service.refresh_token!
-      end
-
-      assert_match "Refresh token has been revoked", error.message
-    end
-  end
-
-  test "create_client refreshes token when needed via oauth_service" do
-    Crosspost.twitter.update!(
-      enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
-      access_token: "access_token",
-      refresh_token: "refresh_token",
-      token_expires_at: Time.current - 1.hour # Expired
-    )
 
     service = TwitterService.new
-    oauth_service = service.instance_variable_get(:@oauth_service)
-    refresh_called = false
-
-    oauth_service.define_singleton_method(:refresh_if_needed!) do
-      refresh_called = true
-    end
-    oauth_service.define_singleton_method(:build_client) do
-      Object.new
+    X::Client.stub(:new, lambda { |**args|
+      captured_args = args
+      fake_client
+    }) do
+      assert_equal fake_client, service.send(:create_client)
     end
 
-    service.send(:create_client)
-
-    assert refresh_called
+    assert_equal "api_key", captured_args[:api_key]
+    assert_equal "api_key_secret", captured_args[:api_key_secret]
+    assert_equal "access_token", captured_args[:access_token]
+    assert_equal "access_token_secret", captured_args[:access_token_secret]
   end
 
   test "media_uploader returns nil when file missing" do
@@ -1121,10 +1018,10 @@ class TwitterServiceTest < ActiveSupport::TestCase
   test "media_uploader returns nil when response missing media id" do
     Crosspost.twitter.update!(
       enabled: true,
-      client_id: "client_id",
-      client_secret: "client_secret",
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
       access_token: "access_token",
-      refresh_token: "refresh_token"
+      access_token_secret: "access_token_secret"
     )
     settings = Crosspost.twitter
     uploader = TwitterApi::MediaUploader.new(settings)

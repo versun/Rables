@@ -102,7 +102,7 @@
   <% if @active_platform == "twitter" %>
   <div class="form-section compact">
     <h3>X (Twitter)</h3>
-    <small>Get OAuth 2.0 credentials from <%= link_to "X Developer Portal", "https://developer.x.com", target: "_blank" %>. Set callback URL to: <code><%= twitter_callback_admin_crossposts_url %></code>. Required scopes: <code>tweet.read tweet.write users.read media.write offline.access</code>. If image upload still fails after an older authorization, click "Authorize with X" again to refresh scopes.</small>
+    <small>First, obtain X credentials from <%= link_to "https://developer.x.com", "https://developer.x.com", target: "_blank" %></small>
 
     <%= form_with(model: @twitter, url: admin_crosspost_path(@twitter.platform), method: :patch) do |f| %>
       <%= f.hidden_field :platform, value: 'twitter' %>
@@ -114,40 +114,27 @@
 
       <div class="form-grid form-grid-2">
         <div class="field">
-          <%= f.label :client_id, "OAuth 2.0 Client ID" %>
-          <%= f.text_field :client_id %>
+          <%= f.label :access_token, "Access Token" %>
+          <%= f.text_field :access_token %>
         </div>
 
         <div class="field">
-          <%= f.label :client_secret, "OAuth 2.0 Client Secret" %>
-          <%= f.password_field :client_secret, value: @twitter.client_secret, placeholder: @twitter.client_secret.present? ? "••••••••" : "" %>
+          <%= f.label :access_token_secret, "Access Token Secret" %>
+          <%= f.text_field :access_token_secret %>
         </div>
       </div>
 
-      <% twitter_authorized = @twitter.client_id.present? && @twitter.client_secret.present? && @twitter.access_token.present? && @twitter.refresh_token.present? %>
+      <div class="form-grid form-grid-2">
+        <div class="field">
+          <%= f.label :api_key, "API Key" %>
+          <%= f.text_field :api_key %>
+        </div>
 
-      <% if twitter_authorized %>
         <div class="field">
-          <label>Authorization Status</label>
-          <div class="authorization-status authorized">
-            <span class="status-icon">✓</span>
-            <span class="status-text">Authorized</span>
-            <% if @twitter.token_expires_at.present? %>
-              <small class="expires-info">
-                (Token expires: <%= @twitter.token_expires_at.strftime("%Y-%m-%d %H:%M") %>)
-              </small>
-            <% end %>
-          </div>
+          <%= f.label :api_key_secret, "API Key Secret" %>
+          <%= f.text_field :api_key_secret %>
         </div>
-      <% else %>
-        <div class="field">
-          <label>Authorization Status</label>
-          <div class="authorization-status not-authorized">
-            <span class="status-icon">○</span>
-            <span class="status-text">Not authorized - Click "Authorize with X" after saving Client ID/Secret</span>
-          </div>
-        </div>
-      <% end %>
+      </div>
 
       <div class="field">
         <%= f.label :max_characters, "Max Characters", for: 'crosspost_max_characters_twitter' %>
@@ -159,17 +146,18 @@
 
       <div class="form-actions">
         <%= f.submit "Save", class: 'btn btn-primary' %>
-        <%= link_to "Authorize with X", twitter_authorize_admin_crossposts_path, class: "btn btn-secondary", data: { turbo: false } %>
-        <% if twitter_authorized %>
-          <div id="verify-button-twitter">
-            <%= button_tag "Verify", type: 'submit', class: 'btn btn-outline', form: "verify-form-twitter", data: { turbo_frame: "_top" } %>
-          </div>
-        <% end %>
+        <div id="verify-button-twitter">
+          <%= button_tag "Verify", type: 'submit', class: 'btn btn-secondary', form: "verify-form-twitter", data: { turbo_frame: "_top" } %>
+        </div>
       </div>
     <% end %>
 
     <%= form_with(url: verify_admin_crosspost_path('twitter'), method: :post, data: { turbo: true }, id: "verify-form-twitter") do |vf| %>
       <%= hidden_field_tag 'crosspost[platform]', 'twitter' %>
+      <%= hidden_field_tag 'crosspost[access_token]', @twitter.access_token, id: 'verify_access_token_twitter' %>
+      <%= hidden_field_tag 'crosspost[access_token_secret]', @twitter.access_token_secret, id: 'verify_access_token_secret_twitter' %>
+      <%= hidden_field_tag 'crosspost[api_key]', @twitter.api_key, id: 'verify_api_key_twitter' %>
+      <%= hidden_field_tag 'crosspost[api_key_secret]', @twitter.api_key_secret, id: 'verify_api_key_secret_twitter' %>
     <% end %>
     <div id="verify-messages-twitter"></div>
   </div>

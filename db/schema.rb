@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_02_09_000000) do
+ActiveRecord::Schema[8.1].define(version: 2026_03_15_000000) do
   create_table "action_text_rich_texts", force: :cascade do |t|
     t.text "body"
     t.datetime "created_at", null: false
@@ -117,6 +117,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_02_09_000000) do
 
   create_table "crossposts", force: :cascade do |t|
     t.string "access_token"
+    t.string "access_token_secret"
+    t.string "api_key"
+    t.string "api_key_secret"
     t.string "app_password"
     t.boolean "auto_fetch_comments", default: false, null: false
     t.string "client_id"

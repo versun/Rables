@@ -10,18 +10,22 @@ class TwitterService
 
   def initialize
     @settings = Crosspost.twitter
-    @oauth_service = TwitterApi::OauthService.new(@settings)
     @rate_limiter = TwitterApi::RateLimiter.new
     @media_uploader = TwitterApi::MediaUploader.new(@settings)
   end
 
   def verify(settings)
-    unless @oauth_service.credentials_complete?(settings)
-      return { success: false, error: "Please provide complete OAuth 2.0 credentials" }
+    if settings[:access_token_secret].blank? || settings[:access_token].blank? || settings[:api_key].blank? || settings[:api_key_secret].blank?
+      return { success: false, error: "Please fill in all information" }
     end
 
     begin
-      client = @oauth_service.build_client(settings)
+      client = X::Client.new(
+        api_key: settings[:api_key],
+        api_key_secret: settings[:api_key_secret],
+        access_token: settings[:access_token],
+        access_token_secret: settings[:access_token_secret]
+      )
 
       test_response = client.get("users/me")
       if test_response && test_response["data"] && test_response["data"]["id"]
@@ -132,8 +136,12 @@ class TwitterService
   private
 
   def create_client
-    @oauth_service.refresh_if_needed!
-    @oauth_service.build_client
+    X::Client.new(
+      api_key: @settings.api_key,
+      api_key_secret: @settings.api_key_secret,
+      access_token: @settings.access_token,
+      access_token_secret: @settings.access_token_secret
+    )
   end
 
   def fetch_username(client)
@@ -550,19 +558,6 @@ class TwitterService
     else
       "https://x.com/i/web/status/#{tweet_id}"
     end
-  end
-
-  # Delegate methods for backward compatibility with tests
-  def token_needs_refresh?
-    @oauth_service.token_needs_refresh?
-  end
-
-  def refresh_oauth2_token!
-    @oauth_service.refresh_token!
-  end
-
-  def oauth2_credentials_complete?(settings = @settings)
-    @oauth_service.credentials_complete?(settings)
   end
 
   def calculate_backoff_time(retry_count)
