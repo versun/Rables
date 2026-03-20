@@ -33,7 +33,7 @@ jobs:
                   password: ${{ secrets.DOCKERHUB_TOKEN }}
 
             - name: Build and push multi-platform Docker images
-              uses: docker/build-push-action@v5
+              uses: docker/build-push-action@v7
               with:
                   platforms: linux/arm64,linux/amd64
                   push: true
