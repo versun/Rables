@@ -75,6 +75,28 @@ class ArticlesControllerTest < ActionDispatch::IntegrationTest
     assert_no_match(/<script>/, article_content) if article_content
   end
 
+  test "show includes prism assets for code samples" do
+    article = create_published_article(
+      html_content: '<pre><code class="language-ruby">puts "hello"</code></pre>'
+    )
+
+    get article_path(article.slug)
+    assert_response :success
+    assert_includes response.body, "prism.min.css"
+    assert_includes response.body, "prism.min.js"
+    assert_includes response.body, "prism-autoloader.min.js"
+  end
+
+  test "show includes highlightjs stylesheet for unlabeled legacy code blocks" do
+    article = create_published_article(
+      html_content: '<pre><code>puts "hello"</code></pre>'
+    )
+
+    get article_path(article.slug)
+    assert_response :success
+    assert_includes response.body, "highlight.js@11.9.0/styles/github-dark.min.css"
+  end
+
   test "should not show draft article to unauthenticated users" do
     get article_path(@draft_article.slug)
     assert_response :not_found

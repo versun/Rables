@@ -98,6 +98,14 @@ class ApplicationHelperTest < ActionView::TestCase
     refute_includes sanitized, "script"
   end
 
+  test "safe_html_content preserves prism language classes on code blocks" do
+    html = '<pre><code class="language-ruby">puts "hello"</code></pre>'
+    sanitized = safe_html_content(html)
+
+    assert_includes sanitized, "<pre><code"
+    assert_includes sanitized, 'class="language-ruby"'
+  end
+
   test "rails_api_url forces http for localhost in development" do
     with_rails_env("development") do
       with_env("RAILS_API_URL", "https://localhost:3000/") do

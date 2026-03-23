@@ -1,11 +1,51 @@
 // TinyMCE 8 Configuration for Rails Admin
 // This configuration replaces Trix editor with TinyMCE
 
+const PRISM_THEME_URL = "https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css";
+const TINYMCE_CODE_LANGUAGES = [
+  { text: "Plain text", value: "none" },
+  { text: "Ruby", value: "ruby" },
+  { text: "ERB", value: "erb" },
+  { text: "JavaScript", value: "javascript" },
+  { text: "HTML", value: "markup" },
+  { text: "CSS", value: "css" },
+  { text: "Bash", value: "bash" },
+  { text: "JSON", value: "json" },
+  { text: "YAML", value: "yaml" },
+  { text: "SQL", value: "sql" },
+  { text: "Markdown", value: "markdown" }
+];
+
+function setupInlineCodeButton(editor) {
+  editor.ui.registry.addToggleButton("inlinecode", {
+    text: "</>",
+    tooltip: "Inline code",
+    onAction: function () {
+      editor.execCommand("mceToggleFormat", false, "inlinecode");
+    },
+    onSetup: function (api) {
+      const toggleState = function () {
+        const currentNode = editor.selection?.getNode?.();
+        const inlineCodeNode = editor.dom?.getParent?.(currentNode, "code");
+        api.setActive(Boolean(inlineCodeNode));
+      };
+
+      editor.on("NodeChange", toggleState);
+      toggleState();
+
+      return function () {
+        editor.off?.("NodeChange", toggleState);
+      };
+    }
+  });
+}
+
 function initTinyMCE() {
+  if (typeof tinymce === "undefined") return;
+  if (!document.querySelector(".tinymce-editor")) return;
+
   // Destroy existing instances to avoid conflicts
-  if (typeof tinymce !== "undefined") {
-    tinymce.remove();
-  }
+  tinymce.remove();
 
   // Initialize TinyMCE on all elements with class 'tinymce-editor'
   tinymce.init({
@@ -15,11 +55,45 @@ function initTinyMCE() {
     menubar: false,
     plugins: [
       'advlist', 'autolink', 'lists', 'link', 'image', 'charmap', 'preview',
-      'anchor', 'searchreplace', 'visualblocks', 'code', 'fullscreen',
+      'anchor', 'searchreplace', 'visualblocks', 'code', 'codesample', 'fullscreen',
       'insertdatetime', 'media', 'table', 'help', 'wordcount'
     ],
-    toolbar: 'undo redo | blocks | bold italic | alignleft aligncenter alignright alignjustify | bullist numlist outdent indent | link image | code | removeformat | help',
-    content_style: 'body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.6; }',
+    toolbar: 'undo redo | blocks | bold italic inlinecode | alignleft aligncenter alignright alignjustify | bullist numlist outdent indent | link image codesample | code | removeformat | help',
+    content_css: [PRISM_THEME_URL],
+    formats: {
+      inlinecode: {
+        inline: "code",
+        exact: true
+      }
+    },
+    content_style: `
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      :not(pre) > code:not([class*="language-"]) {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+        font-size: 0.92em;
+        background: #f6f8fa;
+        border: 1px solid #d0d7de;
+        border-radius: 4px;
+        padding: 0.15em 0.35em;
+      }
+
+      pre[class*="language-"] {
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        margin: 1rem 0;
+      }
+
+      pre[class*="language-"] code {
+        font-size: 13px;
+      }
+    `,
+    codesample_global_prismjs: true,
+    codesample_languages: TINYMCE_CODE_LANGUAGES,
 
     // URL handling - keep absolute URLs
     relative_urls: false,
@@ -127,6 +201,8 @@ function initTinyMCE() {
 
     // Setup hook for additional initialization
     setup: function (editor) {
+      setupInlineCodeButton(editor);
+
       editor.on('init', function () {
         // Add custom class to editor container for styling
         editor.getContainer().classList.add('tinymce-rails-editor');
