@@ -42,6 +42,28 @@ class Admin::ArticlesControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to admin_articles_path
   end
 
+  test "should create article when created_at is blank" do
+    now = Time.zone.local(2026, 3, 24, 10, 30, 0)
+
+    assert_difference "Article.count", 1 do
+      travel_to now do
+        post admin_articles_path, params: {
+          article: {
+            title: "Article With Blank Created At",
+            description: "Description",
+            status: "draft",
+            content_type: "html",
+            html_content: "<p>Content</p>",
+            created_at: ""
+          }
+        }
+      end
+    end
+
+    assert_redirected_to admin_articles_path
+    assert_equal now.to_i, Article.order(:id).last.created_at.to_i
+  end
+
   test "should create article and add another" do
     assert_difference "Article.count", 1 do
       post admin_articles_path, params: {
@@ -69,6 +91,24 @@ class Admin::ArticlesControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to admin_articles_path
     @article.reload
     assert_equal "Updated Title", @article.title
+  end
+
+  test "should update article when created_at is blank" do
+    now = Time.zone.local(2026, 3, 24, 11, 45, 0)
+
+    travel_to now do
+      patch admin_article_path(@article.slug), params: {
+        article: {
+          title: "Updated Title With Blank Created At",
+          created_at: ""
+        }
+      }
+    end
+
+    assert_redirected_to admin_articles_path
+    @article.reload
+    assert_equal "Updated Title With Blank Created At", @article.title
+    assert_equal now.to_i, @article.created_at.to_i
   end
 
   test "should get drafts" do

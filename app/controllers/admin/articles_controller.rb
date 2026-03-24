@@ -559,7 +559,9 @@ class Admin::ArticlesController < Admin::BaseController
     @article = Article.find_by!(slug: params[:id])
   end
 
-    def article_params
-      params.require(:article).permit(:title, :content, :excerpt, :slug, :status, :published_at, :meta_title, :meta_description, :meta_image, :tags, :description, :created_at, :scheduled_at, :send_newsletter, :crosspost_mastodon, :crosspost_twitter, :crosspost_bluesky, :crosspost_xiaohongshu, :tag_list, :comment, :content_type, :html_content, :source_url, :source_author, :source_content, social_media_posts_attributes: [ :id, :platform, :url, :_destroy ])
-    end
+  def article_params
+    permitted = params.require(:article).permit(:title, :content, :excerpt, :slug, :status, :published_at, :meta_title, :meta_description, :meta_image, :tags, :description, :created_at, :scheduled_at, :send_newsletter, :crosspost_mastodon, :crosspost_twitter, :crosspost_bluesky, :crosspost_xiaohongshu, :tag_list, :comment, :content_type, :html_content, :source_url, :source_author, :source_content, social_media_posts_attributes: [ :id, :platform, :url, :_destroy ])
+    permitted[:created_at] = Time.current if permitted[:created_at].blank?
+    permitted
+  end
 end
