@@ -90,6 +90,45 @@ class ImportZipTest < ActiveSupport::TestCase
     File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
   end
 
+  test "imports scheduled newsletter selection for scheduled articles" do
+    slug = "import-scheduled-newsletter-#{SecureRandom.hex(6)}"
+    csv_content = CSV.generate(
+      write_headers: true,
+      headers: %w[
+        id title slug description content status scheduled_at
+        scheduled_send_newsletter
+        content_type html_content
+        created_at updated_at
+      ]
+    ) do |csv|
+      csv << [
+        1,
+        "Scheduled Newsletter Import",
+        slug,
+        "desc",
+        "<p>Hello</p>",
+        "schedule",
+        1.day.from_now.iso8601,
+        true,
+        "html",
+        "<p>Hello</p>",
+        Time.current,
+        Time.current
+      ]
+    end
+
+    zip_path = build_zip("articles.csv" => csv_content)
+
+    importer = ImportZip.new(zip_path)
+
+    assert importer.import_data, importer.error_message
+
+    article = Article.find_by!(slug: slug)
+    assert_equal "1", article.send_newsletter
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
   test "imports comma-separated scheduled crosspost platforms with spaces" do
     slug = "import-scheduled-crosspost-spaces-#{SecureRandom.hex(6)}"
     csv_content = CSV.generate(

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_03_26_000000) do
+ActiveRecord::Schema[8.1].define(version: 2026_03_27_000000) do
   create_table "action_text_rich_texts", force: :cascade do |t|
     t.text "body"
     t.datetime "created_at", null: false
@@ -80,6 +80,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_26_000000) do
     t.string "meta_title"
     t.datetime "scheduled_at"
     t.text "scheduled_crosspost_platforms", default: "[]", null: false
+    t.boolean "scheduled_send_newsletter", default: false, null: false
     t.string "slug"
     t.string "source_author"
     t.text "source_content"

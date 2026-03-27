@@ -1,7 +1,8 @@
 class Article < ApplicationRecord
   attr_writer :crosspost_mastodon, :crosspost_twitter, :crosspost_bluesky, :crosspost_xiaohongshu
   # Virtual attributes for newsletter functionality
-  attr_accessor :send_newsletter, :resend_newsletter
+  attr_writer :send_newsletter
+  attr_accessor :resend_newsletter
 
   has_rich_text :content
   has_many :social_media_posts, dependent: :destroy
@@ -19,7 +20,9 @@ class Article < ApplicationRecord
   before_validation :generate_slug
   before_validation :sync_excerpt
   before_validation :restore_scheduled_crosspost_selections_for_publish
+  before_validation :restore_scheduled_newsletter_selection_for_publish
   before_validation :sync_scheduled_crosspost_platforms
+  before_validation :sync_scheduled_newsletter_selection
   validates :slug, presence: true, uniqueness: true
   validates :scheduled_at, presence: true, if: :schedule?
   validates :html_content, presence: true, if: -> { html? }
@@ -35,6 +38,7 @@ class Article < ApplicationRecord
   after_save :schedule_publication, if: :should_schedule?
   after_save :handle_crosspost, if: -> { Setting.table_exists? }
   after_save :handle_newsletter, if: -> { Setting.table_exists? }
+  after_save :clear_newsletter_selection_after_publishing
 
   # SQLite原生搜索功能
   scope :search_content, ->(query) {
@@ -70,6 +74,10 @@ class Article < ApplicationRecord
     end
   end
 
+  def send_newsletter
+    newsletter_selected? ? "1" : "0"
+  end
+
   def scheduled_crosspost_platforms
     normalize_crosspost_platforms(self[:scheduled_crosspost_platforms])
   end
@@ -85,6 +93,7 @@ class Article < ApplicationRecord
 
       scheduled_time = scheduled_at
       restore_scheduled_crosspost_selections
+      restore_scheduled_newsletter_selection
 
       update(status: :publish, scheduled_at: nil, created_at: scheduled_time)
     end
@@ -303,12 +312,25 @@ class Article < ApplicationRecord
 
   def crosspost_selected?(platform)
     value = crosspost_selection_overrides.fetch(platform, :__missing__)
-    return truthy_crosspost_value?(value) unless value == :__missing__
+    return truthy_selection_value?(value) unless value == :__missing__
 
     scheduled_crosspost_platforms.include?(platform)
   end
 
-  def truthy_crosspost_value?(value)
+  def newsletter_selected?
+    value = newsletter_selection_override
+    return truthy_selection_value?(value) unless value == :__missing__
+
+    scheduled_send_newsletter?
+  end
+
+  def newsletter_selection_override
+    return @send_newsletter if instance_variable_defined?(:@send_newsletter)
+
+    :__missing__
+  end
+
+  def truthy_selection_value?(value)
     value.to_s == "1" || value == true || value.to_s == "true"
   end
 
@@ -340,6 +362,10 @@ class Article < ApplicationRecord
     end
   end
 
+  def sync_scheduled_newsletter_selection
+    self.scheduled_send_newsletter = schedule? ? newsletter_selected? : false
+  end
+
   def restore_scheduled_crosspost_selections_for_publish
     return unless persisted? && will_save_change_to_status? && publish?
 
@@ -354,12 +380,33 @@ class Article < ApplicationRecord
     end
   end
 
+  def restore_scheduled_newsletter_selection_for_publish
+    return unless persisted? && will_save_change_to_status? && publish?
+
+    case current_persisted_status
+    when "schedule"
+      restore_scheduled_newsletter_selection(
+        overwrite: false,
+        selected: scheduled_send_newsletter_in_database?
+      )
+    when "publish"
+      remove_instance_variable(:@send_newsletter) if instance_variable_defined?(:@send_newsletter)
+    end
+  end
+
   def restore_scheduled_crosspost_selections(overwrite: true, platforms: scheduled_crosspost_platforms)
     Array(platforms).each do |platform|
       next if !overwrite && crosspost_selection_overrides.key?(platform)
 
       crosspost_selection_overrides[platform] = "1"
     end
+  end
+
+  def restore_scheduled_newsletter_selection(overwrite: true, selected: scheduled_send_newsletter?)
+    return unless selected
+    return if !overwrite && instance_variable_defined?(:@send_newsletter)
+
+    @send_newsletter = "1"
   end
 
   def current_persisted_status
@@ -372,6 +419,10 @@ class Article < ApplicationRecord
   def scheduled_crosspost_platforms_in_database
     raw_platforms = self.class.where(id: id).pick(:scheduled_crosspost_platforms)
     normalize_crosspost_platforms(raw_platforms)
+  end
+
+  def scheduled_send_newsletter_in_database?
+    self.class.where(id: id).pick(:scheduled_send_newsletter)
   end
 
   def should_publish?
@@ -429,10 +480,10 @@ class Article < ApplicationRecord
     # 检查 send_newsletter 虚拟属性（用于新文章）
     # Rails check_box 会发送 "1" 当勾选时，"0" 当未勾选时
     # 但也可能收到 true/false 布尔值，或者字符串 "true"/"false"
-    send_checked = send_newsletter.to_s == "1" || send_newsletter == true || send_newsletter.to_s == "true"
+    send_checked = truthy_selection_value?(send_newsletter)
 
     # 检查 resend_newsletter 虚拟属性（用于已存在文章）
-    resend_checked = resend_newsletter.to_s == "1" || resend_newsletter == true || resend_newsletter.to_s == "true"
+    resend_checked = truthy_selection_value?(resend_newsletter)
 
     # 只要勾选了任一复选框即发送
     result = send_checked || resend_checked
@@ -462,6 +513,13 @@ class Article < ApplicationRecord
     else
       Rails.event.notify("article.unknown_newsletter_provider", level: "warn", component: "Article", article_id: id, provider: newsletter_setting.provider)
     end
+  end
+
+  def clear_newsletter_selection_after_publishing
+    return unless saved_change_to_status == [ "schedule", "publish" ]
+    return unless instance_variable_defined?(:@send_newsletter)
+
+    remove_instance_variable(:@send_newsletter)
   end
 
   def handle_time_zone

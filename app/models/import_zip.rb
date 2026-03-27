@@ -166,6 +166,7 @@ class ImportZip
         status: row["status"],
         scheduled_at: row["scheduled_at"],
         scheduled_crosspost_platforms: imported_scheduled_crosspost_platforms(row),
+        scheduled_send_newsletter: imported_scheduled_send_newsletter(row),
         comment: cast_boolean(row["comment"], default: false),
         content_type: content_type,
         created_at: row["created_at"],
@@ -254,6 +255,12 @@ class ImportZip
     return row["scheduled_crosspost_platforms"] unless overdue_scheduled_article?(row)
 
     []
+  end
+
+  def imported_scheduled_send_newsletter(row)
+    return cast_boolean(row["scheduled_send_newsletter"], default: false) unless overdue_scheduled_article?(row)
+
+    false
   end
 
   def overdue_scheduled_article?(row)

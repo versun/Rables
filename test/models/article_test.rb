@@ -470,6 +470,124 @@ class ArticleTest < ActiveSupport::TestCase
     end
   end
 
+  test "scheduled article should persist newsletter selection" do
+    newsletter_setting = NewsletterSetting.instance
+    newsletter_setting.update!(
+      provider: "native",
+      enabled: true,
+      smtp_address: "smtp.example.com",
+      smtp_port: 587,
+      smtp_user_name: "user",
+      smtp_password: "pass",
+      from_email: "from@example.com"
+    )
+
+    article = Article.create!(
+      title: "Scheduled Newsletter Article",
+      slug: "scheduled-newsletter-article",
+      status: :schedule,
+      scheduled_at: 1.hour.from_now,
+      content_type: :html,
+      html_content: "<p>Body</p>",
+      send_newsletter: "1"
+    )
+
+    assert_no_enqueued_jobs(only: NativeNewsletterSenderJob)
+
+    reloaded_article = Article.find(article.id)
+    assert_equal "1", reloaded_article.send_newsletter
+  end
+
+  test "publish_scheduled should enqueue newsletter for scheduled article" do
+    newsletter_setting = NewsletterSetting.instance
+    newsletter_setting.update!(
+      provider: "native",
+      enabled: true,
+      smtp_address: "smtp.example.com",
+      smtp_port: 587,
+      smtp_user_name: "user",
+      smtp_password: "pass",
+      from_email: "from@example.com"
+    )
+
+    article = Article.create!(
+      title: "Scheduled Publish Newsletter Article",
+      slug: "scheduled-publish-newsletter-article",
+      status: :schedule,
+      scheduled_at: 1.hour.ago,
+      content_type: :html,
+      html_content: "<p>Body</p>",
+      send_newsletter: "1"
+    )
+
+    clear_enqueued_jobs
+
+    assert_enqueued_with(job: NativeNewsletterSenderJob, args: [ article.id ]) do
+      Article.find(article.id).publish_scheduled
+    end
+  end
+
+  test "manual publish should enqueue newsletter for scheduled article" do
+    newsletter_setting = NewsletterSetting.instance
+    newsletter_setting.update!(
+      provider: "native",
+      enabled: true,
+      smtp_address: "smtp.example.com",
+      smtp_port: 587,
+      smtp_user_name: "user",
+      smtp_password: "pass",
+      from_email: "from@example.com"
+    )
+
+    article = Article.create!(
+      title: "Manual Publish Newsletter Article",
+      slug: "manual-publish-newsletter-article",
+      status: :schedule,
+      scheduled_at: 1.hour.from_now,
+      content_type: :html,
+      html_content: "<p>Body</p>",
+      send_newsletter: "1"
+    )
+
+    clear_enqueued_jobs
+
+    assert_enqueued_with(job: NativeNewsletterSenderJob, args: [ article.id ]) do
+      Article.find(article.id).update!(status: :publish)
+    end
+  end
+
+  test "scheduled publish should not re-enqueue newsletter when same instance saves again" do
+    newsletter_setting = NewsletterSetting.instance
+    newsletter_setting.update!(
+      provider: "native",
+      enabled: true,
+      smtp_address: "smtp.example.com",
+      smtp_port: 587,
+      smtp_user_name: "user",
+      smtp_password: "pass",
+      from_email: "from@example.com"
+    )
+
+    article = Article.create!(
+      title: "Scheduled Newsletter Duplicate Guard",
+      slug: "scheduled-newsletter-duplicate-guard",
+      status: :schedule,
+      scheduled_at: 1.hour.ago,
+      content_type: :html,
+      html_content: "<p>Body</p>",
+      send_newsletter: "1"
+    )
+
+    clear_enqueued_jobs
+
+    published_article = Article.find(article.id)
+
+    assert_difference -> { enqueued_jobs.count { |job| job["job_class"] == "NativeNewsletterSenderJob" } }, 1 do
+      published_article.publish_scheduled
+      published_article.update!(title: "Scheduled Newsletter Duplicate Guard Updated")
+    end
+  end
+
   # Crosspost job tests
   test "should enqueue crosspost job when publishing with crosspost enabled" do
     # Setup: enable mastodon crosspost platform
