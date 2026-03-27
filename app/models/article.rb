@@ -1,6 +1,5 @@
 class Article < ApplicationRecord
-  # Virtual attributes for crosspost functionality
-  attr_accessor :crosspost_mastodon, :crosspost_twitter, :crosspost_bluesky, :crosspost_xiaohongshu
+  attr_writer :crosspost_mastodon, :crosspost_twitter, :crosspost_bluesky, :crosspost_xiaohongshu
   # Virtual attributes for newsletter functionality
   attr_accessor :send_newsletter, :resend_newsletter
 
@@ -15,9 +14,12 @@ class Article < ApplicationRecord
   enum :content_type, { rich_text: "rich_text", html: "html" }, default: "rich_text"
 
   EXCERPT_LENGTH = 200
+  CROSSPOST_PLATFORMS = %w[mastodon twitter bluesky xiaohongshu].freeze
 
   before_validation :generate_slug
   before_validation :sync_excerpt
+  before_validation :restore_scheduled_crosspost_selections_for_publish
+  before_validation :sync_scheduled_crosspost_platforms
   validates :slug, presence: true, uniqueness: true
   validates :scheduled_at, presence: true, if: :schedule?
   validates :html_content, presence: true, if: -> { html? }
@@ -58,8 +60,34 @@ class Article < ApplicationRecord
     slug
   end
 
+  CROSSPOST_PLATFORMS.each do |platform|
+    define_method("crosspost_#{platform}") do
+      crosspost_selected?(platform) ? "1" : "0"
+    end
+
+    define_method("crosspost_#{platform}=") do |value|
+      crosspost_selection_overrides[platform] = value
+    end
+  end
+
+  def scheduled_crosspost_platforms
+    normalize_crosspost_platforms(self[:scheduled_crosspost_platforms])
+  end
+
+  def scheduled_crosspost_platforms=(platforms)
+    self[:scheduled_crosspost_platforms] = normalize_crosspost_platforms(platforms).to_json
+  end
+
   def publish_scheduled
-    update(status: :publish, scheduled_at: nil, created_at: Time.current) if should_publish?
+    with_lock do
+      reload
+      return unless should_publish?
+
+      scheduled_time = scheduled_at
+      restore_scheduled_crosspost_selections
+
+      update(status: :publish, scheduled_at: nil, created_at: scheduled_time)
+    end
   end
 
   # 提取文章内容中的第一张图片，用于crosspost
@@ -267,6 +295,83 @@ class Article < ApplicationRecord
 
     # Remove dots from slug if present
     self.slug = slug.gsub(".", "") if slug.include?(".")
+  end
+
+  def crosspost_selection_overrides
+    @crosspost_selection_overrides ||= {}
+  end
+
+  def crosspost_selected?(platform)
+    value = crosspost_selection_overrides.fetch(platform, :__missing__)
+    return truthy_crosspost_value?(value) unless value == :__missing__
+
+    scheduled_crosspost_platforms.include?(platform)
+  end
+
+  def truthy_crosspost_value?(value)
+    value.to_s == "1" || value == true || value.to_s == "true"
+  end
+
+  def normalize_crosspost_platforms(platforms)
+    values = case platforms
+    when String
+      begin
+        JSON.parse(platforms)
+      rescue JSON::ParserError
+        platforms.split(",")
+      end
+    when Array
+      platforms
+    else
+      []
+    end
+
+    Array(values)
+      .map { |platform| platform.to_s.strip }
+      .select { |platform| CROSSPOST_PLATFORMS.include?(platform) }
+      .uniq
+  end
+
+  def sync_scheduled_crosspost_platforms
+    self.scheduled_crosspost_platforms = if schedule?
+      CROSSPOST_PLATFORMS.select { |platform| crosspost_selected?(platform) }
+    else
+      []
+    end
+  end
+
+  def restore_scheduled_crosspost_selections_for_publish
+    return unless persisted? && will_save_change_to_status? && publish?
+
+    case current_persisted_status
+    when "schedule"
+      restore_scheduled_crosspost_selections(
+        overwrite: false,
+        platforms: scheduled_crosspost_platforms_in_database
+      )
+    when "publish"
+      crosspost_selection_overrides.clear
+    end
+  end
+
+  def restore_scheduled_crosspost_selections(overwrite: true, platforms: scheduled_crosspost_platforms)
+    Array(platforms).each do |platform|
+      next if !overwrite && crosspost_selection_overrides.key?(platform)
+
+      crosspost_selection_overrides[platform] = "1"
+    end
+  end
+
+  def current_persisted_status
+    raw_status = self.class.where(id: id).pick(:status)
+    return raw_status if raw_status.is_a?(String)
+
+    self.class.statuses.key(raw_status)
+  end
+
+  def scheduled_crosspost_platforms_in_database
+    raw_platforms = self.class.where(id: id).pick(:scheduled_crosspost_platforms)
+    normalize_crosspost_platforms(raw_platforms)
   end
 
   def should_publish?

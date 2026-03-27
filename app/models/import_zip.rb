@@ -165,6 +165,7 @@ class ImportZip
         meta_image: row["meta_image"],
         status: row["status"],
         scheduled_at: row["scheduled_at"],
+        scheduled_crosspost_platforms: imported_scheduled_crosspost_platforms(row),
         comment: cast_boolean(row["comment"], default: false),
         content_type: content_type,
         created_at: row["created_at"],
@@ -247,6 +248,21 @@ class ImportZip
       imported_count += 1
     end
     Rails.event.notify("import_zip.article_tags_import_completed", component: "ImportZip", imported_count: imported_count, skipped_count: skipped_count, level: "info")
+  end
+
+  def imported_scheduled_crosspost_platforms(row)
+    return row["scheduled_crosspost_platforms"] unless overdue_scheduled_article?(row)
+
+    []
+  end
+
+  def overdue_scheduled_article?(row)
+    return false unless row["status"].to_s == "schedule"
+
+    scheduled_time = row["scheduled_at"].present? ? Time.parse(row["scheduled_at"]) : nil
+    scheduled_time.present? && scheduled_time <= Time.current
+  rescue ArgumentError
+    false
   end
 
   def import_crossposts

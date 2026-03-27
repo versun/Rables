@@ -51,6 +51,135 @@ class ImportZipTest < ActiveSupport::TestCase
     File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
   end
 
+  test "imports scheduled crosspost platforms for scheduled articles" do
+    slug = "import-scheduled-crosspost-#{SecureRandom.hex(6)}"
+    csv_content = CSV.generate(
+      write_headers: true,
+      headers: %w[
+        id title slug description content status scheduled_at
+        scheduled_crosspost_platforms
+        content_type html_content
+        created_at updated_at
+      ]
+    ) do |csv|
+      csv << [
+        1,
+        "Scheduled Import",
+        slug,
+        "desc",
+        "<p>Hello</p>",
+        "schedule",
+        1.day.from_now.iso8601,
+        %w[mastodon bluesky].to_json,
+        "html",
+        "<p>Hello</p>",
+        Time.current,
+        Time.current
+      ]
+    end
+
+    zip_path = build_zip("articles.csv" => csv_content)
+
+    importer = ImportZip.new(zip_path)
+
+    assert importer.import_data, importer.error_message
+
+    article = Article.find_by!(slug: slug)
+    assert_equal %w[mastodon bluesky], article.scheduled_crosspost_platforms
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
+  test "imports comma-separated scheduled crosspost platforms with spaces" do
+    slug = "import-scheduled-crosspost-spaces-#{SecureRandom.hex(6)}"
+    csv_content = CSV.generate(
+      write_headers: true,
+      headers: %w[
+        id title slug description content status scheduled_at
+        scheduled_crosspost_platforms
+        content_type html_content
+        created_at updated_at
+      ]
+    ) do |csv|
+      csv << [
+        1,
+        "Scheduled Import With Spaces",
+        slug,
+        "desc",
+        "<p>Hello</p>",
+        "schedule",
+        1.day.from_now.iso8601,
+        "mastodon, bluesky",
+        "html",
+        "<p>Hello</p>",
+        Time.current,
+        Time.current
+      ]
+    end
+
+    zip_path = build_zip("articles.csv" => csv_content)
+
+    importer = ImportZip.new(zip_path)
+
+    assert importer.import_data, importer.error_message
+
+    article = Article.find_by!(slug: slug)
+    assert_equal %w[mastodon bluesky], article.scheduled_crosspost_platforms
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
+  test "does not replay crosspost platforms for overdue scheduled article imports" do
+    Crosspost.find_or_create_by(platform: "mastodon").update!(
+      enabled: true,
+      client_key: "test_key",
+      client_secret: "test_secret",
+      access_token: "test_token"
+    )
+
+    slug = "import-overdue-scheduled-crosspost-#{SecureRandom.hex(6)}"
+    csv_content = CSV.generate(
+      write_headers: true,
+      headers: %w[
+        id title slug description content status scheduled_at
+        scheduled_crosspost_platforms
+        content_type html_content
+        created_at updated_at
+      ]
+    ) do |csv|
+      csv << [
+        1,
+        "Overdue Scheduled Import",
+        slug,
+        "desc",
+        "<p>Hello</p>",
+        "schedule",
+        1.hour.ago.iso8601,
+        %w[mastodon].to_json,
+        "html",
+        "<p>Hello</p>",
+        Time.current,
+        Time.current
+      ]
+    end
+
+    zip_path = build_zip("articles.csv" => csv_content)
+    importer = ImportZip.new(zip_path)
+
+    assert importer.import_data, importer.error_message
+
+    article = Article.find_by!(slug: slug)
+    assert_equal [], article.scheduled_crosspost_platforms
+
+    clear_enqueued_jobs
+
+    assert_no_enqueued_jobs(only: CrosspostArticleJob) do
+      PublishScheduledArticlesJob.perform_now(article.id)
+    end
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
   test "imports an image-only article without failing validation" do
     csv_content = CSV.generate(write_headers: true, headers: %w[id title slug description content status scheduled_at created_at updated_at]) do |csv|
       csv << [

@@ -43,6 +43,39 @@ class ExportTest < ActiveSupport::TestCase
     article&.destroy
   end
 
+  test "exports scheduled crosspost platforms for scheduled articles" do
+    slug = "export-scheduled-crosspost-#{SecureRandom.hex(6)}"
+    article = Article.create!(
+      title: "Scheduled Export",
+      slug: slug,
+      status: :schedule,
+      scheduled_at: 1.day.from_now,
+      content_type: :html,
+      html_content: "<p>Scheduled content</p>",
+      crosspost_mastodon: "1",
+      crosspost_bluesky: "1"
+    )
+
+    exporter = Export.new
+
+    assert exporter.generate, exporter.error_message
+
+    Zip::File.open(exporter.zip_path) do |zip|
+      entry = zip.find_entry("articles.csv")
+      assert entry, "expected articles.csv to exist in zip"
+
+      content = entry.get_input_stream.read
+      rows = CSV.parse(content, headers: true)
+      exported = rows.find { |row| row["slug"] == slug }
+      assert exported, "expected article row to be exported for slug #{slug}"
+
+      assert_equal article.scheduled_crosspost_platforms.to_json, exported["scheduled_crosspost_platforms"]
+    end
+  ensure
+    File.delete(exporter.zip_path) if exporter&.zip_path.present? && File.exist?(exporter.zip_path)
+    article&.destroy
+  end
+
   test "includes git_integrations.csv in export zip" do
     exporter = Export.new
 

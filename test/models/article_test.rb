@@ -102,6 +102,23 @@ class ArticleTest < ActiveSupport::TestCase
     assert_nil article.scheduled_at
   end
 
+  test "publish_scheduled should use scheduled_at as publish time" do
+    article = articles(:scheduled_article)
+    scheduled_time = Time.zone.local(2026, 3, 24, 9, 30, 0)
+    article.update_columns(
+      scheduled_at: scheduled_time,
+      created_at: scheduled_time - 2.days,
+      updated_at: scheduled_time - 2.days
+    )
+
+    travel_to scheduled_time + 2.hours do
+      article.publish_scheduled
+    end
+
+    article.reload
+    assert_equal scheduled_time.to_i, article.created_at.to_i
+  end
+
   test "publish_scheduled should not update if not ready" do
     article = articles(:scheduled_article)
     article.update!(scheduled_at: 1.hour.from_now)
@@ -612,12 +629,66 @@ class ArticleTest < ActiveSupport::TestCase
     # Verify no crosspost job is enqueued during scheduling
     assert_no_enqueued_jobs(only: CrosspostArticleJob)
 
-    # Now set the crosspost flag again and call publish_scheduled
-    article.crosspost_mastodon = "1"
+    clear_enqueued_jobs
 
-    # When publish_scheduled is called, it should trigger crosspost
-    assert_enqueued_with(job: CrosspostArticleJob) do
-      article.publish_scheduled
+    # When publish_scheduled is called from a freshly loaded record, it should
+    # still know which platforms were selected while scheduling.
+    assert_enqueued_with(job: CrosspostArticleJob, args: [ article.id, "mastodon" ]) do
+      Article.find(article.id).publish_scheduled
+    end
+  end
+
+  test "publish_scheduled should not enqueue duplicate crosspost jobs from stale instances" do
+    Crosspost.find_or_create_by(platform: "mastodon").update!(
+      enabled: true,
+      client_key: "test_key",
+      client_secret: "test_secret",
+      access_token: "test_token"
+    )
+
+    article = Article.create!(
+      title: "Stale Scheduled Crosspost Article",
+      slug: "stale-scheduled-crosspost-test",
+      status: :schedule,
+      scheduled_at: 1.hour.ago,
+      content_type: :html,
+      html_content: "<p>Scheduled content</p>",
+      crosspost_mastodon: "1"
+    )
+
+    clear_enqueued_jobs
+
+    first_instance = Article.find(article.id)
+    stale_instance = Article.find(article.id)
+
+    assert_difference -> { enqueued_jobs.count { |job| job["job_class"] == "CrosspostArticleJob" } }, 1 do
+      first_instance.publish_scheduled
+      stale_instance.publish_scheduled
+    end
+  end
+
+  test "should enqueue crosspost job when scheduled article is manually published" do
+    Crosspost.find_or_create_by(platform: "mastodon").update!(
+      enabled: true,
+      client_key: "test_key",
+      client_secret: "test_secret",
+      access_token: "test_token"
+    )
+
+    article = Article.create!(
+      title: "Manual Publish Scheduled Crosspost Article",
+      slug: "manual-publish-scheduled-crosspost-test",
+      status: :schedule,
+      scheduled_at: 1.hour.from_now,
+      content_type: :html,
+      html_content: "<p>Scheduled content</p>",
+      crosspost_mastodon: "1"
+    )
+
+    clear_enqueued_jobs
+
+    assert_enqueued_with(job: CrosspostArticleJob, args: [ article.id, "mastodon" ]) do
+      Article.find(article.id).update!(status: :publish)
     end
   end
 

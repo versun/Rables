@@ -104,6 +104,7 @@ class Export
       write_headers: true,
       headers: %w[
         id title slug description content status scheduled_at
+        scheduled_crosspost_platforms
         source_url source_author source_content
         meta_title meta_description meta_image
         content_type html_content comment
@@ -122,6 +123,7 @@ class Export
           processed_content,
           article.status,
           article.scheduled_at,
+          article.scheduled_crosspost_platforms.to_json,
           article.source_url,
           article.source_author,
           article.source_content,
