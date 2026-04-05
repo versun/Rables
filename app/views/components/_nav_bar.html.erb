@@ -15,13 +15,16 @@
     <li>
       <%= link_to "Tags", tags_path, class: "nav-link#{' current' if current_page?(tags_path)}" %>
     </li>
-  <% if navbar_items.present? %>
+    <% if navbar_items.present? %>
     <% navbar_items.each do |page| %>
       <li>
         <%= link_to page.title, page_link_path(page), page_link_attributes(page).merge(class: "nav-link#{' current' if current_page?(page_link_path(page))}") %>
       </li>
     <% end %>     
   <% end %>
+    <li>
+      <%= link_to "Twitter Archive", twitter_archive_path, class: "nav-link#{' current' if current_page?(twitter_archive_path)}" %>
+    </li>
 </ul>
 
 <%# Newsletter subscription form - only show on index page when newsletter is enabled and using native mail %>

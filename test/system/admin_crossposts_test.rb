@@ -51,4 +51,28 @@ class AdminCrosspostsTest < ApplicationSystemTestCase
     @twitter.reload
     assert_equal 240, @twitter.max_characters
   end
+
+  test "twitter tab shows archive upload module" do
+    sign_in(@user)
+    visit admin_crossposts_path(platform: "twitter")
+
+    assert_no_button "Import Archive"
+    assert_no_selector "input[type='file']"
+  end
+
+  test "sidebar shows twitter archive link at the end of tools" do
+    sign_in(@user)
+    visit admin_crossposts_path(platform: "twitter")
+
+    within("nav.sidebar-nav .nav-section:last-child") do
+      links = all("a.nav-link").map(&:text)
+      assert_equal [ "Migrate", "Crosspost", "Git", "Newsletter", "Jobs", "Twitter Archive" ], links
+      assert_link "Twitter Archive", href: admin_twitter_archives_path
+    end
+
+    click_link "Twitter Archive"
+    assert_current_path admin_twitter_archives_path, ignore_query: true
+    assert_text "Twitter Archive"
+    assert_button "Import Archive"
+  end
 end

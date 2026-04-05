@@ -116,4 +116,14 @@ class ArticlesTest < ApplicationSystemTestCase
     assert_text article.title
     assert_text "RSS"
   end
+
+  test "home sidebar shows twitter archive as the last nav link" do
+    visit root_path
+
+    within "nav.sidebar-nav" do
+      links = all("a.nav-link").map(&:text)
+      assert_equal "Twitter Archive", links.last
+      assert_link "Twitter Archive", href: twitter_archive_path
+    end
+  end
 end

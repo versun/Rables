@@ -1,4 +1,7 @@
 Rails.application.routes.draw do
+  article_route_prefix = Rails.application.config.x.article_route_prefix.to_s.gsub(%r{\A/+|/+\z}, "")
+  twitter_archive_segments = [ article_route_prefix.presence, "twitter", "archive" ].compact
+
   # Defines the root path route ("/")
   root "articles#index"
 
@@ -99,6 +102,7 @@ Rails.application.routes.draw do
         post :verify
       end
     end
+    resources :twitter_archives, only: [ :index, :create ]
 
     # Activity logs
     resources :activities, only: [ :index ]
@@ -115,6 +119,8 @@ Rails.application.routes.draw do
 
   # Public comment submission
   resources :comments, only: [ :create ]
+
+  get "/#{twitter_archive_segments.join('/')}", to: "twitter_archives#show", as: :twitter_archive
 
   # Static files public access
   get "/static/*filename", to: "static_files#show", as: :static_file, format: false

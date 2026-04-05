@@ -843,6 +843,207 @@ h2 {
     color: var(--accent-color);
 }
 
+.twitter-archive-page {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 4rem;
+}
+
+.twitter-archive-header {
+    margin-bottom: 2rem;
+}
+
+.twitter-archive-header__eyebrow {
+    margin: 0 0 0.5rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+    color: #666;
+}
+
+.twitter-archive-header__subtitle {
+    margin: 0.75rem 0 0;
+    color: #666;
+}
+
+.twitter-archive-header__meta {
+    margin: 0.5rem 0 0;
+    color: #666;
+    font-size: 0.95rem;
+}
+
+.twitter-archive-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.twitter-archive-tab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.65rem 1rem;
+    border-radius: 999px;
+    background: #f3f4f6;
+    color: #374151;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.twitter-archive-tab.active {
+    background: #111827;
+    color: #fff;
+}
+
+.twitter-archive-list {
+    display: grid;
+    gap: 1rem;
+}
+
+.twitter-archive-connection-list {
+    margin: 0;
+    padding-left: 1.5rem;
+}
+
+.twitter-archive-connection-item + .twitter-archive-connection-item {
+    margin-top: 0.9rem;
+}
+
+.twitter-archive-connection-item__account-id {
+    font-weight: 700;
+    color: #111827;
+    text-decoration: none;
+}
+
+.twitter-archive-card {
+    padding: 1.25rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 18px;
+    background: #fff;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.twitter-archive-card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 0.85rem;
+    color: #666;
+    font-size: 0.92rem;
+}
+
+.twitter-archive-card__body p {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.twitter-archive-card__body p + p {
+    margin-top: 0.9rem;
+}
+
+.twitter-archive-card__title {
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+
+.twitter-archive-card__note {
+    color: #666;
+}
+
+.twitter-archive-card__media {
+    display: grid;
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.twitter-archive-card__media-item {
+    overflow: hidden;
+    border-radius: 14px;
+    background: #f3f4f6;
+}
+
+.twitter-archive-card__media-item img,
+.twitter-archive-card__media-item video {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.twitter-archive-card__media-item--file {
+    padding: 0.9rem 1rem;
+}
+
+.twitter-archive-card__media-item--file a {
+    color: #111827;
+    font-weight: 600;
+}
+
+.twitter-archive-card__actions {
+    margin-top: 1rem;
+}
+
+.twitter-archive-card__actions a {
+    color: #111827;
+    font-weight: 600;
+}
+
+.twitter-archive-empty {
+    padding: 1.5rem;
+    border-radius: 18px;
+    background: #f9fafb;
+    color: #666;
+}
+
+[data-theme="dark"] .twitter-archive-header__eyebrow,
+[data-theme="dark"] .twitter-archive-header__meta,
+[data-theme="dark"] .twitter-archive-header__subtitle,
+[data-theme="dark"] .twitter-archive-card__meta,
+[data-theme="dark"] .twitter-archive-card__note,
+[data-theme="dark"] .twitter-archive-empty {
+    color: var(--text-secondary);
+}
+
+[data-theme="dark"] .twitter-archive-tab {
+    background: #1f2937;
+    color: #d1d5db;
+}
+
+[data-theme="dark"] .twitter-archive-tab.active {
+    background: #f9fafb;
+    color: #111827;
+}
+
+[data-theme="dark"] .twitter-archive-card {
+    background: #111827;
+    border-color: #374151;
+    box-shadow: none;
+}
+
+[data-theme="dark"] .twitter-archive-connection-item__account-id {
+    color: #f9fafb;
+}
+
+[data-theme="dark"] .twitter-archive-card__media-item {
+    background: #1f2937;
+}
+
+[data-theme="dark"] .twitter-archive-card__media-item--file a,
+[data-theme="dark"] .twitter-archive-card__actions a {
+    color: #f9fafb;
+}
+
+@media (max-width: 640px) {
+    .twitter-archive-page {
+        padding: 2rem 1rem 3rem;
+    }
+
+    .twitter-archive-tab {
+        width: 100%;
+    }
+}
+
 /* Pagination */
 .pagination {
     display: flex;

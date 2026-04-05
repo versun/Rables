@@ -8,6 +8,8 @@ class TwitterService
   include ContentBuilder
   include HttpRedirectHandler
 
+  LOOKUP_RETRY_DELAY = 15.minutes
+
   def initialize
     @settings = Crosspost.twitter
     @rate_limiter = TwitterApi::RateLimiter.new
@@ -112,6 +114,42 @@ class TwitterService
     end
   end
 
+  def lookup_users_by_ids(account_ids)
+    default_response = { users: {}, rate_limit: nil, retry_at: nil }
+    normalized_ids = Array(account_ids).map(&:to_s).reject(&:blank?).uniq
+    return default_response if normalized_ids.blank?
+    return default_response unless @settings&.enabled?
+
+    client = create_client
+    endpoint = "users?ids=#{normalized_ids.join(',')}&user.fields=username"
+    response = @rate_limiter.make_request(client, endpoint)
+
+    users = Array(response["data"]).each_with_object({}) do |user, map|
+      next if user["id"].blank? || user["username"].blank?
+
+      map[user["id"].to_s] = user["username"].to_s
+    end
+
+    default_response.merge(users: users)
+  rescue => e
+    if @rate_limiter.rate_limit_error?(e)
+      default_response.merge(rate_limit: @rate_limiter.rate_limit_info_from_error(e, LOOKUP_RETRY_DELAY.to_i))
+    elsif retryable_lookup_error?(e)
+      Rails.event.notify "twitter_service.lookup_users_by_ids_retry_scheduled",
+        level: "warn",
+        component: "TwitterService",
+        error_message: e.message,
+        retry_at: Time.current + LOOKUP_RETRY_DELAY
+      default_response.merge(retry_at: Time.current + LOOKUP_RETRY_DELAY)
+    else
+      Rails.event.notify "twitter_service.lookup_users_by_ids_failed",
+        level: "warn",
+        component: "TwitterService",
+        error_message: e.message
+      default_response.merge(error_message: e.message)
+    end
+  end
+
   # Process tweets from API response and convert to comment format
   def process_tweets(search_response, parent_tweet_id)
     comments = []
@@ -134,6 +172,23 @@ class TwitterService
   end
 
   private
+
+  def retryable_lookup_error?(error)
+    transient_error_classes = []
+    transient_error_classes << X::NetworkError if defined?(X::NetworkError)
+    transient_error_classes << X::ConnectionException if defined?(X::ConnectionException)
+    transient_error_classes << X::ServerError if defined?(X::ServerError)
+    transient_error_classes << Net::OpenTimeout if defined?(Net::OpenTimeout)
+    transient_error_classes << Net::ReadTimeout if defined?(Net::ReadTimeout)
+    transient_error_classes << Timeout::Error if defined?(Timeout::Error)
+    transient_error_classes << EOFError
+    transient_error_classes << Errno::ECONNRESET if defined?(Errno::ECONNRESET)
+    transient_error_classes << Errno::ECONNREFUSED if defined?(Errno::ECONNREFUSED)
+    transient_error_classes << Errno::ETIMEDOUT if defined?(Errno::ETIMEDOUT)
+    transient_error_classes << SocketError if defined?(SocketError)
+
+    transient_error_classes.any? { |klass| error.is_a?(klass) }
+  end
 
   def create_client
     X::Client.new(

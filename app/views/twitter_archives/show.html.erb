@@ -1,0 +1,121 @@
+<div class="container twitter-archive-page">
+  <header class="twitter-archive-header">
+    <h1>Twitter Archive</h1>
+    <p class="twitter-archive-header__subtitle">Tweets, replies, retweets, followers, following, and likes from the imported archive.</p>
+    <% if @last_archive_upload_at.present? %>
+      <p class="twitter-archive-header__meta">
+        Last archive upload: <%= @last_archive_upload_at.strftime("%B %-d, %Y %H:%M") %>
+      </p>
+    <% end %>
+  </header>
+
+  <nav class="twitter-archive-tabs" aria-label="Twitter archive tabs">
+    <% @tabs.each do |tab, label| %>
+      <%= link_to label,
+          twitter_archive_path(tab: (tab == "tweet" ? nil : tab)),
+          class: "twitter-archive-tab #{@active_tab == tab ? 'active' : ''}" %>
+    <% end %>
+  </nav>
+
+  <% if TwitterArchiveTweet::ENTRY_TYPES.include?(@active_tab) && @archive_tweets.any? %>
+    <div class="twitter-archive-list">
+      <% @archive_tweets.each do |tweet| %>
+        <article class="twitter-archive-card">
+          <div class="twitter-archive-card__meta">
+            <time datetime="<%= tweet.tweeted_at.iso8601 %>"><%= tweet.tweeted_at.to_fs(:long) %></time>
+            <% if tweet.screen_name.present? %>
+              <span>@<%= tweet.screen_name %></span>
+            <% end %>
+          </div>
+
+          <div class="twitter-archive-card__body">
+            <%= simple_format(h(tweet.full_text)) %>
+          </div>
+
+          <% if tweet.media.attached? %>
+            <div class="twitter-archive-card__media">
+              <% tweet.media.each do |attachment| %>
+                <% if attachment.blob.image? %>
+                  <div class="twitter-archive-card__media-item twitter-archive-card__media-item--image">
+                    <%= image_tag attachment, alt: "", loading: "lazy" %>
+                  </div>
+                <% elsif attachment.blob.video? %>
+                  <div class="twitter-archive-card__media-item twitter-archive-card__media-item--video">
+                    <%= video_tag url_for(attachment), controls: true, preload: "metadata" %>
+                  </div>
+                <% else %>
+                  <div class="twitter-archive-card__media-item twitter-archive-card__media-item--file">
+                    <%= link_to attachment.filename.to_s, url_for(attachment), target: "_blank", rel: "noopener" %>
+                  </div>
+                <% end %>
+              <% end %>
+            </div>
+          <% end %>
+
+          <% if tweet.tweet_url.present? %>
+            <div class="twitter-archive-card__actions">
+              <% if (tweet_url = safe_archive_url(tweet.tweet_url)) %>
+                <%= link_to "View on X", tweet_url, target: "_blank", rel: "noopener" %>
+              <% end %>
+            </div>
+          <% end %>
+        </article>
+      <% end %>
+    </div>
+  <% elsif %w[follower following].include?(@active_tab) && @archive_connections.any? %>
+    <ul class="twitter-archive-connection-list">
+      <% @archive_connections.each do |connection| %>
+        <li class="twitter-archive-connection-item">
+          <% if connection.user_link.present? %>
+            <% if (user_link = safe_archive_url(connection.user_link)) %>
+              <%= link_to connection.display_label, user_link, class: "twitter-archive-connection-item__account-id", target: "_blank", rel: "noopener" %>
+            <% else %>
+              <span class="twitter-archive-connection-item__account-id"><%= connection.display_label %></span>
+            <% end %>
+          <% else %>
+            <span class="twitter-archive-connection-item__account-id"><%= connection.display_label %></span>
+          <% end %>
+        </li>
+      <% end %>
+    </ul>
+  <% elsif @active_tab == "like" && @archive_likes.any? %>
+    <div class="twitter-archive-list">
+      <% @archive_likes.each do |like| %>
+        <article class="twitter-archive-card twitter-archive-card--like">
+          <div class="twitter-archive-card__meta">
+            <span>Liked Tweet</span>
+            <span>ID <%= like.tweet_id %></span>
+          </div>
+
+          <div class="twitter-archive-card__body">
+            <% if like.full_text.present? %>
+              <%= simple_format(h(like.full_text)) %>
+            <% else %>
+              <p class="twitter-archive-card__note">No tweet text is available in this archive entry.</p>
+            <% end %>
+          </div>
+
+          <% if like.expanded_url.present? %>
+            <div class="twitter-archive-card__actions">
+              <% if (expanded_url = safe_archive_url(like.expanded_url)) %>
+                <%= link_to "View on X", expanded_url, target: "_blank", rel: "noopener" %>
+              <% end %>
+            </div>
+          <% end %>
+        </article>
+      <% end %>
+    </div>
+  <% else %>
+    <div class="twitter-archive-empty">
+      No archive items are available in this tab yet.
+    </div>
+  <% end %>
+
+  <% if @archive_collection&.total_pages.to_i > 1 %>
+    <div class="twitter-archive-pagination">
+      <% pagination_params = {} %>
+      <% pagination_params[:tab] = @active_tab unless @active_tab == "tweet" %>
+      <%= will_paginate @archive_collection, params: pagination_params %>
+    </div>
+  <% end %>
+</div>

@@ -1,0 +1,113 @@
+<div class="admin-container">
+  <h1>Twitter Archive</h1>
+  <div class="form-section compact">
+    <small>Upload a Twitter export ZIP to rebuild the public archive. A successful import replaces the current archive.</small>
+
+    <div class="field">
+      <strong>Total archived items:</strong>
+      <%= @twitter_archive_total %>
+      (<%= @twitter_archive_counts.fetch("tweet", 0) %> original,
+      <%= @twitter_archive_counts.fetch("reply", 0) %> replies,
+      <%= @twitter_archive_counts.fetch("retweet_quote", 0) %> retweets / quotes,
+      <%= @twitter_archive_connection_counts.fetch("follower", 0) %> followers,
+      <%= @twitter_archive_connection_counts.fetch("following", 0) %> following,
+      <%= @twitter_archive_likes_count %> likes)
+    </div>
+
+    <% if @twitter_archive_updated_at.present? %>
+      <div class="field">
+        <strong>Last imported:</strong>
+        <%= @twitter_archive_updated_at.to_fs(:long) %>
+      </div>
+    <% end %>
+
+    <div class="field">
+      <%= link_to "Open Public Archive", twitter_archive_path, class: "btn btn-secondary" %>
+    </div>
+
+    <%= form_with scope: :twitter_archive, url: admin_twitter_archives_path, method: :post, multipart: true do |f| %>
+      <div class="field">
+        <%= f.label :file, "Twitter Export ZIP" %>
+        <%= f.file_field :file, accept: ".zip,application/zip" %>
+      </div>
+
+      <div class="form-actions">
+        <%= f.submit "Import Archive", class: "btn btn-primary" %>
+      </div>
+    <% end %>
+  </div>
+
+  <div class="form-section compact twitter-archive-import-history">
+    <h3>Import History</h3>
+
+    <% if @twitter_archive_imports.any? %>
+      <table class="admin-activity-table twitter-archive-import-table">
+        <thead>
+          <tr>
+            <th class="col-time">Queued</th>
+            <th>File</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>Counts</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% @twitter_archive_imports.each do |import| %>
+            <tr>
+              <td class="col-time">
+                <code title="<%= import.queued_at.iso8601 %>"><%= import.queued_at.strftime('%Y-%m-%d %H:%M:%S') %></code>
+              </td>
+              <td>
+                <span class="truncate" title="<%= import.source_filename %>"><%= import.source_filename %></span>
+              </td>
+              <td>
+                <span class="twitter-archive-import-status twitter-archive-import-status--<%= import.status %>"><%= import.status_label %></span>
+                <% if import.status_message.present? %>
+                  <div class="twitter-archive-import-note"><%= import.status_message %></div>
+                <% end %>
+              </td>
+              <td>
+                <strong><%= import.progress %>%</strong>
+                <% if import.started_at.present? || import.finished_at.present? %>
+                  <div class="twitter-archive-import-note">
+                    <% if import.started_at.present? %>
+                      Started <%= import.started_at.strftime('%Y-%m-%d %H:%M:%S') %>
+                    <% end %>
+                    <% if import.finished_at.present? %>
+                      <br>
+                      Finished <%= import.finished_at.strftime('%Y-%m-%d %H:%M:%S') %>
+                    <% end %>
+                  </div>
+                <% end %>
+              </td>
+              <td>
+                <% if import.total_items_count.positive? %>
+                  <div class="twitter-archive-import-note">
+                    <%= import.total_items_count %> total
+                    <br>
+                    <%= import.tweets_count %> tweets,
+                    <%= import.followers_count %> followers,
+                    <%= import.following_count %> following,
+                    <%= import.likes_count %> likes
+                  </div>
+                <% else %>
+                  <span class="twitter-archive-import-note">Pending</span>
+                <% end %>
+              </td>
+              <td>
+                <% if import.error_message.present? %>
+                  <span class="twitter-archive-import-error"><%= import.error_message %></span>
+                <% else %>
+                  <span class="twitter-archive-import-note">None</span>
+                <% end %>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    <% else %>
+      <p class="twitter-archive-import-note">No imports have been queued yet.</p>
+    <% end %>
+  </div>
+</div>

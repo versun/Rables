@@ -982,6 +982,137 @@ class TwitterServiceTest < ActiveSupport::TestCase
     end
   end
 
+  test "lookup_users_by_ids returns account_id to username mapping" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
+      access_token: "access_token",
+      access_token_secret: "access_token_secret"
+    )
+
+    service = TwitterService.new
+    assert_respond_to service, :lookup_users_by_ids
+
+    captured_endpoint = nil
+    response = {
+      "data" => [
+        { "id" => "900", "username" => "alice" },
+        { "id" => "901", "username" => "bob" }
+      ]
+    }
+    rate_limiter = service.instance_variable_get(:@rate_limiter)
+    rate_limiter.define_singleton_method(:make_request) do |_client, endpoint, **_opts|
+      captured_endpoint = endpoint
+      response
+    end
+
+    result = service.stub(:create_client, Object.new) do
+      service.lookup_users_by_ids(%w[900 901])
+    end
+
+    assert_equal({ "900" => "alice", "901" => "bob" }, result[:users])
+    assert_nil result[:rate_limit]
+    assert_includes captured_endpoint, "ids=900,901"
+    assert_includes captured_endpoint, "user.fields=username"
+  end
+
+  test "lookup_users_by_ids returns empty hash for empty input" do
+    service = TwitterService.new
+    assert_respond_to service, :lookup_users_by_ids
+
+    service.define_singleton_method(:create_client) do
+      flunk "create_client should not be called for empty input"
+    end
+
+    assert_equal({ users: {}, rate_limit: nil, retry_at: nil }, service.lookup_users_by_ids([]))
+  end
+
+  test "lookup_users_by_ids surfaces persistent rate limiting" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
+      access_token: "access_token",
+      access_token_secret: "access_token_secret"
+    )
+
+    service = TwitterService.new
+    assert_respond_to service, :lookup_users_by_ids
+
+    rate_limit = { limit: 300, remaining: 0, reset_at: 20.minutes.from_now.change(usec: 0) }
+    rate_limiter = service.instance_variable_get(:@rate_limiter)
+    rate_limiter.define_singleton_method(:make_request) do |_client, _endpoint, **_opts|
+      raise "429 Too Many Requests"
+    end
+    rate_limiter.define_singleton_method(:rate_limit_info_from_error) do |_error, _wait_time|
+      rate_limit
+    end
+
+    result = service.stub(:create_client, Object.new) do
+      service.lookup_users_by_ids([ "900" ])
+    end
+
+    assert_equal({}, result[:users])
+    assert_equal rate_limit, result[:rate_limit]
+    assert_nil result[:retry_at]
+  end
+
+  test "lookup_users_by_ids requests a retry on transient failures" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
+      access_token: "access_token",
+      access_token_secret: "access_token_secret"
+    )
+
+    service = TwitterService.new
+    assert_respond_to service, :lookup_users_by_ids
+
+    rate_limiter = service.instance_variable_get(:@rate_limiter)
+    rate_limiter.define_singleton_method(:make_request) do |_client, _endpoint, **_opts|
+      raise X::NetworkError, "temporary outage"
+    end
+
+    freeze_time do
+      result = service.stub(:create_client, Object.new) do
+        service.lookup_users_by_ids([ "900" ])
+      end
+
+      assert_equal({}, result[:users])
+      assert_nil result[:rate_limit]
+      assert_equal 15.minutes.from_now, result[:retry_at]
+    end
+  end
+
+  test "lookup_users_by_ids surfaces permanent failures" do
+    Crosspost.twitter.update!(
+      enabled: true,
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
+      access_token: "access_token",
+      access_token_secret: "access_token_secret"
+    )
+
+    service = TwitterService.new
+    assert_respond_to service, :lookup_users_by_ids
+
+    rate_limiter = service.instance_variable_get(:@rate_limiter)
+    rate_limiter.define_singleton_method(:make_request) do |_client, _endpoint, **_opts|
+      raise "boom"
+    end
+
+    result = service.stub(:create_client, Object.new) do
+      service.lookup_users_by_ids([ "900" ])
+    end
+
+    assert_equal({}, result[:users])
+    assert_nil result[:rate_limit]
+    assert_nil result[:retry_at]
+    assert_equal "boom", result[:error_message]
+  end
+
   test "create_client builds x client with oauth1 credentials" do
     Crosspost.twitter.update!(
       enabled: true,
