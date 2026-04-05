@@ -32,7 +32,9 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_select "h1", text: "Twitter Archive"
-    assert_select "input[type='file']"
+    assert_select "form[action='#{admin_twitter_archives_path}'][enctype='multipart/form-data'][data-turbo='false']" do
+      assert_select "input[type='file']"
+    end
     assert_select "a[href=?]", twitter_archive_path, text: "Open Public Archive"
     assert_match "Total archived items:", response.body
     assert_match "Last imported:", response.body

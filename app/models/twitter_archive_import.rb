@@ -8,7 +8,7 @@ class TwitterArchiveImport < ApplicationRecord
   validates :status, presence: true, inclusion: { in: STATUSES }
   validates :progress, presence: true, inclusion: { in: 0..100 }
   validates :queued_at, presence: true
-  validates :active_slot, uniqueness: true, allow_nil: true
+  validates :active_slot, uniqueness: true, allow_nil: true, if: :supports_active_slot?
 
   scope :active, -> { where(status: ACTIVE_STATUSES) }
   scope :recent_first, -> { order(created_at: :desc) }
@@ -21,6 +21,12 @@ class TwitterArchiveImport < ApplicationRecord
   private
 
   def sync_active_slot
+    return unless supports_active_slot?
+
     self.active_slot = ACTIVE_STATUSES.include?(status.to_s) ? 1 : nil
+  end
+
+  def supports_active_slot?
+    has_attribute?(:active_slot)
   end
 end

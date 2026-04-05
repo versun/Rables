@@ -25,7 +25,7 @@
       <%= link_to "Open Public Archive", twitter_archive_path, class: "btn btn-secondary" %>
     </div>
 
-    <%= form_with scope: :twitter_archive, url: admin_twitter_archives_path, method: :post, multipart: true do |f| %>
+    <%= form_with scope: :twitter_archive, url: admin_twitter_archives_path, method: :post, multipart: true, data: { turbo: false } do |f| %>
       <div class="field">
         <%= f.label :file, "Twitter Export ZIP" %>
         <%= f.file_field :file, accept: ".zip,application/zip" %>
