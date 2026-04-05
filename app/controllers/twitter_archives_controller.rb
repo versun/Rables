@@ -18,7 +18,7 @@ class TwitterArchivesController < ApplicationController
   def show
     @tabs = TABS
     @active_tab = archive_tab(params[:tab])
-    @last_archive_upload_at = TwitterArchiveImport.completed.maximum(:finished_at) || TwitterArchiveTweet.maximum(:created_at)
+    @last_archive_upload_at = TwitterArchiveImport.last_imported_at
 
     case @active_tab
     when *TwitterArchiveTweet::ENTRY_TYPES

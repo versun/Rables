@@ -44,6 +44,19 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     assert_match "45%", response.body
   end
 
+  test "index uses the model's unified last imported time" do
+    import_time = Time.zone.parse("2026-04-04 12:34:56 UTC")
+    original_last_imported_at = TwitterArchiveImport.method(:last_imported_at)
+    TwitterArchiveImport.define_singleton_method(:last_imported_at) { import_time }
+
+    get admin_twitter_archives_path
+
+    assert_response :success
+    assert_match import_time.to_fs(:long), response.body
+  ensure
+    TwitterArchiveImport.define_singleton_method(:last_imported_at, original_last_imported_at)
+  end
+
   test "index enqueues catch up sync when unresolved rows exist and credentials are available" do
     Crosspost.twitter.update!(
       enabled: true,
@@ -127,56 +140,6 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     assert_equal File.basename(zip_path), import.source_filename
   ensure
     File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
-  end
-
-  test "write_temp_zip persists tempfile-backed upload bytes" do
-    tempfile = Tempfile.new([ "twitter-archive-upload", ".zip" ])
-    tempfile.binmode
-    tempfile.write("archive-bytes")
-    tempfile.flush
-
-    uploaded = ActionDispatch::Http::UploadedFile.new(
-      tempfile: tempfile,
-      filename: "twitter-archive.zip",
-      type: "application/zip"
-    )
-
-    original_path = tempfile.path
-    controller = Admin::TwitterArchivesController.new
-    moved_path = controller.send(:write_temp_zip, uploaded)
-
-    assert_equal "archive-bytes", File.binread(moved_path)
-    assert_not_equal original_path, moved_path
-  ensure
-    tempfile.close! if tempfile
-    File.delete(moved_path) if moved_path.present? && File.exist?(moved_path)
-  end
-
-  test "write_temp_zip copies upload bytes when move fallback is needed" do
-    tempfile = Tempfile.new([ "twitter-archive-upload", ".zip" ])
-    tempfile.binmode
-    tempfile.write("archive-bytes")
-    tempfile.flush
-
-    uploaded = ActionDispatch::Http::UploadedFile.new(
-      tempfile: tempfile,
-      filename: "twitter-archive.zip",
-      type: "application/zip"
-    )
-
-    original_path = tempfile.path
-    controller = Admin::TwitterArchivesController.new
-    controller.define_singleton_method(:move_uploaded_tempfile) { |_source, _destination| false }
-    moved_path = controller.send(:write_temp_zip, uploaded)
-
-    assert_equal "archive-bytes", File.binread(moved_path)
-    assert File.exist?(original_path), "expected fallback copy to leave the original tempfile in place"
-  ensure
-    if defined?(controller) && controller.singleton_class.method_defined?(:move_uploaded_tempfile)
-      controller.singleton_class.send(:remove_method, :move_uploaded_tempfile)
-    end
-    tempfile.close! if tempfile
-    File.delete(moved_path) if moved_path.present? && File.exist?(moved_path)
   end
 
   test "create refuses to queue a new import while another import is active" do

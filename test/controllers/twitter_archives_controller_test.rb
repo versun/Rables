@@ -83,7 +83,7 @@ class TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
   test "show paginates tweet entries" do
     21.times do |index|
       TwitterArchiveTweet.create!(
-        tweet_id: (100 + index).to_s,
+        tweet_id: "pagination-#{index + 1}",
         entry_type: "tweet",
         screen_name: "archive_owner",
         full_text: "Archive tweet #{format('%02d', index + 1)} only",
