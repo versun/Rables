@@ -49,7 +49,7 @@ class TwitterArchivesController < ApplicationController
 
   def safe_archive_url(value)
     uri = URI.parse(value.to_s.strip)
-    return uri.to_s if uri.is_a?(URI::HTTP) && uri.host.present?
+    uri.to_s if uri.is_a?(URI::HTTP) && uri.host.present?
   rescue URI::InvalidURIError
     nil
   end
