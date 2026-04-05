@@ -83,18 +83,38 @@ class Admin::TwitterArchivesController < Admin::BaseController
     temp_dir = Rails.root.join("tmp", "twitter_archives")
     FileUtils.mkdir_p(temp_dir)
     temp_path = temp_dir.join("twitter_archive_#{Time.current.to_i}_#{SecureRandom.hex(8)}.zip")
+    source = upload_source(uploaded_file)
 
-    File.open(temp_path, "wb") do |file|
-      source = if uploaded_file.respond_to?(:tempfile) && uploaded_file.tempfile
-        uploaded_file.tempfile
-      else
-        uploaded_file
-      end
+    copy_upload(source, temp_path) unless move_uploaded_tempfile(source, temp_path)
 
+    temp_path.to_s
+  end
+
+  def upload_source(uploaded_file)
+    if uploaded_file.respond_to?(:tempfile) && uploaded_file.tempfile
+      uploaded_file.tempfile
+    else
+      uploaded_file
+    end
+  end
+
+  def move_uploaded_tempfile(source, destination)
+    return false unless source.is_a?(Tempfile)
+
+    source_path = source.path.to_s
+    return false if source_path.blank? || !File.exist?(source_path)
+
+    source.flush if source.respond_to?(:flush)
+    File.rename(source_path, destination)
+    true
+  rescue SystemCallError
+    false
+  end
+
+  def copy_upload(source, destination)
+    File.open(destination, "wb") do |file|
       source.rewind if source.respond_to?(:rewind)
       IO.copy_stream(source, file)
     end
-
-    temp_path.to_s
   end
 end

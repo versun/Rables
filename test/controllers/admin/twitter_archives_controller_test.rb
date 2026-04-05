@@ -127,6 +127,56 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
   end
 
+  test "write_temp_zip persists tempfile-backed upload bytes" do
+    tempfile = Tempfile.new([ "twitter-archive-upload", ".zip" ])
+    tempfile.binmode
+    tempfile.write("archive-bytes")
+    tempfile.flush
+
+    uploaded = ActionDispatch::Http::UploadedFile.new(
+      tempfile: tempfile,
+      filename: "twitter-archive.zip",
+      type: "application/zip"
+    )
+
+    original_path = tempfile.path
+    controller = Admin::TwitterArchivesController.new
+    moved_path = controller.send(:write_temp_zip, uploaded)
+
+    assert_equal "archive-bytes", File.binread(moved_path)
+    assert_not_equal original_path, moved_path
+  ensure
+    tempfile.close! if tempfile
+    File.delete(moved_path) if moved_path.present? && File.exist?(moved_path)
+  end
+
+  test "write_temp_zip copies upload bytes when move fallback is needed" do
+    tempfile = Tempfile.new([ "twitter-archive-upload", ".zip" ])
+    tempfile.binmode
+    tempfile.write("archive-bytes")
+    tempfile.flush
+
+    uploaded = ActionDispatch::Http::UploadedFile.new(
+      tempfile: tempfile,
+      filename: "twitter-archive.zip",
+      type: "application/zip"
+    )
+
+    original_path = tempfile.path
+    controller = Admin::TwitterArchivesController.new
+    controller.define_singleton_method(:move_uploaded_tempfile) { |_source, _destination| false }
+    moved_path = controller.send(:write_temp_zip, uploaded)
+
+    assert_equal "archive-bytes", File.binread(moved_path)
+    assert File.exist?(original_path), "expected fallback copy to leave the original tempfile in place"
+  ensure
+    if defined?(controller) && controller.singleton_class.method_defined?(:move_uploaded_tempfile)
+      controller.singleton_class.send(:remove_method, :move_uploaded_tempfile)
+    end
+    tempfile.close! if tempfile
+    File.delete(moved_path) if moved_path.present? && File.exist?(moved_path)
+  end
+
   test "create refuses to queue a new import while another import is active" do
     TwitterArchiveImport.create!(
       source_filename: "existing-twitter-archive.zip",
@@ -164,6 +214,7 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
       full_text: "Existing archive entry",
       tweeted_at: Time.zone.parse("2024-01-01 10:00:00 UTC")
     )
+    existing_tweet_ids = TwitterArchiveTweet.order(:tweet_id).pluck(:tweet_id)
 
     uploaded = fixture_file_upload("sample.txt", "text/plain")
 
@@ -172,7 +223,7 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     end
 
     assert_redirected_to admin_twitter_archives_path
-    assert_equal [ "existing-archive" ], TwitterArchiveTweet.pluck(:tweet_id)
+    assert_equal existing_tweet_ids, TwitterArchiveTweet.order(:tweet_id).pluck(:tweet_id)
   end
 
   private
