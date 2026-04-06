@@ -48,8 +48,6 @@ class TwitterArchiveImportJob < ApplicationJob
       following: summary[:following],
       likes: summary[:likes]
     )
-
-    TwitterArchiveHandleSyncJob.enqueue_if_needed
   rescue StandardError => e
     handle_failure(import, e) if import
   ensure

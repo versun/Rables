@@ -1,7 +1,7 @@
 <div class="container twitter-archive-page">
   <header class="twitter-archive-header">
     <h1>Twitter Archive</h1>
-    <p class="twitter-archive-header__subtitle">Tweets, replies, retweets, followers, following, and likes from the imported archive.</p>
+    <p class="twitter-archive-header__subtitle">Tweets, replies, retweets, and likes from the imported archive.</p>
     <% if @last_archive_upload_at.present? %>
       <p class="twitter-archive-header__meta">
         Last archive upload: <%= @last_archive_upload_at.strftime("%B %-d, %Y %H:%M") %>
@@ -62,22 +62,6 @@
         </article>
       <% end %>
     </div>
-  <% elsif %w[follower following].include?(@active_tab) && @archive_connections.any? %>
-    <ul class="twitter-archive-connection-list">
-      <% @archive_connections.each do |connection| %>
-        <li class="twitter-archive-connection-item">
-          <% if connection.user_link.present? %>
-            <% if (user_link = safe_archive_url(connection.user_link)) %>
-              <%= link_to connection.display_label, user_link, class: "twitter-archive-connection-item__account-id", target: "_blank", rel: "noopener" %>
-            <% else %>
-              <span class="twitter-archive-connection-item__account-id"><%= connection.display_label %></span>
-            <% end %>
-          <% else %>
-            <span class="twitter-archive-connection-item__account-id"><%= connection.display_label %></span>
-          <% end %>
-        </li>
-      <% end %>
-    </ul>
   <% elsif @active_tab == "like" && @archive_likes.any? %>
     <div class="twitter-archive-list">
       <% @archive_likes.each do |like| %>

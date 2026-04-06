@@ -66,7 +66,7 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     TwitterArchiveImport.define_singleton_method(:last_imported_at, original_last_imported_at)
   end
 
-  test "index enqueues catch up sync when unresolved rows exist and credentials are available" do
+  test "index does not enqueue archive handle sync jobs" do
     Crosspost.twitter.update!(
       enabled: true,
       api_key: "api_key",
@@ -80,47 +80,7 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
       user_link: "https://twitter.com/intent/user?user_id=900"
     )
 
-    assert_enqueued_with(job: TwitterArchiveHandleSyncJob) do
-      get admin_twitter_archives_path
-    end
-  end
-
-  test "index does not enqueue catch up sync when no unresolved rows exist" do
-    Crosspost.twitter.update!(
-      enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
-      access_token: "access_token",
-      access_token_secret: "access_token_secret"
-    )
-
-    TwitterArchiveConnection.create!(
-      account_id: "900",
-      relationship_type: "follower",
-      screen_name: "resolved_handle",
-      user_link: "https://twitter.com/intent/user?user_id=900"
-    )
-
-    assert_no_enqueued_jobs only: TwitterArchiveHandleSyncJob do
-      get admin_twitter_archives_path
-    end
-  end
-
-  test "index does not enqueue catch up sync when twitter credentials are unavailable" do
-    Crosspost.twitter.update!(
-      enabled: false,
-      api_key: nil,
-      api_key_secret: nil,
-      access_token: nil,
-      access_token_secret: nil
-    )
-    TwitterArchiveConnection.create!(
-      account_id: "900",
-      relationship_type: "follower",
-      user_link: "https://twitter.com/intent/user?user_id=900"
-    )
-
-    assert_no_enqueued_jobs only: TwitterArchiveHandleSyncJob do
+    assert_no_enqueued_jobs do
       get admin_twitter_archives_path
     end
   end

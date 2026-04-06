@@ -10,8 +10,6 @@ class TwitterArchivesController < ApplicationController
     "tweet" => "Tweets",
     "reply" => "Replies",
     "retweet_quote" => "Retweets / Quotes",
-    "follower" => "Followers",
-    "following" => "Following",
     "like" => "Likes"
   }.freeze
 
@@ -24,12 +22,6 @@ class TwitterArchivesController < ApplicationController
     when *TwitterArchiveTweet::ENTRY_TYPES
       @archive_tweets = paginate_archive_scope(TwitterArchiveTweet.with_attached_media.for_tab(@active_tab))
       @archive_collection = @archive_tweets
-    when "follower"
-      @archive_connections = paginate_archive_scope(TwitterArchiveConnection.followers.order(:user_link, :account_id))
-      @archive_collection = @archive_connections
-    when "following"
-      @archive_connections = paginate_archive_scope(TwitterArchiveConnection.following.order(:user_link, :account_id))
-      @archive_collection = @archive_connections
     when "like"
       @archive_likes = paginate_archive_scope(TwitterArchiveLike.order(created_at: :desc, tweet_id: :desc))
       @archive_collection = @archive_likes

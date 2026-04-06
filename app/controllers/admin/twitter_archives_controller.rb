@@ -6,8 +6,6 @@ class Admin::TwitterArchivesController < Admin::BaseController
     @twitter_archive_total = TwitterArchiveTweet.count + TwitterArchiveConnection.count + @twitter_archive_likes_count
     @twitter_archive_updated_at = TwitterArchiveImport.last_imported_at
     @twitter_archive_imports = TwitterArchiveImport.recent_first.limit(10)
-
-    TwitterArchiveHandleSyncJob.enqueue_if_needed
   end
 
   def create

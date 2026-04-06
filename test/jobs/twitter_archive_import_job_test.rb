@@ -5,14 +5,6 @@ require "zip"
 
 class TwitterArchiveImportJobTest < ActiveJob::TestCase
   test "marks import as completed and stores category counts" do
-    Crosspost.twitter.update!(
-      enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
-      access_token: "access_token",
-      access_token_secret: "access_token_secret"
-    )
-
     zip_path = build_zip(
       "data/account.js" => js_payload("account", [
         {
@@ -64,7 +56,9 @@ class TwitterArchiveImportJobTest < ActiveJob::TestCase
       queued_at: Time.current
     )
 
-    TwitterArchiveImportJob.perform_now(import.id)
+    assert_no_enqueued_jobs do
+      TwitterArchiveImportJob.perform_now(import.id)
+    end
 
     import.reload
 
@@ -82,7 +76,6 @@ class TwitterArchiveImportJobTest < ActiveJob::TestCase
     assert_equal [ [ "900", "follower" ], [ "901", "following" ] ],
       TwitterArchiveConnection.order(:relationship_type, :account_id).pluck(:account_id, :relationship_type)
     assert_equal [ "777" ], TwitterArchiveLike.pluck(:tweet_id)
-    assert_equal "TwitterArchiveHandleSyncJob", enqueued_jobs.last[:job].name
     assert_not File.exist?(zip_path), "expected temp zip to be removed"
   end
 
