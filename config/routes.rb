@@ -103,6 +103,7 @@ Rails.application.routes.draw do
       end
     end
     resources :twitter_archives, only: [ :index, :create ]
+    post "twitter_archives/direct_uploads", to: "twitter_archive_direct_uploads#create", as: :twitter_archive_direct_uploads
 
     # Activity logs
     resources :activities, only: [ :index ]

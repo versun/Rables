@@ -5,6 +5,7 @@ class TwitterArchiveImportJob < ApplicationJob
     import = TwitterArchiveImport.find(import_id)
 
     import.mark_running!
+    source_path = materialize_source_path(import)
 
     ActivityLog.log!(
       action: :started,
@@ -17,7 +18,7 @@ class TwitterArchiveImportJob < ApplicationJob
     last_progress = import.progress
     last_message = import.status_message
     summary = TwitterArchiveImporter.new(
-      import.source_path,
+      source_path,
       progress_callback: lambda do |progress, message|
         next if progress == last_progress && message == last_message
 
@@ -72,5 +73,26 @@ class TwitterArchiveImportJob < ApplicationJob
 
   def cleanup_source_file(import)
     import.cleanup_source_file!
+  end
+
+  def materialize_source_path(import)
+    return import.source_path unless TwitterArchiveImportSubmission.direct_upload_source_path?(import.source_path)
+
+    import.update_import_progress!(5, "Downloading uploaded archive")
+
+    blob = TwitterArchiveImportSubmission.direct_upload_blob_from(import.source_path)
+    raise ArgumentError, TwitterArchiveImportSubmission::INVALID_UPLOAD_ALERT if blob.blank?
+
+    temp_path = Rails.root.join("tmp", "twitter_archives", "twitter_archive_#{Time.current.to_i}_#{SecureRandom.hex(8)}.zip")
+    FileUtils.mkdir_p(temp_path.dirname)
+
+    File.open(temp_path, "wb") do |file|
+      blob.download { |chunk| file.write(chunk) }
+    end
+
+    import.update_column(:source_path, temp_path.to_s)
+    temp_path.to_s
+  ensure
+    blob&.purge
   end
 end

@@ -77,7 +77,11 @@ class TwitterArchiveImport < ApplicationRecord
 
   def cleanup_source_file!
     path = source_path.to_s
-    File.delete(path) if path.present? && File.exist?(path)
+    if TwitterArchiveImportSubmission.direct_upload_source_path?(path)
+      TwitterArchiveImportSubmission.direct_upload_blob_from(path)&.purge
+    elsif path.present? && File.exist?(path)
+      File.delete(path)
+    end
 
     if persisted?
       update_column(:source_path, nil)

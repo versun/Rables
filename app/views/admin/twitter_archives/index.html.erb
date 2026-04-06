@@ -28,7 +28,11 @@
     <%= form_with scope: :twitter_archive, url: admin_twitter_archives_path, method: :post, multipart: true, data: { turbo: false } do |f| %>
       <div class="field">
         <%= f.label :file, "Twitter Export ZIP" %>
-        <%= f.file_field :file, accept: ".zip,application/zip" %>
+        <%= f.file_field :file,
+                         accept: ".zip,application/zip",
+                         direct_upload: true,
+                         data: { direct_upload_url: admin_twitter_archive_direct_uploads_path } %>
+        <small>Direct upload sends the archive to object storage before import starts. With local storage, the upload still passes through the app.</small>
       </div>
 
       <div class="form-actions">

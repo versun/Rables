@@ -6,7 +6,15 @@ require "zip"
 class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
   def setup
     @user = users(:admin)
+    TwitterArchiveImport.delete_all
+    TwitterArchiveTweet.delete_all
+    TwitterArchiveConnection.delete_all
+    TwitterArchiveLike.delete_all
     sign_in(@user)
+  end
+
+  def teardown
+    ActiveStorage::Blob.unattached.find_each(&:purge)
   end
 
   public
@@ -33,11 +41,12 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "h1", text: "Twitter Archive"
     assert_select "form[action='#{admin_twitter_archives_path}'][enctype='multipart/form-data'][data-turbo='false']" do
-      assert_select "input[type='file']"
+      assert_select "input[type='file'][data-direct-upload-url='/admin/twitter_archives/direct_uploads']"
     end
     assert_select "a[href=?]", twitter_archive_path, text: "Open Public Archive"
     assert_match "Total archived items:", response.body
     assert_match "Last imported:", response.body
+    assert_match "object storage", response.body
     assert_match "Import History", response.body
     assert_match "twitter-archive.zip", response.body
     assert_match "Running", response.body
@@ -142,6 +151,55 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
   end
 
+  test "create queues twitter archive import from a direct uploaded blob" do
+    blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new(build_zip_bytes(
+        "data/account.js" => "window.YTD.account.part0 = #{JSON.generate([ { account: { username: 'archive_owner' } } ])}"
+      )),
+      filename: "twitter-archive.zip",
+      content_type: "application/zip"
+    )
+    result_import = nil
+
+    assert_difference("TwitterArchiveImport.count", 1) do
+      assert_enqueued_with(job: TwitterArchiveImportJob) do
+        post admin_twitter_archives_path, params: { twitter_archive: { file: twitter_archive_direct_upload_token(blob) } }
+      end
+    end
+
+    assert_redirected_to admin_twitter_archives_path
+    assert_match "queued", flash[:notice].downcase
+
+    result_import = TwitterArchiveImport.order(:created_at).last
+    assert_equal "queued", result_import.status
+    assert_equal "twitter-archive.zip", result_import.source_filename
+  ensure
+    result_import&.cleanup_source_file!
+    blob&.purge
+  end
+
+  test "create rejects unscoped direct upload blob ids" do
+    blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new(build_zip_bytes(
+        "data/account.js" => "window.YTD.account.part0 = #{JSON.generate([ { account: { username: 'archive_owner' } } ])}"
+      )),
+      filename: "twitter-archive.zip",
+      content_type: "application/zip"
+    )
+
+    assert_no_difference("TwitterArchiveImport.count") do
+      assert_no_enqueued_jobs only: TwitterArchiveImportJob do
+        post admin_twitter_archives_path, params: { twitter_archive: { file: blob.signed_id } }
+      end
+    end
+
+    assert_redirected_to admin_twitter_archives_path
+    assert_equal TwitterArchiveImportSubmission::INVALID_UPLOAD_ALERT, flash[:alert]
+    assert ActiveStorage::Blob.exists?(blob.id)
+  ensure
+    blob&.purge
+  end
+
   test "create refuses to queue a new import while another import is active" do
     TwitterArchiveImport.create!(
       source_filename: "existing-twitter-archive.zip",
@@ -203,5 +261,18 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     end
 
     zip_path
+  end
+
+  def build_zip_bytes(files)
+    Zip::OutputStream.write_buffer do |zip|
+      files.each do |name, content|
+        zip.put_next_entry(name)
+        zip.write(content)
+      end
+    end.string
+  end
+
+  def twitter_archive_direct_upload_token(blob)
+    blob.signed_id(purpose: :twitter_archive_import)
   end
 end

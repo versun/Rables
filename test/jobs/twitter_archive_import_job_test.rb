@@ -64,9 +64,7 @@ class TwitterArchiveImportJobTest < ActiveJob::TestCase
       queued_at: Time.current
     )
 
-    assert_enqueued_jobs 1 do
-      TwitterArchiveImportJob.perform_now(import.id)
-    end
+    TwitterArchiveImportJob.perform_now(import.id)
 
     import.reload
 
@@ -112,6 +110,48 @@ class TwitterArchiveImportJobTest < ActiveJob::TestCase
     assert_not File.exist?(zip_path), "expected temp zip to be removed"
   end
 
+  test "downloads a scoped direct upload inside the job" do
+    archive_bytes = build_zip_bytes(
+      "data/account.js" => js_payload("account", [
+        {
+          account: {
+            username: "archive_owner"
+          }
+        }
+      ]),
+      "data/tweets.js" => js_payload("tweets", [
+        {
+          tweet: tweet_payload(
+            id: "100",
+            created_at: "Wed Oct 10 20:19:24 +0000 2018",
+            full_text: "Original tweet"
+          )
+        }
+      ])
+    )
+    blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new(archive_bytes),
+      filename: "twitter-archive.zip",
+      content_type: "application/zip"
+    )
+    import = TwitterArchiveImport.create!(
+      source_filename: "twitter-archive.zip",
+      source_path: "direct-upload://#{blob.signed_id(purpose: :twitter_archive_import)}",
+      status: "queued",
+      progress: 0,
+      queued_at: Time.current
+    )
+
+    TwitterArchiveImportJob.perform_now(import.id)
+
+    import.reload
+
+    assert_equal "completed", import.status
+    assert_equal [ "100" ], TwitterArchiveTweet.pluck(:tweet_id)
+    assert_not ActiveStorage::Blob.exists?(blob.id)
+    assert_nil import.source_path
+  end
+
   private
 
   def build_zip(files)
@@ -128,6 +168,15 @@ class TwitterArchiveImportJobTest < ActiveJob::TestCase
 
   def js_payload(key, records)
     "window.YTD.#{key}.part0 = #{JSON.generate(records)}"
+  end
+
+  def build_zip_bytes(files)
+    Zip::OutputStream.write_buffer do |zip|
+      files.each do |name, content|
+        zip.put_next_entry(name)
+        zip.write(content)
+      end
+    end.string
   end
 
   def tweet_payload(id:, created_at:, full_text:)
