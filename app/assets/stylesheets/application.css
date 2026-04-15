@@ -1632,6 +1632,106 @@ h2 {
     border: 1px solid var(--border-color);
 }
 
+[data-theme="dark"] .article-content pre[class*="language-"],
+[data-theme="dark"] .post-content pre[class*="language-"],
+[data-theme="dark"] .article-content code[class*="language-"],
+[data-theme="dark"] .post-content code[class*="language-"] {
+    background-color: #0d1117;
+    color: #c9d1d9;
+    text-shadow: none;
+}
+
+[data-theme="dark"] .article-content pre[class*="language-"],
+[data-theme="dark"] .post-content pre[class*="language-"] {
+    border: 1px solid var(--border-color);
+}
+
+[data-theme="dark"] .article-content pre[class*="language-"] code,
+[data-theme="dark"] .post-content pre[class*="language-"] code,
+[data-theme="dark"] .article-content pre code[class*="language-"],
+[data-theme="dark"] .post-content pre code[class*="language-"] {
+    background-color: transparent;
+    border: none;
+    color: inherit;
+}
+
+[data-theme="dark"] .article-content .token.comment,
+[data-theme="dark"] .post-content .token.comment,
+[data-theme="dark"] .article-content .token.prolog,
+[data-theme="dark"] .post-content .token.prolog,
+[data-theme="dark"] .article-content .token.doctype,
+[data-theme="dark"] .post-content .token.doctype,
+[data-theme="dark"] .article-content .token.cdata,
+[data-theme="dark"] .post-content .token.cdata {
+    color: #8b949e;
+}
+
+[data-theme="dark"] .article-content .token.punctuation,
+[data-theme="dark"] .post-content .token.punctuation,
+[data-theme="dark"] .article-content .token.operator,
+[data-theme="dark"] .post-content .token.operator,
+[data-theme="dark"] .article-content .token.entity,
+[data-theme="dark"] .post-content .token.entity,
+[data-theme="dark"] .article-content .token.url,
+[data-theme="dark"] .post-content .token.url {
+    color: #c9d1d9;
+}
+
+[data-theme="dark"] .article-content .token.boolean,
+[data-theme="dark"] .post-content .token.boolean,
+[data-theme="dark"] .article-content .token.number,
+[data-theme="dark"] .post-content .token.number,
+[data-theme="dark"] .article-content .token.constant,
+[data-theme="dark"] .post-content .token.constant,
+[data-theme="dark"] .article-content .token.property,
+[data-theme="dark"] .post-content .token.property,
+[data-theme="dark"] .article-content .token.symbol,
+[data-theme="dark"] .post-content .token.symbol {
+    color: #79c0ff;
+}
+
+[data-theme="dark"] .article-content .token.selector,
+[data-theme="dark"] .post-content .token.selector,
+[data-theme="dark"] .article-content .token.attr-name,
+[data-theme="dark"] .post-content .token.attr-name,
+[data-theme="dark"] .article-content .token.string,
+[data-theme="dark"] .post-content .token.string,
+[data-theme="dark"] .article-content .token.char,
+[data-theme="dark"] .post-content .token.char,
+[data-theme="dark"] .article-content .token.builtin,
+[data-theme="dark"] .post-content .token.builtin,
+[data-theme="dark"] .article-content .token.inserted,
+[data-theme="dark"] .post-content .token.inserted,
+[data-theme="dark"] .article-content .token.regex,
+[data-theme="dark"] .post-content .token.regex {
+    color: #a5d6ff;
+}
+
+[data-theme="dark"] .article-content .token.keyword,
+[data-theme="dark"] .post-content .token.keyword,
+[data-theme="dark"] .article-content .token.atrule,
+[data-theme="dark"] .post-content .token.atrule,
+[data-theme="dark"] .article-content .token.tag,
+[data-theme="dark"] .post-content .token.tag,
+[data-theme="dark"] .article-content .token.deleted,
+[data-theme="dark"] .post-content .token.deleted {
+    color: #ff7b72;
+}
+
+[data-theme="dark"] .article-content .token.function,
+[data-theme="dark"] .post-content .token.function,
+[data-theme="dark"] .article-content .token.class-name,
+[data-theme="dark"] .post-content .token.class-name {
+    color: #d2a8ff;
+}
+
+[data-theme="dark"] .article-content .token.important,
+[data-theme="dark"] .post-content .token.important,
+[data-theme="dark"] .article-content .token.variable,
+[data-theme="dark"] .post-content .token.variable {
+    color: #ffa657;
+}
+
 [data-theme="dark"] .article-content pre {
     background-color: #0d1117;
     border: 1px solid var(--border-color);

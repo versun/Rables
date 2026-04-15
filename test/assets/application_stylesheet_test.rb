@@ -42,4 +42,19 @@ class ApplicationStylesheetTest < ActiveSupport::TestCase
     assert_includes rule_body, "background-color: #2a2a2a;"
     assert_includes rule_body, "border: 1px solid var(--border-color);"
   end
+
+  test "dark theme styles prism code blocks for article and post content" do
+    stylesheet = File.read(Rails.root.join("app/assets/stylesheets/application.css"))
+
+    assert_includes stylesheet, '[data-theme="dark"] .article-content pre[class*="language-"],'
+    assert_includes stylesheet, '[data-theme="dark"] .post-content pre[class*="language-"],'
+    assert_includes stylesheet, '[data-theme="dark"] .article-content code[class*="language-"],'
+    assert_includes stylesheet, '[data-theme="dark"] .post-content code[class*="language-"]'
+    assert_includes stylesheet, '[data-theme="dark"] .article-content .token.comment,'
+    assert_includes stylesheet, '[data-theme="dark"] .post-content .token.comment,'
+    assert_includes stylesheet, '[data-theme="dark"] .article-content .token.keyword,'
+    assert_includes stylesheet, '[data-theme="dark"] .post-content .token.keyword,'
+    assert_includes stylesheet, '[data-theme="dark"] .article-content .token.string,'
+    assert_includes stylesheet, '[data-theme="dark"] .post-content .token.string,'
+  end
 end
