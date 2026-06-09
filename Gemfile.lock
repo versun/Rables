@@ -225,7 +225,7 @@ GEM
       stimulus-rails
       turbo-rails
     msgpack (1.8.0)
-    net-imap (0.6.3)
+    net-imap (0.6.4.1)
       date
       net-protocol
     net-pop (0.1.2)
