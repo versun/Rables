@@ -60,14 +60,15 @@ class AdminCrosspostsTest < ApplicationSystemTestCase
     assert_no_selector "input[type='file']"
   end
 
-  test "sidebar shows twitter archive link at the end of tools" do
+  test "sidebar shows twitter sync link at the end of tools" do
     sign_in(@user)
     visit admin_crossposts_path(platform: "twitter")
 
     within("nav.sidebar-nav .nav-section:last-child") do
       links = all("a.nav-link").map(&:text)
-      assert_equal [ "Migrate", "Crosspost", "Git", "Newsletter", "Jobs", "Twitter Archive" ], links
+      assert_equal [ "Migrate", "Crosspost", "Git", "Newsletter", "Jobs", "Twitter Archive", "Twitter Sync" ], links
       assert_link "Twitter Archive", href: admin_twitter_archives_path
+      assert_link "Twitter Sync", href: admin_twitter_sync_path
     end
 
     click_link "Twitter Archive"

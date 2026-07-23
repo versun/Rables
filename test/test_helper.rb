@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-if defined?(SimpleCov) && SimpleCov.running
+if defined?(SimpleCov) && Coverage.running?
   process_label = ENV["TEST_ENV_NUMBER"].to_s
   process_label = Process.pid if process_label.empty?
   SimpleCov.command_name "minitest-#{process_label}"
@@ -36,7 +36,7 @@ class ActiveSupport::TestCase
   end
 
   # Run tests in parallel with specified workers unless coverage is enabled.
-  unless defined?(SimpleCov) && SimpleCov.running
+  unless defined?(SimpleCov) && Coverage.running?
     parallelize(workers: :number_of_processors)
   end
 
