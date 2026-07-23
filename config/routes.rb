@@ -104,6 +104,9 @@ Rails.application.routes.draw do
     end
     resources :twitter_archives, only: [ :index, :create ]
     post "twitter_archives/direct_uploads", to: "twitter_archive_direct_uploads#create", as: :twitter_archive_direct_uploads
+    resource :twitter_sync, only: [ :show, :update ], controller: "twitter_sync" do
+      post :sync_now
+    end
 
     # Activity logs
     resources :activities, only: [ :index ]

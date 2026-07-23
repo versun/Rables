@@ -14,6 +14,10 @@ development:
     class: ScheduledFetchSocialCommentsJob
     queue: default
     schedule: every hour
+  sync_twitter:
+    class: SyncTwitterJob
+    queue: default
+    schedule: every 15 minutes
 
 production:
   clear_solid_queue_finished_jobs:
@@ -28,3 +32,7 @@ production:
     class: ScheduledFetchSocialCommentsJob
     queue: default
     schedule: every hour
+  sync_twitter:
+    class: SyncTwitterJob
+    queue: default
+    schedule: every 15 minutes

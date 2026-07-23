@@ -1,0 +1,67 @@
+<div class="admin-container">
+  <h1>Twitter Sync</h1>
+
+  <div class="form-section compact">
+    <h3>Archive Tweets as Articles</h3>
+    <small>
+      Periodically archives original tweets (and quote tweets) from the configured X account as published articles.
+      Uses the X API credentials configured in <%= link_to "Crosspost settings", admin_crossposts_path(platform: "twitter") %>.
+      Requires an X API plan with access to the user timeline endpoint (Basic or above).
+    </small>
+
+    <%= form_with(model: @sync, url: admin_twitter_sync_path, method: :patch) do |f| %>
+      <div class="field checkbox">
+        <%= f.check_box :enabled, id: "twitter_sync_enabled" %>
+        <%= f.label :enabled, "Enable Twitter Sync", for: "twitter_sync_enabled" %>
+      </div>
+
+      <div class="field">
+        <%= f.label :username, "X Username (without @)" %>
+        <%= f.text_field :username, placeholder: "your_username" %>
+        <small>Changing the username resets the sync cursor and starts archiving the new account from scratch.</small>
+      </div>
+
+      <div class="field">
+        <%= f.label :start_date, "Sync From Date" %>
+        <%= f.date_field :start_date %>
+        <small>
+          Only tweets published on or after this date are archived (X Articles and their announcement tweets are always skipped).
+          Changing the date re-backfills from the new date; existing articles are kept and not duplicated.
+          Leave blank to only archive the latest <%= TwitterSyncService::FIRST_RUN_LIMIT %> tweets on the first run and new tweets afterwards.
+        </small>
+      </div>
+
+      <div class="field">
+        <%= f.label :sync_schedule, "Sync Schedule" %>
+        <%= f.select :sync_schedule,
+            options_for_select([
+              ["Every 15 minutes", "every_15_minutes"],
+              ["Hourly", "hourly"],
+              ["Every 6 hours", "every_6_hours"],
+              ["Daily", "daily"],
+              ["Weekly", "weekly"]
+            ], @sync.sync_schedule),
+            {},
+            { class: "form-select" } %>
+        <small>How often new tweets are archived. "Sync Now" always runs immediately regardless of this setting.</small>
+      </div>
+
+      <div class="form-actions">
+        <%= f.submit "Save", class: "btn btn-primary" %>
+      </div>
+    <% end %>
+
+    <div class="field">
+      <p>
+        <strong>Last synced:</strong> <%= @sync.last_synced_at ? l(@sync.last_synced_at, format: :long) : "Never" %><br>
+        <strong>Cursor (since_id):</strong> <%= @sync.since_id.presence || "-" %><br>
+        <strong>Resolved user id:</strong> <%= @sync.user_id.presence || "-" %>
+      </p>
+      <% if @sync.last_error.present? %>
+        <p class="text-danger"><strong>Last error:</strong> <%= @sync.last_error %></p>
+      <% end %>
+    </div>
+
+    <%= button_to "Sync Now", sync_now_admin_twitter_sync_path, method: :post, class: "btn btn-secondary" %>
+  </div>
+</div>

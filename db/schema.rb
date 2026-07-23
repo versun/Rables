@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_03_000120) do
+ActiveRecord::Schema[8.1].define(version: 2026_07_23_053400) do
   create_table "action_text_rich_texts", force: :cascade do |t|
     t.text "body"
     t.datetime "created_at", null: false
@@ -344,6 +344,19 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_03_000120) do
     t.datetime "updated_at", null: false
     t.index ["entry_type", "tweeted_at"], name: "index_twitter_archive_tweets_on_entry_type_and_tweeted_at"
     t.index ["tweet_id"], name: "index_twitter_archive_tweets_on_tweet_id", unique: true
+  end
+
+  create_table "twitter_syncs", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.boolean "enabled", default: false, null: false
+    t.string "last_error"
+    t.datetime "last_synced_at"
+    t.string "since_id"
+    t.date "start_date"
+    t.string "sync_schedule", default: "every_15_minutes", null: false
+    t.datetime "updated_at", null: false
+    t.string "user_id"
+    t.string "username"
   end
 
   create_table "users", force: :cascade do |t|

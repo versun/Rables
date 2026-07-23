@@ -73,6 +73,7 @@ Static site generation has been removed from this repository.
 ### Social Media Integration
 Located in `app/services/`:
 - **TwitterService**: X/Twitter posting with media upload
+- **TwitterSyncService**: Archive tweets from a configured X account as articles (uses Crosspost Twitter credentials)
 - **MastodonService**: Mastodon posting
 - **BlueskyService**: Bluesky posting with rich text facets
 
@@ -82,6 +83,7 @@ Key jobs in `app/jobs/`:
 - `NativeNewsletterSenderJob`: Send newsletters to subscribers
 - `FetchSocialCommentsJob`: Import comments from social posts
 - `PublishScheduledArticlesJob`: Auto-publish scheduled articles
+- `SyncTwitterJob`: Archive new tweets as articles (recurring wakes every 15 minutes; actual sync follows the `sync_schedule` configured in Admin → Twitter Sync)
 
 ### Admin Interface
 All admin routes under `/admin/` namespace. Key controllers handle:
