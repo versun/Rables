@@ -310,20 +310,8 @@ select:focus {
     outline-offset: -1px;
 }
 
-/* TinyMCE Editor Styles */
-.tinymce-editor {
-    width: 100%;
-    min-height: 500px;
-}
-
-/* TinyMCE container styling */
-.tox-tinymce {
-    border-radius: 4px !important;
-    border-color: var(--border) !important;
-}
-
-/* Ensure TinyMCE editor is visible and properly sized */
-.tox-editor-container {
+/* Lexxy editor sizing */
+lexxy-editor {
     min-height: 400px;
 }
 

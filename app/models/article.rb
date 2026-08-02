@@ -129,7 +129,7 @@ class Article < ApplicationRecord
       end
     end
 
-    # 对于 TinyMCE 编辑器，从 HTML 中提取所有图片 URL
+    # 对于旧 TinyMCE 内容（纯 <img> 标签而非 ActionText attachment），从 HTML 中提取所有图片 URL
     if images.size < limit
       existing_blob_ids = images.filter_map { |img| img.is_a?(ActiveStorage::Blob) ? img.id : nil }
       html = html? ? html_content : content.to_s

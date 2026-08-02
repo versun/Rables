@@ -2,10 +2,9 @@
 import "@hotwired/turbo-rails";
 import * as ActiveStorage from "@rails/activestorage";
 import "controllers";
-import "@rails/actiontext";
 import hljs from "highlight.js";
 import { configurePrism, highlightAll } from "prism_highlighting";
-import "tinymce_config";
+import "lexxy";
 
 ActiveStorage.start();
 

@@ -27,9 +27,7 @@
         </div>
 
         <div class="field" id="rich_text_field" data-content-form-target="richTextField" style="display: <%= form.object.html? ? 'none' : 'block' %>">
-          <%= form.text_area :content,
-              class: "tinymce-editor",
-              value: form.object.content.to_s %>
+          <%= form.rich_text_area :content %>
         </div>
 
         <div class="field" id="html_content_field" data-content-form-target="htmlContentField" style="display: <%= form.object.html? ? 'block' : 'none' %>">

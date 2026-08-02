@@ -102,7 +102,7 @@ All admin routes under `/admin/` namespace. Key controllers handle:
 ### Frontend
 - Uses Hotwire (Turbo + Stimulus)
 - Importmap for JS modules
-- Trix editor for rich text (ActionText)
+- Lexxy editor for rich text (ActionText)
 - CSS in `application.css`
 
 ### Storage

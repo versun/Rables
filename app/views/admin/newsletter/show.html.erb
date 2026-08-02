@@ -83,9 +83,7 @@
 
           <div class="field">
             <%= form.label :footer, "Email Footer (Rich Text)" %>
-            <%= form.text_area :footer,
-                class: "tinymce-editor",
-                value: @newsletter_setting.footer.to_s %>
+            <%= form.rich_text_area :footer %>
           </div>
 
           <div style="margin-top: 20px;">

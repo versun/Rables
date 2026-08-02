@@ -78,9 +78,7 @@
 
     <div class="field">
       <%= form.label :footer %>
-      <%= form.text_area :footer,
-          class: "tinymce-editor",
-          value: @setting.footer.to_s %>
+      <%= form.rich_text_area :footer %>
     </div>
   </div>
 

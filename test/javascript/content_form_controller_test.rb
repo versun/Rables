@@ -13,16 +13,13 @@ class ContentFormControllerTest < ActiveSupport::TestCase
     module_url = "data:text/javascript;base64,#{Base64.strict_encode64(source)}"
 
     script = <<~JS
-      let editorContent = "<p>&nbsp;</p>";
-      globalThis.tinymce = {
-        triggerSave() {},
-        get() { return { getContent: () => editorContent }; }
-      };
+      // lexxy-editor 自定义元素，value 属性即当前 HTML 内容
+      const editor = { value: "<p>&nbsp;</p>" };
       globalThis.alert = () => {};
 
       const { default: ContentFormController } = await import(#{module_url.inspect});
       const controller = new ContentFormController();
-      controller.element = { querySelector() { return null; } };
+      controller.element = { querySelector() { return editor; } };
       controller.paramValue = "article";
       controller.contentTypeSelectTarget = { value: "rich_text" };
 
@@ -32,7 +29,7 @@ class ContentFormControllerTest < ActiveSupport::TestCase
         throw new Error("expected markup-only rich text content to block submit");
       }
 
-      editorContent = "<p>Hello world</p>";
+      editor.value = "<p>Hello world</p>";
       controller.submit({ preventDefault() { throw new Error("should not block non-empty content"); } });
     JS
 

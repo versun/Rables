@@ -12,7 +12,7 @@ Rails.application.configure do
     # Article/page HTML content may hotlink images from anywhere.
     policy.img_src     :self, :data, :https
     policy.object_src  :none
-    # cdn.jsdelivr.net: prism, tinymce, highlight.js (see config/importmap.rb).
+    # cdn.jsdelivr.net: prism, highlight.js (see config/importmap.rb).
     # giscus.app: the admin-pasted giscus embed snippet.
     # :unsafe_inline: inline snippets injected via the head_code setting.
     policy.script_src  :self, :unsafe_inline, "https://cdn.jsdelivr.net", "https://giscus.app"

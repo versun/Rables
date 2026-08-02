@@ -4,9 +4,9 @@ import { Controller } from "@hotwired/stimulus"
 // 从 admin/articles 与 admin/pages 表单内联 <script> 迁移而来：
 // - 定时发布：status 切换为 schedule 时显示 scheduled_at 字段
 // - content_type 切换 rich text / HTML 编辑器的显隐与 required 属性
-// - 提交前同步 TinyMCE 内容并做非空验证
+// - 提交前做内容非空验证
 // data-content-form-param-value 参数化模型名（article / page），
-// 用于定位 tinymce.get("<param>_content") 与 textarea name 选择器。
+// 用于定位 lexxy-editor 元素与 html_content textarea。
 export default class extends Controller {
   static targets = [
     "scheduledAt",
@@ -45,7 +45,7 @@ export default class extends Controller {
     }
   }
 
-  // TinyMCE 空内容常是 "<p>&nbsp;</p>" 这类标记，剥离 HTML 标签和 &nbsp; 后再判空
+  // Lexxy 空内容常是 "<p><br></p>" 这类标记，剥离 HTML 标签和 &nbsp; 后再判空
   richTextContentBlank(content) {
     const text = (content || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").trim()
     return text.length === 0
@@ -56,28 +56,11 @@ export default class extends Controller {
     const isHtml = this.contentTypeSelectTarget.value === "html"
     const form = this.element
 
-    // 同步 TinyMCE 内容到 textarea（如果不是 HTML 模式）
-    if (!isHtml && typeof tinymce !== "undefined") {
-      tinymce.triggerSave()
-    }
-
-    // 自定义验证：检查内容是否为空
     if (!isHtml) {
-      // Rich Text 模式：检查 TinyMCE 内容
-      let content = ""
-      if (typeof tinymce !== "undefined") {
-        const editor = tinymce.get(`${this.paramValue}_content`)
-        if (editor) {
-          content = editor.getContent().trim()
-        }
-      }
-      // 如果 TinyMCE 未加载，检查 textarea 的值
-      if (!content) {
-        const textarea = form.querySelector(`textarea[name="${this.paramValue}[content]"]`)
-        if (textarea && textarea.value.trim()) {
-          content = textarea.value.trim()
-        }
-      }
+      // Rich Text 模式：lexxy-editor 是 form-associated 自定义元素，
+      // 其 value 属性即当前 HTML 内容（未升级的元素回退到初始 value attribute）
+      const editor = form.querySelector(`lexxy-editor[name="${this.paramValue}[content]"]`)
+      const content = editor ? (editor.value ?? editor.getAttribute("value") ?? "") : ""
       if (this.richTextContentBlank(content)) {
         event.preventDefault()
         alert("Content cannot be blank")

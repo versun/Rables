@@ -23,6 +23,8 @@ gem "propshaft"
 gem "puma"
 # Use JavaScript with ESM import maps [https://github.com/rails/importmap-rails]
 gem "importmap-rails"
+# Modern rich text editor for Action Text [https://github.com/basecamp/lexxy]
+gem "lexxy", "~> 0.9.28"
 # Hotwire's SPA-like page accelerator [https://turbo.hotwired.dev]
 gem "turbo-rails"
 # Hotwire's modest JavaScript framework [https://stimulus.hotwired.dev]
