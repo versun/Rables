@@ -5,7 +5,7 @@ class StaticFilesController < ApplicationController
     filename = params[:filename].is_a?(Array) ? params[:filename].join("/") : params[:filename]
 
     # Find by StaticFile filename
-    static_file = StaticFile.find_by(filename: filename)
+    static_file = StaticFile.includes(file_attachment: :blob).find_by(filename: filename)
 
     if static_file&.file&.attached?
       # 公共对象直接跳转服务 URL，避免 302 二次跳转

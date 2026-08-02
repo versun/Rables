@@ -3,11 +3,7 @@
 <% end %>
 <article>
   <div class="article-content">
-    <% if @page.html? %>
-      <%= safe_html_content(@page.html_content) %>
-    <% else %>
-      <%= @page.content %>
-    <% end %>
+    <%= @page.rendered_content %>
   </div>
 </article>
 

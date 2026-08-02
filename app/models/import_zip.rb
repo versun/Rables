@@ -5,8 +5,6 @@ class ImportZip
   require "nokogiri"
   require "open-uri"
   require "securerandom"
-  require "shellwords"
-  require "stringio"
 
   attr_reader :error_message, :import_dir, :zip_path
 
@@ -68,6 +66,7 @@ class ImportZip
     )
     false
   ensure
+    @attached_import_files&.each { |file| file.close unless file.closed? }
     FileUtils.rm_rf(@import_dir) if @import_dir && File.directory?(@import_dir)
   end
 
@@ -84,7 +83,7 @@ class ImportZip
         end
         FileUtils.mkdir_p(File.dirname(extract_path))
         begin
-          File.open(extract_path, "wb") { |f| f.write(entry.get_input_stream.read) }
+          entry.extract(entry.name, destination_directory: @import_dir.to_s) { true }
           Rails.event.notify("import_zip.file_extracted", component: "ImportZip", entry_name: entry.name, extract_path: extract_path, level: "info")
         rescue => e
           Rails.event.notify("import_zip.extraction_failed", component: "ImportZip", entry_name: entry.name, error: e.message, level: "error")
@@ -98,11 +97,14 @@ class ImportZip
   # Find the directory containing CSV files
   # This handles cases where ZIP files have a subdirectory wrapper
   def find_csv_base_dir
-    # First check if CSV files are in the root import directory
-    return @import_dir if Dir.glob(File.join(@import_dir, "*.csv")).any?
-
-    # Otherwise, search for the first subdirectory containing CSV files
-    Dir.glob(File.join(@import_dir, "*", "*.csv")).first&.then { |path| File.dirname(path) } || @import_dir
+    @csv_base_dir ||=
+      # First check if CSV files are in the root import directory
+      if Dir.glob(File.join(@import_dir, "*.csv")).any?
+        @import_dir
+      else
+        # Otherwise, search for the first subdirectory containing CSV files
+        Dir.glob(File.join(@import_dir, "*", "*.csv")).first&.then { |path| File.dirname(path) } || @import_dir
+      end
   end
 
   def import_tags
@@ -778,10 +780,12 @@ class ImportZip
         updated_at: row["updated_at"]
       )
 
-      # 读取文件内容到内存，避免文件流关闭问题
-      file_content = File.binread(file_path)
+      # 直接以文件句柄附加，避免整文件读入内存；Active Storage 在事务提交后
+      # 才读取 io 上传，句柄需保持打开，统一在 import_data 的 ensure 中关闭
+      file = File.open(file_path, "rb")
+      (@attached_import_files ||= []) << file
       static_file.file.attach(
-        io: StringIO.new(file_content),
+        io: file,
         filename: row["filename"],
         content_type: detect_content_type(file_path)
       )
@@ -1228,8 +1232,8 @@ class ImportZip
   end
 
   def detect_content_type(file_path)
-    mime_type = `file --brief --mime-type #{file_path.shellescape}`.strip rescue nil
-    mime_type.present? && !mime_type.include?("error") ? mime_type : "application/octet-stream"
+    mime_type = Marcel::MimeType.for(Pathname.new(file_path)) rescue nil
+    mime_type.presence || "application/octet-stream"
   end
 
   def safe_join_path(base_path, relative_path)

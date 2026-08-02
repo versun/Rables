@@ -565,10 +565,11 @@ class Admin::ArticlesController < Admin::BaseController
 
   def set_form_options
     @newsletter_enabled = NewsletterSetting.instance.enabled?
-    @mastodon_enabled = Crosspost.find_by(platform: "mastodon")&.enabled?
-    @twitter_enabled = Crosspost.find_by(platform: "twitter")&.enabled?
-    @bluesky_enabled = Crosspost.find_by(platform: "bluesky")&.enabled?
-    @xiaohongshu_enabled = Crosspost.find_by(platform: "xiaohongshu")&.enabled?
+    crossposts = Crosspost.where(platform: Crosspost::PLATFORMS).index_by(&:platform)
+    @mastodon_enabled = crossposts["mastodon"]&.enabled?
+    @twitter_enabled = crossposts["twitter"]&.enabled?
+    @bluesky_enabled = crossposts["bluesky"]&.enabled?
+    @xiaohongshu_enabled = crossposts["xiaohongshu"]&.enabled?
   end
 
   def article_params

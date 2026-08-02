@@ -7,6 +7,10 @@ class NewsletterSetting < ApplicationRecord
   validates :provider, inclusion: { in: %w[native listmonk] }
   validates :from_email, presence: true, format: { with: URI::MailTo::EMAIL_REGEXP }, if: -> { enabled? && provider == "native" }
 
+  # Invalidate CacheableSettings.newsletter_setting on every write path
+  # (admin form, ZIP import, console), not just the admin controller.
+  after_commit { CacheableSettings.refresh_newsletter_setting }
+
   def self.instance
     first_or_initialize
   end

@@ -1414,4 +1414,41 @@ class TwitterServiceTest < ActiveSupport::TestCase
     assert_equal 1, calls
     assert_empty slept
   end
+
+  test "fetch_username caches the username per access token and skips nil results" do
+    memory_cache = ActiveSupport::Cache::MemoryStore.new
+    service = TwitterService.new
+    service.instance_variable_set(:@settings, Crosspost.new(platform: "twitter", access_token: "token-a"))
+
+    calls = 0
+    fake_client = Object.new
+    fake_client.define_singleton_method(:get) do |_path|
+      calls += 1
+      { "data" => { "username" => "alice" } }
+    end
+
+    Rails.stub(:cache, memory_cache) do
+      assert_equal "alice", service.send(:fetch_username, fake_client)
+      assert_equal "alice", service.send(:fetch_username, fake_client)
+      assert_equal 1, calls # second call served from cache
+
+      # nil results must not be cached (skip_nil), so a retry re-calls the API
+      # (use a different access token to get a fresh cache key)
+      service.instance_variable_set(:@settings, Crosspost.new(platform: "twitter", access_token: "token-nil"))
+      nil_calls = 0
+      nil_client = Object.new
+      nil_client.define_singleton_method(:get) do |_path|
+        nil_calls += 1
+        {}
+      end
+      assert_nil service.send(:fetch_username, nil_client)
+      assert_nil service.send(:fetch_username, nil_client)
+      assert_equal 2, nil_calls
+
+      # switching the access token must not reuse the old account's username
+      service.instance_variable_set(:@settings, Crosspost.new(platform: "twitter", access_token: "token-b"))
+      assert_equal "alice", service.send(:fetch_username, fake_client)
+      assert_equal 2, calls
+    end
+  end
 end

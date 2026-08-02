@@ -1,13 +1,13 @@
 class Admin::StaticFilesController < Admin::BaseController
   def index
-    @static_files = StaticFile.order(created_at: :desc)
+    @static_files = StaticFile.includes(file_attachment: :blob).order(created_at: :desc)
   end
 
   def create
     uploaded_file = params.dig(:static_file, :file)
 
     unless uploaded_file
-      @static_files = StaticFile.order(created_at: :desc)
+      @static_files = StaticFile.includes(file_attachment: :blob).order(created_at: :desc)
       flash.now[:alert] = "请选择要上传的文件"
       render :index
       return
@@ -37,7 +37,7 @@ class Admin::StaticFilesController < Admin::BaseController
           filename: new_filename,
           errors: existing_file.errors.full_messages.join(", ")
         )
-        @static_files = StaticFile.order(created_at: :desc)
+        @static_files = StaticFile.includes(file_attachment: :blob).order(created_at: :desc)
         flash.now[:alert] = "文件上传失败: #{existing_file.errors.full_messages.join(', ')}"
         render :index
       end
@@ -61,7 +61,7 @@ class Admin::StaticFilesController < Admin::BaseController
           filename: new_filename,
           errors: @static_file.errors.full_messages.join(", ")
         )
-        @static_files = StaticFile.order(created_at: :desc)
+        @static_files = StaticFile.includes(file_attachment: :blob).order(created_at: :desc)
         flash.now[:alert] = "文件上传失败: #{@static_file.errors.full_messages.join(', ')}"
         render :index
       end

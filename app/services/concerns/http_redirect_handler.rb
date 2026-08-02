@@ -50,7 +50,7 @@ module HttpRedirectHandler
 
     # Convert relative URL to absolute
     if image_url.start_with?("/")
-      site_url = Setting.first&.url.presence || "http://localhost:3000"
+      site_url = CacheableSettings.site_info[:url].presence || "http://localhost:3000"
       image_url = "#{site_url}#{image_url}"
     end
 

@@ -25,18 +25,27 @@ class Admin::BaseController < ApplicationController
 
     filtered_posts = filter_by_status(scope)
     filtered_posts = apply_model_includes(filtered_posts)
-    filtered_posts.paginate(page: @page, per_page: @per_page)
-                  .order(sort_by => :desc)
+    posts = filtered_posts.paginate(page: @page, per_page: @per_page)
+                          .order(sort_by => :desc)
+    @comment_counts = load_comment_counts(scope.model, posts)
+    posts
   end
 
   def apply_model_includes(scope)
     model_class = scope.model
-    includes = [ :comments ]
+    includes = []
     includes << :tags if model_class.reflect_on_association(:tags)
     includes << :social_media_posts if model_class.reflect_on_association(:social_media_posts)
-    # Preload rich text so list rows calling plain_text_content don't trigger N+1 queries
-    includes << :rich_text_content if model_class.reflect_on_association(:rich_text_content)
+    # Preload rich text so article list rows calling plain_text_content don't trigger N+1 queries
+    includes << :rich_text_content if model_class == Article
     scope.includes(includes)
+  end
+
+  # List rows only display a comment count, so fetch grouped counts in one
+  # query instead of preloading full comment records (including content)
+  def load_comment_counts(model_class, posts)
+    return {} unless model_class == Article
+    Comment.where(commentable_type: model_class.name, commentable_id: posts.map(&:id)).group(:commentable_id).count
   end
 
   def filter_by_status(posts)

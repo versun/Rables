@@ -43,9 +43,9 @@ class MarkdownExport
 
     articles_dir = File.join(@export_dir, "articles")
     FileUtils.mkdir_p(articles_dir)
-    used_basenames = []
+    used_basenames = Set.new
 
-    Article.order(:id).includes(:tags).find_each do |article|
+    Article.order(:id).includes(:tags, :rich_text_content).find_each do |article|
       html = html_for_article(article)
       markdown = ReverseMarkdown.convert(html, unknown_tags: :bypass, github_flavored: true, force_encoding: true).to_s
       reference = reference_markdown_for(article)
@@ -83,9 +83,9 @@ class MarkdownExport
 
     pages_dir = File.join(@export_dir, "pages")
     FileUtils.mkdir_p(pages_dir)
-    used_basenames = []
+    used_basenames = Set.new
 
-    Page.order(:id).find_each do |page|
+    Page.includes(:rich_text_content).order(:id).find_each do |page|
       html = html_for_page(page)
       markdown = ReverseMarkdown.convert(html, unknown_tags: :bypass, github_flavored: true, force_encoding: true).to_s
 

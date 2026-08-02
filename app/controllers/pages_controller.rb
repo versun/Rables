@@ -25,6 +25,9 @@ class PagesController < ApplicationController
   private
 
   def set_Page
-    @page = Page.includes(comments: [ :replies ]).find_by(slug: params[:slug])
+    @page = Page.includes(
+      comments: { replies: { replies: { replies: { replies: :replies } } } },
+      rich_text_content: { embeds_attachments: :blob }
+    ).find_by(slug: params[:slug])
   end
 end

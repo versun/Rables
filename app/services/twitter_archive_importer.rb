@@ -66,17 +66,16 @@ class TwitterArchiveImporter
       end
     end
 
+    # Rows were already deduplicated in memory during parsing (seen_connections/
+    # seen_likes), and the database unique indexes back that up, so insert_all!
+    # can skip per-row instantiation and validations.
     ActiveRecord::Base.transaction do
-      archive_data[:followers].each do |row|
-        TwitterArchiveConnection.create!(row)
+      (archive_data[:followers] + archive_data[:following]).each_slice(TWEET_BATCH_SIZE) do |rows|
+        TwitterArchiveConnection.insert_all!(rows)
       end
 
-      archive_data[:following].each do |row|
-        TwitterArchiveConnection.create!(row)
-      end
-
-      archive_data[:likes].each do |row|
-        TwitterArchiveLike.create!(row)
+      archive_data[:likes].each_slice(TWEET_BATCH_SIZE) do |rows|
+        TwitterArchiveLike.insert_all!(rows)
       end
     end
   end

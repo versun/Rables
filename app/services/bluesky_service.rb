@@ -626,15 +626,26 @@ class BlueskyService
     rkey = match[2]
 
     # Resolve handle to DID
-    begin
+    did = resolve_handle_to_did(handle)
+    did ? "at://#{did}/app.bsky.feed.post/#{rkey}" : nil
+  end
+
+  # Resolve handle to DID (cached for 1 day; DID is a stable identifier.
+  # Failures return nil and are not cached: skip_nil keeps block-level nil
+  # results out of the cache, and exceptions bypass the cache write entirely.)
+  def resolve_handle_to_did(handle)
+    Rails.cache.fetch("bluesky_did:#{handle}", expires_in: 1.day, skip_nil: true) do
       resolve_uri = URI("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle")
       resolve_uri.query = URI.encode_www_form(handle: handle)
 
-      response = Net::HTTP.get_response(resolve_uri)
+      http = Net::HTTP.new(resolve_uri.host, resolve_uri.port)
+      http.use_ssl = true
+      http.open_timeout = 5
+      http.read_timeout = 5
+
+      response = http.request(Net::HTTP::Get.new(resolve_uri))
       if response.is_a?(Net::HTTPSuccess)
-        result = JSON.parse(response.body)
-        did = result["did"]
-        "at://#{did}/app.bsky.feed.post/#{rkey}"
+        JSON.parse(response.body)["did"]
       else
         Rails.event.notify "bluesky_service.handle_resolution_failed",
           level: "error",
@@ -642,13 +653,13 @@ class BlueskyService
           handle: handle
         nil
       end
-    rescue => e
-      Rails.event.notify "bluesky_service.handle_resolution_error",
-        level: "error",
-        component: "BlueskyService",
-        error_message: e.message
-      nil
     end
+  rescue => e
+    Rails.event.notify "bluesky_service.handle_resolution_error",
+      level: "error",
+      component: "BlueskyService",
+      error_message: e.message
+    nil
   end
 
   # Flatten nested thread replies into a flat comment list, preserving parent relationships

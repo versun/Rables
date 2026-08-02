@@ -19,7 +19,7 @@ module Exports
           relative_path = relative_path.encode("UTF-8", invalid: :replace, undef: :replace, replace: "_")
 
           zos.put_next_entry(relative_path)
-          zos.write(File.binread(file))
+          File.open(file, "rb") { |f| IO.copy_stream(f, zos) }
         end
       end
 

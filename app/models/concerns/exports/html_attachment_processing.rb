@@ -100,7 +100,7 @@ module Exports
         return unless blob
 
         filename = blob.filename.to_s
-        new_url = download_and_save_attachment(original_url, filename, record_id, record_type)
+        new_url = download_and_save_attachment(original_url, filename, record_id, record_type, blob: blob)
         img["src"] = new_url if new_url
       # 处理外部图片 URL (RemoteImage)
       elsif original_url.start_with?("http")
@@ -150,14 +150,14 @@ module Exports
       nil
     end
 
-    def download_and_save_attachment(original_url, filename, record_id, record_type)
+    def download_and_save_attachment(original_url, filename, record_id, record_type, blob: nil)
       record_attachments_dir = File.join(attachments_dir, "#{record_type}_#{record_id}")
       FileUtils.mkdir_p(record_attachments_dir)
 
       new_filename = "#{SecureRandom.hex(8)}_#{filename}"
       local_path = File.join(record_attachments_dir, new_filename)
 
-      blob = ActiveStorageBlobFinder.find_blob_from_url(original_url)
+      blob ||= ActiveStorageBlobFinder.find_blob_from_url(original_url)
       if blob
         File.open(local_path, "wb") { |f| f.write(blob.download) }
       else
@@ -179,13 +179,19 @@ module Exports
       original_url = original_url.to_s
       return original_url if original_url.start_with?("http")
 
-      base_url = if defined?(Setting) && Setting.respond_to?(:table_exists?) && Setting.table_exists?
-                   Setting.first&.url.presence
-      end
-      base_url = base_url.presence || ENV["BASE_URL"].presence || "http://localhost:3000"
-      base_url = base_url.chomp("/")
+      base_url = site_base_url
 
       original_url.start_with?("/") ? "#{base_url}#{original_url}" : "#{base_url}/#{original_url}"
+    end
+
+    def site_base_url
+      @site_base_url ||= begin
+        base_url = if defined?(Setting) && Setting.respond_to?(:table_exists?) && Setting.table_exists?
+                     Setting.first&.url.presence
+        end
+        base_url = base_url.presence || ENV["BASE_URL"].presence || "http://localhost:3000"
+        base_url.chomp("/")
+      end
     end
   end
 end

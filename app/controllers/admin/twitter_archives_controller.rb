@@ -3,7 +3,7 @@ class Admin::TwitterArchivesController < Admin::BaseController
     @twitter_archive_counts = TwitterArchiveTweet.group(:entry_type).count
     @twitter_archive_connection_counts = TwitterArchiveConnection.group(:relationship_type).count
     @twitter_archive_likes_count = TwitterArchiveLike.count
-    @twitter_archive_total = TwitterArchiveTweet.count + TwitterArchiveConnection.count + @twitter_archive_likes_count
+    @twitter_archive_total = @twitter_archive_counts.values.sum + @twitter_archive_connection_counts.values.sum + @twitter_archive_likes_count
     @twitter_archive_updated_at = TwitterArchiveImport.last_imported_at
     @twitter_archive_imports = TwitterArchiveImport.recent_first.limit(10)
   end

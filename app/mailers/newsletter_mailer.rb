@@ -9,13 +9,13 @@ class NewsletterMailer < ApplicationMailer
     base.merge(options)
   end
 
-  def article_email(article, subscriber, site_info)
+  def article_email(article, subscriber, site_info, newsletter_setting: nil, site_url: nil)
     @article = article
     @subscriber = subscriber
     @site_info = site_info
-    @newsletter_setting = NewsletterSetting.instance
+    @newsletter_setting = newsletter_setting || NewsletterSetting.instance
     @footer = @newsletter_setting.footer
-    @site_url = normalized_site_url
+    @site_url = normalized_site_url(site_url)
     @article_url = article_full_url(@article, @site_url)
 
     # Build unsubscribe URL using rails_api_url
@@ -92,10 +92,11 @@ class NewsletterMailer < ApplicationMailer
     "noreply@example.com"
   end
 
-  def normalized_site_url
+  def normalized_site_url(raw_url = nil)
     return "" unless Setting.respond_to?(:table_exists?) && Setting.table_exists?
 
-    raw_url = Setting.first&.url.to_s.strip
+    raw_url = raw_url.nil? ? Setting.first&.url : raw_url
+    raw_url = raw_url.to_s.strip
     return "" if raw_url.blank?
 
     site_url = raw_url.chomp("/")

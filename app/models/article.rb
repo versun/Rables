@@ -193,7 +193,7 @@ class Article < ApplicationRecord
 
   # 获取内容的纯文本版本（用于社交媒体等）
   def plain_text_content
-    if html?
+    @plain_text_content ||= if html?
       ActionView::Base.full_sanitizer.sanitize(html_content || "")
     else
       content.present? ? content.to_plain_text : ""
@@ -214,18 +214,20 @@ class Article < ApplicationRecord
     if meta_description.present?
       meta_description
     else
-      # 使用文章开头的纯文本，截取前160个字符
-      text = plain_text_content
-      if text.present?
-        # 移除多余的空白字符
-        text = text.squish
-        # 截取前160个字符，如果超过则在单词边界截断
-        if text.length > 160
-          text = text[0..156] + "..."
+      seo_cache_fetch("seo_meta_description") do
+        # 使用文章开头的纯文本，截取前160个字符
+        text = plain_text_content
+        if text.present?
+          # 移除多余的空白字符
+          text = text.squish
+          # 截取前160个字符，如果超过则在单词边界截断
+          if text.length > 160
+            text = text[0..156] + "..."
+          end
+          text
+        else
+          description
         end
-        text
-      else
-        description
       end
     end
   end
@@ -234,26 +236,35 @@ class Article < ApplicationRecord
     if meta_image.present?
       meta_image
     else
-      # 尝试从文章内容中获取第一张图片
-      image_attachment = first_image_attachment
-      if image_attachment
-        if image_attachment.is_a?(ActiveStorage::Blob)
-          # 公共对象直接返回服务 URL，私有对象返回相对路径
-          if image_attachment.service.public?
+      seo_cache_fetch("seo_meta_image") do
+        # 尝试从文章内容中获取第一张图片
+        image_attachment = first_image_attachment
+        if image_attachment
+          if image_attachment.is_a?(ActiveStorage::Blob)
+            # 公共对象直接返回服务 URL，私有对象返回相对路径
+            if image_attachment.service.public?
+              image_attachment.url
+            else
+              Rails.application.routes.url_helpers.rails_blob_path(image_attachment, only_path: true)
+            end
+          elsif image_attachment.is_a?(ActionText::Attachables::RemoteImage) || image_attachment.is_a?(RemoteImageWrapper)
             image_attachment.url
-          else
-            Rails.application.routes.url_helpers.rails_blob_path(image_attachment, only_path: true)
           end
-        elsif image_attachment.is_a?(ActionText::Attachables::RemoteImage) || image_attachment.is_a?(RemoteImageWrapper)
-          image_attachment.url
+        else
+          nil
         end
-      else
-        nil
       end
     end
   end
 
   private
+
+  # 缓存 SEO 默认值的计算结果；未持久化的记录不缓存（cache_key 对所有新记录相同）
+  def seo_cache_fetch(key)
+    return yield unless persisted?
+
+    Rails.cache.fetch("#{cache_key_with_version}/#{key}", expires_in: 7.days) { yield }
+  end
 
   def generate_slug
     if slug.blank?
@@ -420,6 +431,8 @@ class Article < ApplicationRecord
 
   def handle_crosspost
     return false unless publish?
+    # 未勾选任何平台时无需查询 Crosspost 配置
+    return false unless CROSSPOST_PLATFORMS.any? { |platform| crosspost_selected?(platform) }
 
     crossposts = Crosspost.where(platform: CROSSPOST_PLATFORMS).index_by(&:platform)
     CROSSPOST_PLATFORMS.each do |platform|
@@ -443,6 +456,22 @@ class Article < ApplicationRecord
       return false
     end
 
+    # 检查 send_newsletter 虚拟属性（用于新文章）
+    # Rails check_box 会发送 "1" 当勾选时，"0" 当未勾选时
+    # 但也可能收到 true/false 布尔值，或者字符串 "true"/"false"
+    send_checked = truthy_selection_value?(send_newsletter)
+
+    # 检查 resend_newsletter 虚拟属性（用于已存在文章）
+    resend_checked = truthy_selection_value?(resend_newsletter)
+
+    # 只要勾选了任一复选框即发送；未勾选时无需查询 NewsletterSetting
+    result = send_checked || resend_checked
+
+    unless result
+      Rails.event.notify("article.newsletter_check_result", level: "info", component: "Article", article_id: id, should_send: false, send_checked: send_checked, resend_checked: resend_checked)
+      return false
+    end
+
     newsletter_setting = NewsletterSetting.instance
     enabled = newsletter_setting.enabled?
     configured = newsletter_setting.configured?
@@ -457,17 +486,6 @@ class Article < ApplicationRecord
       Rails.event.notify("article.newsletter_check_skipped", level: "info", component: "Article", article_id: id, reason: "not_enabled_or_configured")
       return false
     end
-
-    # 检查 send_newsletter 虚拟属性（用于新文章）
-    # Rails check_box 会发送 "1" 当勾选时，"0" 当未勾选时
-    # 但也可能收到 true/false 布尔值，或者字符串 "true"/"false"
-    send_checked = truthy_selection_value?(send_newsletter)
-
-    # 检查 resend_newsletter 虚拟属性（用于已存在文章）
-    resend_checked = truthy_selection_value?(resend_newsletter)
-
-    # 只要勾选了任一复选框即发送
-    result = send_checked || resend_checked
 
     Rails.event.notify("article.newsletter_check_result", level: "info", component: "Article", article_id: id, should_send: result, send_checked: send_checked, resend_checked: resend_checked)
 

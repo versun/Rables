@@ -13,8 +13,7 @@ xml.rss version: "2.0",
 
     @articles.each do |article|
       xml.item do
-        fallback_title = article.plain_text_content.to_s.squish[0, 20]
-        xml.title article.title.presence || fallback_title.presence || article.created_at.strftime("%Y-%m-%d")
+        xml.title article.title.presence || article.plain_text_content.to_s.squish[0, 20].presence || article.created_at.strftime("%Y-%m-%d")
         xml.description article.description
         if article.html?
           xml.tag!("content:encoded") { xml.cdata! (article.html_content || "") }

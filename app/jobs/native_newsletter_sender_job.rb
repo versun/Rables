@@ -70,7 +70,8 @@ class NativeNewsletterSenderJob < ApplicationJob
 
     relevant_subscribers.each do |subscriber|
       begin
-        mail = NewsletterMailer.article_email(article, subscriber, site_info)
+        mail = NewsletterMailer.article_email(article, subscriber, site_info,
+          newsletter_setting: newsletter_setting, site_url: site_info[:url])
         Rails.event.notify "native_newsletter_sender_job.sending_email",
           level: "info",
           component: "NativeNewsletterSenderJob",

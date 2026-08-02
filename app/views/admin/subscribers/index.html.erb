@@ -111,7 +111,7 @@
             <td>
               <% if subscriber.tags.any? %>
                 <span style="color: #666;">
-                  <%= subscriber.tags.pluck(:name).join(", ") %>
+                  <%= subscriber.tags.map(&:name).join(", ") %>
                 </span>
               <% else %>
                 <span style="color: #28a745; font-weight: 500;">所有内容</span>

@@ -1,6 +1,6 @@
 module Sanitization
   # Shared safelist of HTML tags/attributes for content rendering.
-  # Used by ApplicationHelper#safe_html_content and Article#sanitize_html.
+  # Used by ApplicationHelper#safe_html_content, Article#sanitize_html and Page#sanitize_html.
   ALLOWED_HTML_TAGS = %w[
     p br div span
     h1 h2 h3 h4 h5 h6

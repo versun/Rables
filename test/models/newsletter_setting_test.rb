@@ -39,4 +39,16 @@ class NewsletterSettingTest < ActiveSupport::TestCase
     assert listmonk_setting.configured?
     assert_equal [], listmonk_setting.missing_config_fields
   end
+
+  test "writing the setting clears the cached newsletter setting" do
+    NewsletterSetting.delete_all
+    setting = NewsletterSetting.create!(provider: "native")
+
+    memory_cache = ActiveSupport::Cache::MemoryStore.new
+    Rails.stub(:cache, memory_cache) do
+      memory_cache.write("newsletter_setting:v1", { enabled: false, native: false })
+      setting.update!(provider: "listmonk")
+      assert_nil memory_cache.read("newsletter_setting:v1")
+    end
+  end
 end

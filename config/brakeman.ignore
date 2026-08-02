@@ -26,13 +26,13 @@
     {
       "warning_type": "Redirect",
       "warning_code": 18,
-      "fingerprint": "e59ff285510291be0b51955be54c839f8d2b1c84254b6bd6a82f1f29b5ea7755",
+      "fingerprint": "5dfef31d905680e601d1c47d6e0a83e32ac02fc6cb9a518161639f48f365c42e",
       "check_name": "Redirect",
       "message": "Possible unprotected redirect",
       "file": "app/controllers/static_files_controller.rb",
       "line": 14,
       "link": "https://brakemanscanner.org/docs/warning_types/redirect/",
-      "code": "redirect_to((StaticFile.find_by(:filename => ((params[:filename].join(\"/\") or params[:filename]))).file.blob.url or rails_blob_path(StaticFile.find_by(:filename => ((params[:filename].join(\"/\") or params[:filename]))).file.blob)), :allow_other_host => true)",
+      "code": "redirect_to((StaticFile.includes(:file_attachment => :blob).find_by(:filename => ((params[:filename].join(\"/\") or params[:filename]))).file.blob.url or rails_blob_path(StaticFile.includes(:file_attachment => :blob).find_by(:filename => ((params[:filename].join(\"/\") or params[:filename]))).file.blob)), :allow_other_host => true)",
       "render_path": null,
       "location": {
         "type": "method",

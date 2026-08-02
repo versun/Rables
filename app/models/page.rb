@@ -1,4 +1,6 @@
 class Page < ApplicationRecord
+  include Sanitization
+
   has_rich_text :content
   has_many :comments, as: :commentable, dependent: :destroy
   enum :status, [ :draft, :publish, :schedule, :trash, :shared ]
@@ -50,13 +52,25 @@ class Page < ApplicationRecord
     PublishScheduledPagesJob.schedule_at(self)
   end
 
-  # 根据content_type返回相应的内容
+  # 根据content_type返回相应的内容（缓存7天，与 Article#rendered_content 一致）
   def rendered_content
-    if html?
-      html_content
-    else
-      content
+    cache_key = "#{cache_key_with_version}/rendered_content"
+
+    Rails.cache.fetch(cache_key, expires_in: 7.days) do
+      if html?
+        # 与 ApplicationHelper#safe_html_content 输出一致
+        add_lazy_loading_to_images(sanitize_html(html_content).to_s)
+      else
+        content.to_s
+      end
     end
+  end
+
+  # Sanitize HTML content to remove dangerous tags while preserving allowed tags
+  def sanitize_html(html)
+    return "" if html.blank?
+    sanitizer = Rails::Html::SafeListSanitizer.new
+    sanitizer.sanitize(html, tags: Sanitization::ALLOWED_HTML_TAGS, attributes: Sanitization::ALLOWED_HTML_ATTRIBUTES)
   end
 
   private

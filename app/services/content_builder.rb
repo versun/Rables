@@ -128,7 +128,7 @@ module ContentBuilder
   # @return [String] 文章完整URL
   def build_post_url(slug)
     # 确保获取完整URL，带scheme
-    site_url = Setting.first&.url.presence || "http://localhost:3000"
+    site_url = CacheableSettings.site_info[:url].presence || "http://localhost:3000"
 
     # 移除末尾的斜杠
     site_url = site_url.chomp("/")

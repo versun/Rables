@@ -3,6 +3,7 @@ require "tempfile"
 require "net/http"
 require "uri"
 require "json"
+require "digest"
 
 class TwitterService
   include ContentBuilder
@@ -212,8 +213,16 @@ class TwitterService
   end
 
   def fetch_username(client)
-    user = client.get("users/me")
-    user&.dig("data", "username")
+    # Cached for 1 week to avoid calling users/me on every post/retry.
+    # The key is bound to the access token so switching accounts in Crosspost
+    # settings takes effect immediately instead of reusing the old username.
+    # Failures return nil and are not cached (skip_nil; exceptions bypass the
+    # cache write entirely via the method-level rescue).
+    cache_key = "twitter_username:#{Digest::SHA256.hexdigest(@settings.access_token.to_s).first(16)}"
+    Rails.cache.fetch(cache_key, expires_in: 1.week, skip_nil: true) do
+      user = client.get("users/me")
+      user&.dig("data", "username")
+    end
   rescue => e
     Rails.event.notify "twitter_service.fetch_username_failed",
       level: "warn",

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_01_113000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_02_081800) do
   create_table "action_text_rich_texts", force: :cascade do |t|
     t.text "body"
     t.datetime "created_at", null: false
@@ -40,6 +40,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_01_113000) do
     t.string "key", null: false
     t.text "metadata"
     t.string "service_name", null: false
+    t.index ["filename"], name: "index_active_storage_blobs_on_filename"
     t.index ["key"], name: "index_active_storage_blobs_on_key", unique: true
   end
 
@@ -56,6 +57,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_01_113000) do
     t.integer "level", default: 0
     t.string "target"
     t.datetime "updated_at", null: false
+    t.index ["created_at"], name: "index_activity_logs_on_created_at"
   end
 
   create_table "article_tags", force: :cascade do |t|
@@ -116,6 +118,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_01_113000) do
     t.index ["commentable_type", "commentable_id", "platform", "external_id"], name: "index_comments_on_commentable_platform_external_id", unique: true, where: "external_id IS NOT NULL"
     t.index ["commentable_type", "commentable_id"], name: "index_comments_on_commentable"
     t.index ["parent_id"], name: "index_comments_on_parent_id"
+    t.index ["status"], name: "index_comments_on_status"
   end
 
   create_table "crossposts", force: :cascade do |t|
@@ -321,6 +324,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_01_113000) do
     t.text "full_text"
     t.string "tweet_id", null: false
     t.datetime "updated_at", null: false
+    t.index ["created_at", "tweet_id"], name: "index_twitter_archive_likes_on_created_at_and_tweet_id"
     t.index ["tweet_id"], name: "index_twitter_archive_likes_on_tweet_id", unique: true
   end
 
@@ -332,6 +336,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_01_113000) do
     t.string "tweet_id", null: false
     t.datetime "tweeted_at", null: false
     t.datetime "updated_at", null: false
+    t.index ["created_at"], name: "index_twitter_archive_tweets_on_created_at"
     t.index ["entry_type", "tweeted_at"], name: "index_twitter_archive_tweets_on_entry_type_and_tweeted_at"
     t.index ["tweet_id"], name: "index_twitter_archive_tweets_on_tweet_id", unique: true
   end

@@ -72,7 +72,7 @@ class ArticlesController < ApplicationController
     @article = Article.includes(
       :tags,
       :social_media_posts,
-      comments: [ :replies ],
+      comments: { replies: { replies: { replies: { replies: :replies } } } },
       rich_text_content: { embeds_attachments: :blob }
     ).find_by(slug: params[:slug])
   end

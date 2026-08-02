@@ -35,6 +35,7 @@ class FetchSocialCommentsJob < ApplicationJob
                       .where(social_media_posts: { platform: "mastodon" })
                       .where.not(social_media_posts: { url: nil })
                       .distinct
+                      .select(:id, :slug)
 
     process_platform_comments(articles, "mastodon", MastodonService.new, rate_limit_thresholds: { stop: 5, delay: 20 })
   end
@@ -50,6 +51,7 @@ class FetchSocialCommentsJob < ApplicationJob
                       .where(social_media_posts: { platform: "bluesky" })
                       .where.not(social_media_posts: { url: nil })
                       .distinct
+                      .select(:id, :slug)
 
     process_platform_comments(articles, "bluesky", BlueskyService.new, rate_limit_thresholds: { stop: 50, delay: 200 })
   end

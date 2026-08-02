@@ -237,15 +237,21 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     response.instance_variable_set(:@read, true)
     response.instance_variable_set(:@body, { did: "did:plc:abc123" }.to_json)
 
-    original_method = Net::HTTP.method(:get_response)
-    Net::HTTP.define_singleton_method(:get_response) { |_uri| response }
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
 
     service = BlueskyService.new
     uri = service.send(:extract_post_uri_from_url, "https://bsky.app/profile/test/post/abc")
 
     assert_equal "at://did:plc:abc123/app.bsky.feed.post/abc", uri
   ensure
-    Net::HTTP.define_singleton_method(:get_response, original_method) if original_method
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
 
   test "fetch_comments flattens nested replies" do
@@ -611,15 +617,21 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     response.instance_variable_set(:@read, true)
     response.instance_variable_set(:@body, "{}")
 
-    original_method = Net::HTTP.method(:get_response)
-    Net::HTTP.define_singleton_method(:get_response) { |_uri| response }
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
 
     service = BlueskyService.new
     result = service.send(:extract_post_uri_from_url, "https://bsky.app/profile/test/post/abc")
 
     assert_nil result
   ensure
-    Net::HTTP.define_singleton_method(:get_response, original_method) if original_method
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
 
   test "log_rate_limit_status creates activity log when low" do
@@ -845,13 +857,19 @@ class BlueskyServiceTest < ActiveSupport::TestCase
   end
 
   test "extract_post_uri_from_url returns nil on resolution error" do
-    original_method = Net::HTTP.method(:get_response)
-    Net::HTTP.define_singleton_method(:get_response) { |_uri| raise "boom" }
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| raise "boom" }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
 
     service = BlueskyService.new
     assert_nil service.send(:extract_post_uri_from_url, "https://bsky.app/profile/test/post/abc")
   ensure
-    Net::HTTP.define_singleton_method(:get_response, original_method) if original_method
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
 
   test "fetch_with_redirect raises after too many redirects" do
@@ -991,6 +1009,60 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     service.send(:process_tokens, { "accessJwt" => jwt, "refreshJwt" => "renewal", "did" => "did:plc:x" })
 
     assert_equal Time.at(exp).utc, service.instance_variable_get(:@token_expires_at)
+  end
+
+  test "resolve_handle_to_did caches successful resolutions" do
+    response = Net::HTTPOK.new("1.1", 200, "OK")
+    response.instance_variable_set(:@read, true)
+    response.instance_variable_set(:@body, { did: "did:plc:cached123" }.to_json)
+
+    requests = 0
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| requests += 1; response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    memory_cache = ActiveSupport::Cache::MemoryStore.new
+    service = BlueskyService.new
+
+    Rails.stub(:cache, memory_cache) do
+      assert_equal "did:plc:cached123", service.send(:resolve_handle_to_did, "cached.example")
+      assert_equal "did:plc:cached123", service.send(:resolve_handle_to_did, "cached.example")
+    end
+    assert_equal 1, requests
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
+  end
+
+  test "resolve_handle_to_did does not cache failed resolutions" do
+    response = Net::HTTPInternalServerError.new("1.1", 500, "Internal Server Error")
+    response.instance_variable_set(:@read, true)
+    response.instance_variable_set(:@body, "{}")
+
+    requests = 0
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| requests += 1; response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    memory_cache = ActiveSupport::Cache::MemoryStore.new
+    service = BlueskyService.new
+
+    Rails.stub(:cache, memory_cache) do
+      assert_nil service.send(:resolve_handle_to_did, "failing.example")
+      assert_nil service.send(:resolve_handle_to_did, "failing.example")
+    end
+    assert_equal 2, requests
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
 
   private

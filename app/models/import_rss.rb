@@ -153,7 +153,7 @@ class ImportRss
     host = uri.hostname
     return false if host.blank?
 
-    addresses = Resolv.getaddresses(host)
+    addresses = resolved_addresses_for(host)
     return false if addresses.empty?
 
     addresses.none? do |address|
@@ -166,5 +166,12 @@ class ImportRss
     end
   rescue StandardError
     false
+  end
+
+  # Memoize DNS lookups per host so repeated image URLs on the same
+  # domain resolve only once. Empty results stay memoized for the rest of
+  # the import run; raised errors are re-attempted on the next call.
+  def resolved_addresses_for(host)
+    (@resolved_addresses ||= {})[host] ||= Resolv.getaddresses(host)
   end
 end

@@ -4,7 +4,7 @@ module ApplicationHelper
   include Sanitization
 
   def site_settings
-    CacheableSettings.site_info
+    @site_settings ||= CacheableSettings.site_info
   end
 
   def rails_api_url
