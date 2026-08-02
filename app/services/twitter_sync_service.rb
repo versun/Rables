@@ -198,6 +198,7 @@ class TwitterSyncService
       title: nil,
       slug: slug,
       status: :publish,
+      comment: true,
       created_at: tweet["created_at"].present? ? Time.parse(tweet["created_at"]) : Time.current,
       source_url: source_url,
       source_author: source_author,

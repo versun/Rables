@@ -40,6 +40,7 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     article = Article.find_by(slug: "tweet-200")
     assert article
     assert article.publish?
+    assert article.comment?
     assert_nil article.title
     assert_nil article.source_url
     assert_nil article.source_author
