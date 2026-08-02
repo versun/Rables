@@ -97,9 +97,7 @@
 
   <% if @archive_collection&.total_pages.to_i > 1 %>
     <div class="twitter-archive-pagination">
-      <% pagination_params = {} %>
-      <% pagination_params[:tab] = @active_tab unless @active_tab == "tweet" %>
-      <%= will_paginate @archive_collection, params: pagination_params %>
+      <%= will_paginate @archive_collection, params: (@active_tab == "tweet" ? {} : { tab: @active_tab }) %>
     </div>
   <% end %>
 </div>

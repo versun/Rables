@@ -3,9 +3,11 @@ class SubscriptionsController < ApplicationController
   include MathCaptchaVerification
   # Allow unauthenticated users to subscribe/confirm/unsubscribe from public pages
   allow_unauthenticated_access only: [ :index, :create, :confirm, :unsubscribe ]
+  rate_limit to: 5, within: 1.hour, only: :create, with: -> { redirect_to root_path, alert: "请求太频繁，请稍后再试。" }
 
   def index
     @subscriber = Subscriber.new
+    @tags = Tag.alphabetical
     render :index
   end
 
@@ -123,6 +125,13 @@ class SubscriptionsController < ApplicationController
   def unsubscribe
     @subscriber = Subscriber.find_by(unsubscribe_token: params[:token])
     @success = false
+
+    unless request.post?
+      # GET only renders a confirmation page; the actual unsubscribe
+      # requires an explicit POST so link scanners cannot unsubscribe users.
+      render :confirm_unsubscribe
+      return
+    end
 
     if @subscriber
       email = @subscriber.email

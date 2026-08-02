@@ -30,10 +30,12 @@ class Admin::CrosspostsControllerTest < ActionDispatch::IntegrationTest
       crosspost: {
         platform: "mastodon",
         enabled: "1",
-        server_url: "https://mastodon.example"
+        server_url: "https://mastodon.example",
+        client_secret: "mastodon-client-secret"
       }
     }
     assert_redirected_to admin_crossposts_path(platform: "mastodon")
+    assert_equal "mastodon-client-secret", Crosspost.for("mastodon").client_secret
 
     with_stubbed_verify(MastodonService, { success: true }) do
       post verify_admin_crosspost_path("mastodon"), params: {
@@ -70,6 +72,48 @@ class Admin::CrosspostsControllerTest < ActionDispatch::IntegrationTest
     }, as: :json
     assert_response :success
     assert_equal "error", JSON.parse(response.body)["status"]
+  end
+
+  test "index does not persist crosspost records" do
+    Crosspost.where(platform: "xiaohongshu").delete_all
+
+    assert_no_difference "Crosspost.count" do
+      get admin_crossposts_path
+    end
+
+    assert_response :success
+  end
+
+  test "update ignores platform submitted in form params" do
+    patch admin_crosspost_path("mastodon"), params: {
+      crosspost: {
+        platform: "twitter",
+        enabled: "0",
+        server_url: "https://mastodon.example"
+      }
+    }
+
+    assert_redirected_to admin_crossposts_path(platform: "mastodon")
+    mastodon = Crosspost.find_by(platform: "mastodon")
+    assert_equal "mastodon", mastodon.platform
+    assert_equal "https://mastodon.example", mastodon.server_url
+  end
+
+  test "verify failure does not echo exception message" do
+    original = MastodonService.instance_method(:verify)
+    MastodonService.define_method(:verify) { |_params| raise StandardError, "sensitive internals" }
+
+    post verify_admin_crosspost_path("mastodon"), params: {
+      crosspost: { platform: "mastodon" }
+    }, as: :json
+
+    assert_response :success
+    body = JSON.parse(response.body)
+    assert_equal "error", body["status"]
+    assert_equal "Verification failed. Please check your settings and try again.", body["message"]
+    assert_no_match "sensitive internals", body["message"]
+  ensure
+    MastodonService.define_method(:verify, original)
   end
 
   test "twitter tab shows oauth1 credential fields without authorize flow" do

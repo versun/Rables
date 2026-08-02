@@ -1,16 +1,9 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 require "stringio"
-
-unless defined?(Vips)
-  module Vips
-    class Image
-      def self.new_from_file(*)
-      end
-    end
-  end
-end
+require "vips"
 
 class FakeVipsImage
   attr_reader :width, :height
@@ -28,26 +21,41 @@ class FakeVipsImage
   def resize(_scale)
     self
   end
+
+  def autorot
+    self
+  end
+
+  def has_alpha?
+    false
+  end
 end
 
 class BlueskyServiceTest < ActiveSupport::TestCase
   private
 
   def with_stubbed_method(object, method_name, replacement = nil, &block)
-    original = object.method(method_name) if object.respond_to?(method_name)
-    object.define_singleton_method(method_name) do |*args, &method_block|
+    singleton = object.singleton_class
+    own_methods = singleton.instance_methods(false) + singleton.private_instance_methods(false)
+    original = singleton.instance_method(method_name) if own_methods.include?(method_name)
+
+    object.define_singleton_method(method_name) do |*args, **kwargs, &method_block|
       if replacement.respond_to?(:call)
-        replacement.call(*args, &method_block)
+        replacement.call(*args, **kwargs, &method_block)
       else
         replacement
       end
     end
     yield
   ensure
+    # Restore the exact prior state: re-define an own singleton method that
+    # existed, otherwise remove the stub entirely. Never leave a delegating
+    # wrapper behind — wrappers leak into other tests in the same worker and
+    # silently drop keyword arguments.
     if original
-      object.define_singleton_method(method_name) { |*args, &method_block| original.call(*args, &method_block) }
-    else
-      object.singleton_class.remove_method(method_name)
+      singleton.send(:define_method, method_name, original)
+    elsif singleton.method_defined?(method_name) || singleton.private_method_defined?(method_name)
+      singleton.send(:remove_method, method_name)
     end
   end
 
@@ -62,7 +70,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
   end
 
   test "post returns nil when crosspost is disabled" do
-    Crosspost.bluesky.update!(enabled: false)
+    Crosspost.for("bluesky").update!(enabled: false)
     service = BlueskyService.new
 
     assert_nil service.post(create_published_article)
@@ -85,7 +93,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     assert_equal before, after
   end
 
-  test "resize_image_if_needed cleans temp files on failure and preserves content type" do
+  test "resize_image_if_needed cleans temp files and returns nil on failure" do
     service = BlueskyService.new
     image_data = "a" * (BlueskyService::MAX_IMAGE_SIZE + 1)
     temp_dir = Rails.root.join("tmp", "bluesky_uploads")
@@ -93,9 +101,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     before = Dir.glob(temp_dir.join("{original,compressed}_*"))
 
     with_stubbed_method(Vips::Image, :new_from_file, ->(*) { raise StandardError, "boom" }) do
-      result_data, result_type = service.send(:resize_image_if_needed, image_data, "image/png")
-      assert_equal image_data, result_data
-      assert_equal "image/png", result_type
+      assert_nil service.send(:resize_image_if_needed, image_data, "image/png")
     end
 
     after = Dir.glob(temp_dir.join("{original,compressed}_*"))
@@ -185,7 +191,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     assert_equal resized_data, request_seen.body
   end
   test "post uploads all images for bluesky" do
-    Crosspost.bluesky.update!(
+    Crosspost.for("bluesky").update!(
       enabled: true,
       username: "tester",
       app_password: "app-password"
@@ -243,7 +249,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
   end
 
   test "fetch_comments flattens nested replies" do
-    Crosspost.bluesky.update!(enabled: true)
+    Crosspost.for("bluesky").update!(enabled: true)
     service = BlueskyService.new
 
     thread_data = {
@@ -306,14 +312,14 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
 
-  test "upload_image_embed returns nil for unknown attachable" do
+  test "upload_images_embed returns nil for unknown attachable" do
     service = BlueskyService.new
 
-    assert_nil service.send(:upload_image_embed, Object.new)
+    assert_nil service.send(:upload_images_embed, [ Object.new ])
   end
 
   test "post logs activity on success" do
-    Crosspost.bluesky.update!(enabled: true)
+    Crosspost.for("bluesky").update!(enabled: true)
     service = BlueskyService.new
     article = create_published_article
     article.define_singleton_method(:first_image_attachment) { nil }
@@ -327,7 +333,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
   end
 
   test "post returns nil when skeet raises" do
-    Crosspost.bluesky.update!(enabled: true)
+    Crosspost.for("bluesky").update!(enabled: true)
     service = BlueskyService.new
     article = create_published_article
     article.define_singleton_method(:first_image_attachment) { nil }
@@ -337,6 +343,17 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     assert_difference "ActivityLog.count", 1 do
       assert_nil service.post(article)
     end
+  end
+
+  test "post re-raises transient network errors for job retry" do
+    Crosspost.for("bluesky").update!(enabled: true)
+    service = BlueskyService.new
+    article = create_published_article
+    article.define_singleton_method(:first_image_attachment) { nil }
+
+    service.define_singleton_method(:skeet) { |_msg, _embed| raise Net::OpenTimeout }
+
+    assert_raises(Net::OpenTimeout) { service.post(article) }
   end
 
   test "verify returns success when tokens are valid" do
@@ -361,7 +378,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
   end
 
   test "skeet posts and returns profile url" do
-    Crosspost.bluesky.update!(enabled: true, username: "tester")
+    Crosspost.for("bluesky").update!(enabled: true, username: "tester")
     service = BlueskyService.new
     service.instance_variable_set(:@user_did, "did:plc:abc")
 
@@ -379,29 +396,13 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     assert service.captured_body[:record][:embed]
   end
 
-  test "unskeet deletes record" do
-    service = BlueskyService.new
-
-    def service.verify_tokens; true; end
-    def service.post_request(_url, body:, **_opts)
-      @captured_body = body
-      {}
-    end
-    def service.captured_body; @captured_body; end
-
-    service.unskeet("at://did:plc:abc/app.bsky.feed.post/xyz")
-
-    assert_equal({ repo: "did:plc:abc", collection: "app.bsky.feed.post", rkey: "xyz" }, service.captured_body)
-  end
-
   test "post uses embed when image present" do
-    Crosspost.bluesky.update!(enabled: true)
+    Crosspost.for("bluesky").update!(enabled: true)
     service = BlueskyService.new
     article = create_published_article
     article.define_singleton_method(:first_image_attachment) { :image }
 
     embed = { "$type" => "app.bsky.embed.images", "images" => [] }
-    def service.upload_image_embed(_attachable); { "$type" => "app.bsky.embed.images", "images" => [] }; end
     def service.skeet(_msg, _embed); "https://bsky.app/profile/test/post/1"; end
 
     result = service.post(article)
@@ -410,7 +411,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
   end
 
   test "fetch_comments returns rate limit info on 429" do
-    Crosspost.bluesky.update!(enabled: true)
+    Crosspost.for("bluesky").update!(enabled: true)
     service = BlueskyService.new
 
     response = Net::HTTPTooManyRequests.new("1.1", "429", "Too Many Requests")
@@ -458,9 +459,87 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     original_new = Net::HTTP.method(:new)
     Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
 
-    assert_raises RuntimeError do
+    assert_raises TransientNetworkErrors::TransientServerError do
       service.send(:post_request, "https://example.com/test", body: {}, auth_token: false)
     end
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
+  end
+
+  test "post_request raises retryable error on 503 response" do
+    service = BlueskyService.new
+    service.instance_variable_set(:@token, "token")
+
+    response = Net::HTTPServiceUnavailable.new("1.1", "503", "Service Unavailable")
+    response.instance_variable_set(:@read, true)
+    response.instance_variable_set(:@body, "boom")
+
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:write_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    error = assert_raises(TransientNetworkErrors::TransientServerError) do
+      service.send(:post_request, "https://example.com/test", body: {}, auth_token: false)
+    end
+    assert service.send(:transient_network_error?, error)
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
+  end
+
+  test "post_request raises retryable error on 429 response" do
+    service = BlueskyService.new
+    service.instance_variable_set(:@token, "token")
+
+    response = Net::HTTPTooManyRequests.new("1.1", "429", "Too Many Requests")
+    response.instance_variable_set(:@read, true)
+    response.instance_variable_set(:@body, "slow down")
+
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:write_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    error = assert_raises(TransientNetworkErrors::TransientServerError) do
+      service.send(:post_request, "https://example.com/test", body: {}, auth_token: false)
+    end
+    assert service.send(:transient_network_error?, error)
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
+  end
+
+  test "post_request raises non-retryable error on 400 response" do
+    service = BlueskyService.new
+    service.instance_variable_set(:@token, "token")
+
+    response = Net::HTTPBadRequest.new("1.1", "400", "Bad Request")
+    response.instance_variable_set(:@read, true)
+    response.instance_variable_set(:@body, "bad request")
+
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:write_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    error = assert_raises(RuntimeError) do
+      service.send(:post_request, "https://example.com/test", body: {}, auth_token: false)
+    end
+    refute service.send(:transient_network_error?, error)
   ensure
     Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
@@ -490,15 +569,13 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     assert service.generated
   end
 
-  test "upload_image_embed builds embed for remote image" do
+  test "upload_images_embed builds embed for remote image" do
     service = BlueskyService.new
 
-    remote_image = Object.new
-    remote_image.define_singleton_method(:url) { "http://example.com/remote.png" }
-    remote_image.define_singleton_method(:class) { Struct.new(:name).new("ActionText::Attachables::RemoteImage") }
+    remote_image = RemoteImageWrapper.new("http://example.com/remote.png")
 
     def service.upload_remote_image(_url); { "ref" => "blob1" }; end
-    embed = service.send(:upload_image_embed, remote_image)
+    embed = service.send(:upload_images_embed, [ remote_image ])
 
     assert_equal "app.bsky.embed.images", embed["$type"]
     assert_equal "blob1", embed["images"].first["image"]["ref"]
@@ -554,7 +631,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
   end
 
   test "upload_blob uploads active storage blob" do
-    Crosspost.bluesky.update!(enabled: true)
+    Crosspost.for("bluesky").update!(enabled: true)
     service = BlueskyService.new
     service.instance_variable_set(:@token, "token")
 
@@ -585,7 +662,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
   end
 
   test "upload_remote_image returns blob data for relative urls" do
-    Crosspost.bluesky.update!(enabled: true)
+    Crosspost.for("bluesky").update!(enabled: true)
     service = BlueskyService.new
     service.instance_variable_set(:@token, "token")
 
@@ -641,31 +718,27 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
 
-  test "upload_image_embed returns nil when remote image has no url" do
+  test "upload_images_embed returns nil when remote image has no url" do
     service = BlueskyService.new
 
-    remote_image = Object.new
-    remote_image.define_singleton_method(:url) { nil }
-    remote_image.define_singleton_method(:class) { Struct.new(:name).new("ActionText::Attachables::RemoteImage") }
+    remote_image = RemoteImageWrapper.new(nil)
 
-    assert_nil service.send(:upload_image_embed, remote_image)
+    assert_nil service.send(:upload_images_embed, [ remote_image ])
   end
 
-  test "upload_image_embed uses fallback filename on invalid url" do
+  test "upload_images_embed uses fallback filename on invalid url" do
     service = BlueskyService.new
 
-    remote_image = Object.new
-    remote_image.define_singleton_method(:url) { "http://[" }
-    remote_image.define_singleton_method(:class) { Struct.new(:name).new("ActionText::Attachables::RemoteImage") }
+    remote_image = RemoteImageWrapper.new("http://[")
 
     def service.upload_remote_image(_url); { "ref" => "blob1" }; end
-    embed = service.send(:upload_image_embed, remote_image)
+    embed = service.send(:upload_images_embed, [ remote_image ])
 
     assert_equal "image.jpg", embed["images"].first["alt"]
   end
 
   test "upload_blob returns nil on non-success response" do
-    Crosspost.bluesky.update!(enabled: true)
+    Crosspost.for("bluesky").update!(enabled: true)
     service = BlueskyService.new
     service.instance_variable_set(:@token, "token")
 
@@ -694,7 +767,7 @@ class BlueskyServiceTest < ActiveSupport::TestCase
   end
 
   test "upload_remote_image returns nil on failed download" do
-    Crosspost.bluesky.update!(enabled: true)
+    Crosspost.for("bluesky").update!(enabled: true)
     service = BlueskyService.new
     service.instance_variable_set(:@token, "token")
 
@@ -706,6 +779,69 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     def service.fetch_with_redirect(_uri); @response; end
     service.instance_variable_set(:@response, response)
     assert_nil service.send(:upload_remote_image, "http://example.com/missing.png")
+  end
+
+  test "upload_blob re-raises transient network errors for job retry" do
+    service = BlueskyService.new
+    blob = Struct.new(:download, :content_type).new("raw", "image/png")
+
+    with_stubbed_method(service, :verify_tokens, nil) do
+      with_stubbed_method(service, :resize_image_if_needed, [ "raw", "image/png" ]) do
+        with_stubbed_method(Net::HTTP, :start, ->(*_args, **_kwargs, &_block) { raise Net::OpenTimeout }) do
+          assert_raises(Net::OpenTimeout) { service.send(:upload_blob, blob) }
+        end
+      end
+    end
+  end
+
+  test "upload_blob returns nil on permanent errors" do
+    service = BlueskyService.new
+    blob = Struct.new(:download, :content_type).new("raw", "image/png")
+
+    with_stubbed_method(service, :verify_tokens, nil) do
+      with_stubbed_method(service, :resize_image_if_needed, [ "raw", "image/png" ]) do
+        with_stubbed_method(Net::HTTP, :start, ->(*_args, **_kwargs, &_block) { raise "boom" }) do
+          assert_nil service.send(:upload_blob, blob)
+        end
+      end
+    end
+  end
+
+  test "upload_remote_image re-raises transient network errors for job retry" do
+    service = BlueskyService.new
+
+    with_stubbed_method(service, :verify_tokens, nil) do
+      with_stubbed_method(service, :download_remote_image_with_redirect, [ "raw", "image/png" ]) do
+        with_stubbed_method(service, :resize_image_if_needed, [ "raw", "image/png" ]) do
+          with_stubbed_method(Net::HTTP, :start, ->(*_args, **_kwargs, &_block) { raise Net::OpenTimeout }) do
+            assert_raises(Net::OpenTimeout) { service.send(:upload_remote_image, "https://example.com/image.png") }
+          end
+        end
+      end
+    end
+  end
+
+  test "upload_remote_image returns nil on permanent errors" do
+    service = BlueskyService.new
+
+    with_stubbed_method(service, :verify_tokens, nil) do
+      with_stubbed_method(service, :download_remote_image_with_redirect, [ "raw", "image/png" ]) do
+        with_stubbed_method(service, :resize_image_if_needed, [ "raw", "image/png" ]) do
+          with_stubbed_method(Net::HTTP, :start, ->(*_args, **_kwargs, &_block) { raise "boom" }) do
+            assert_nil service.send(:upload_remote_image, "https://example.com/image.png")
+          end
+        end
+      end
+    end
+  end
+
+  test "upload_images_embed re-raises transient errors from uploads" do
+    service = BlueskyService.new
+
+    remote_image = RemoteImageWrapper.new("http://example.com/remote.png")
+
+    def service.upload_remote_image(_url); raise Net::OpenTimeout; end
+    assert_raises(Net::OpenTimeout) { service.send(:upload_images_embed, [ remote_image ]) }
   end
 
   test "extract_post_uri_from_url returns nil on resolution error" do
@@ -732,5 +868,139 @@ class BlueskyServiceTest < ActiveSupport::TestCase
     result = service.send(:log_rate_limit_status, { remaining: 200, limit: 3000, reset_at: Time.current + 5.minutes })
 
     assert_nil result
+  end
+
+  test "token cache is scoped per account" do
+    cache = ActiveSupport::Cache::MemoryStore.new
+
+    Rails.stub(:cache, cache) do
+      Crosspost.for("bluesky").update!(username: "alice")
+      token_data = bluesky_token_data
+      cache.write("bluesky_token_data:alice", token_data)
+
+      service = BlueskyService.new
+      assert_equal token_data["accessJwt"], service.instance_variable_get(:@token)
+
+      Crosspost.for("bluesky").update!(username: "bob")
+      other = BlueskyService.new
+      assert_nil other.instance_variable_get(:@token)
+    end
+  end
+
+  test "store_token_data writes per-account key with expiry" do
+    cache = ActiveSupport::Cache::MemoryStore.new
+
+    Rails.stub(:cache, cache) do
+      Crosspost.for("bluesky").update!(username: "alice")
+      service = BlueskyService.new
+
+      service.send(:store_token_data, { "accessJwt" => "token" })
+
+      assert_equal({ "accessJwt" => "token" }, cache.read("bluesky_token_data:alice"))
+      assert_nil cache.read("bluesky_token_data")
+
+      travel BlueskyService::TOKEN_CACHE_TTL + 1.minute do
+        assert_nil cache.read("bluesky_token_data:alice")
+      end
+    end
+  end
+
+  test "verify_tokens falls back to generate_tokens when refresh fails" do
+    service = BlueskyService.new
+    service.instance_variable_set(:@token, "token")
+    service.instance_variable_set(:@token_expires_at, 1.minute.ago)
+
+    def service.perform_token_refresh; raise "refresh rejected"; end
+    def service.generate_tokens; @regenerated = true; end
+    def service.regenerated; @regenerated; end
+
+    service.send(:verify_tokens)
+
+    assert service.regenerated
+  end
+
+  test "verify_tokens raises when refresh and regeneration both fail" do
+    service = BlueskyService.new
+    service.instance_variable_set(:@token, "token")
+    service.instance_variable_set(:@token_expires_at, 1.minute.ago)
+
+    def service.perform_token_refresh; raise "refresh rejected"; end
+    def service.generate_tokens; raise "login failed"; end
+
+    error = assert_raises(RuntimeError) { service.send(:verify_tokens) }
+    assert_equal "login failed", error.message
+  end
+
+  test "verify restores the previous cache entry for the verified account" do
+    cache = ActiveSupport::Cache::MemoryStore.new
+
+    Rails.stub(:cache, cache) do
+      service = BlueskyService.new
+
+      original = { "accessJwt" => "original-token" }
+      cache.write("bluesky_token_data:new-account", original)
+
+      # Simulates a successful login that caches fresh session data
+      def service.verify_tokens
+        store_token_data({ "accessJwt" => "verify-token" })
+      end
+
+      result = service.verify(username: "new-account", app_password: "pass", server_url: "https://bsky.social/xrpc")
+
+      assert_equal true, result[:success]
+      assert_equal original, cache.read("bluesky_token_data:new-account")
+    end
+  end
+
+  test "verify leaves no cache entry behind when none existed before" do
+    cache = ActiveSupport::Cache::MemoryStore.new
+
+    Rails.stub(:cache, cache) do
+      service = BlueskyService.new
+
+      def service.verify_tokens
+        store_token_data({ "accessJwt" => "verify-token" })
+      end
+
+      result = service.verify(username: "other-account", app_password: "pass", server_url: "https://bsky.social/xrpc")
+
+      assert_equal true, result[:success]
+      refute cache.exist?("bluesky_token_data:other-account")
+    end
+  end
+
+  test "process_tokens decodes unpadded base64url jwt payload" do
+    service = BlueskyService.new
+    exp = 1893456000
+    # This payload's base64url contains '_' and breaks Base64.decode64
+    payload = Base64.urlsafe_encode64({ exp: exp, sub: "???" }.to_json, padding: false)
+    jwt = "header.#{payload}.signature"
+
+    service.send(:process_tokens, { "accessJwt" => jwt, "refreshJwt" => "renewal", "did" => "did:plc:x" })
+
+    assert_equal Time.at(exp).utc, service.instance_variable_get(:@token_expires_at)
+  end
+
+  test "process_tokens restores stripped jwt padding" do
+    service = BlueskyService.new
+    exp = 1893456000
+    payload = Base64.urlsafe_encode64({ exp: exp, sub: "a" }.to_json, padding: false)
+    assert_equal 2, payload.length % 4
+    jwt = "header.#{payload}.signature"
+
+    service.send(:process_tokens, { "accessJwt" => jwt, "refreshJwt" => "renewal", "did" => "did:plc:x" })
+
+    assert_equal Time.at(exp).utc, service.instance_variable_get(:@token_expires_at)
+  end
+
+  private
+
+  def bluesky_token_data
+    payload = Base64.urlsafe_encode64({ exp: 1.hour.from_now.to_i }.to_json, padding: false)
+    {
+      "accessJwt" => "header.#{payload}.signature",
+      "refreshJwt" => "renewal-token",
+      "did" => "did:plc:cached"
+    }
   end
 end

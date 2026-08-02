@@ -63,11 +63,35 @@ Rails.application.configure do
   # config.action_mailer.raise_delivery_errors = false
 
   # Set host to be used by links generated in mailer templates.
-  config.action_mailer.default_url_options = { host: ENV.fetch("APP_HOST", "example.com") }
+  # The protocol stays consistent with config.force_ssl so links are not
+  # generated as http:// on an SSL-only site.
+  if ENV["APP_HOST"].present?
+    config.action_mailer.default_url_options = { host: ENV["APP_HOST"], protocol: config.force_ssl ? "https" : "http" }
+  else
+    config.action_mailer.default_url_options = { host: "example.com" }
+    config.after_initialize do
+      Rails.logger.warn "[config] APP_HOST is not set - mailer links will point at example.com. " \
+                        "Set APP_HOST to your site's domain (e.g. blog.example.com)."
+    end
+  end
 
-  # Set default delivery method to prevent fallback to localhost:25
-  # The actual SMTP settings will be configured dynamically by NewsletterSetting
-  config.action_mailer.delivery_method = :smtp
+  # Per-mail SMTP settings are applied at send time by SmtpConfigurable
+  # (NewsletterSetting). The global default below is only a fallback for mail
+  # without explicit settings: bare :smtp without smtp_settings would silently
+  # target localhost:25, so fall back to :sendmail unless SMTP env vars exist.
+  if ENV["SMTP_ADDRESS"].present?
+    config.action_mailer.delivery_method = :smtp
+    config.action_mailer.smtp_settings = {
+      address: ENV["SMTP_ADDRESS"],
+      port: ENV.fetch("SMTP_PORT", 587).to_i,
+      user_name: ENV["SMTP_USER_NAME"],
+      password: ENV["SMTP_PASSWORD"],
+      authentication: :plain,
+      enable_starttls_auto: true
+    }
+  else
+    config.action_mailer.delivery_method = :sendmail
+  end
   config.action_mailer.perform_deliveries = true
 
   # Specify outgoing SMTP server. Remember to add smtp/* credentials via bin/rails credentials:edit.

@@ -57,8 +57,9 @@ class Subscriber < ApplicationRecord
 
   private
 
+  # Keep pre-set tokens (e.g. from zip imports) so old confirm/unsubscribe links stay valid
   def generate_tokens
-    self.confirmation_token = SecureRandom.urlsafe_base64(32)
-    self.unsubscribe_token = SecureRandom.urlsafe_base64(32)
+    self.confirmation_token ||= SecureRandom.urlsafe_base64(32)
+    self.unsubscribe_token ||= SecureRandom.urlsafe_base64(32)
   end
 end

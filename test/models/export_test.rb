@@ -108,24 +108,6 @@ class ExportTest < ActiveSupport::TestCase
     article&.destroy
   end
 
-  test "includes git_integrations.csv in export zip" do
-    exporter = Export.new
-
-    assert exporter.generate, exporter.error_message
-    assert exporter.zip_path.present?
-    assert File.exist?(exporter.zip_path), "expected zip to exist at #{exporter.zip_path}"
-
-    Zip::File.open(exporter.zip_path) do |zip|
-      entry = zip.find_entry("git_integrations.csv")
-      assert entry, "expected git_integrations.csv to exist in zip"
-      content = entry.get_input_stream.read
-      assert_includes content, "provider"
-      assert_includes content, "github"
-    end
-  ensure
-    File.delete(exporter.zip_path) if exporter&.zip_path.present? && File.exist?(exporter.zip_path)
-  end
-
   test "processes html attachments and remote images" do
     exporter = Export.new
     blob = ActiveStorage::Blob.create_and_upload!(
@@ -214,7 +196,7 @@ class ExportTest < ActiveSupport::TestCase
     File.delete(exporter.zip_path) if exporter&.zip_path.present? && File.exist?(exporter.zip_path)
   end
 
-  test "handles export failures and activity log export" do
+  test "handles export failures" do
     ActiveRecord::Base.connection.stub(:execute, ->(_sql) { raise "db down" }) do
       failing_exporter = Export.new
       assert_not failing_exporter.check_database_connection
@@ -222,17 +204,69 @@ class ExportTest < ActiveSupport::TestCase
       FileUtils.rm_rf(failing_exporter.export_dir) if failing_exporter.export_dir
     end
 
-    ActivityLog.create!(action: "test", target: "export", level: :info, description: "log")
     exporter = Export.new
-    exporter.send(:export_activity_logs)
-    assert File.exist?(File.join(exporter.export_dir, "activity_logs.csv"))
-
     exporter.stub(:export_articles, -> { raise "boom" }) do
       assert_not exporter.generate
       assert_match "boom", exporter.error_message
     end
   ensure
     FileUtils.rm_rf(exporter.export_dir) if exporter&.export_dir
+  end
+
+  test "generate aborts when the database connection check fails" do
+    exporter = Export.new
+    exporter.stub(:check_database_connection, false) do
+      assert_not exporter.generate
+    end
+    refute Dir.exist?(exporter.export_dir), "expected no export directory to be created when the check fails"
+  end
+
+  test "redacts secrets in exported csvs by default" do
+    Crosspost.delete_all
+    Crosspost.create!(
+      platform: "twitter",
+      enabled: false,
+      access_token: "secret_access_token",
+      access_token_secret: "secret_access_token_secret",
+      api_key: "secret_api_key",
+      api_key_secret: "secret_api_key_secret"
+    )
+    Listmonk.delete_all
+    Listmonk.create!(url: "https://listmonk.example.com", username: "user", api_key: "secret_listmonk_key", list_id: 1, template_id: 2, enabled: false)
+    NewsletterSetting.delete_all
+    NewsletterSetting.create!(provider: "native", enabled: false, smtp_password: "secret_smtp_password")
+    Setting.first.update!(github_token: "secret_github_token")
+    Subscriber.create!(email: "redact-#{SecureRandom.hex(4)}@example.com")
+
+    exporter = Export.new
+    assert exporter.generate, exporter.error_message
+
+    Zip::File.open(exporter.zip_path) do |zip|
+      crossposts_csv = zip.find_entry("crossposts.csv").get_input_stream.read
+      assert_includes crossposts_csv, Export::REDACTED_VALUE
+      %w[secret_access_token secret_access_token_secret secret_api_key secret_api_key_secret].each do |secret|
+        refute_includes crossposts_csv, secret
+      end
+
+      listmonks_csv = zip.find_entry("listmonks.csv").get_input_stream.read
+      assert_includes listmonks_csv, Export::REDACTED_VALUE
+      refute_includes listmonks_csv, "secret_listmonk_key"
+
+      newsletter_csv = zip.find_entry("newsletter_settings.csv").get_input_stream.read
+      assert_includes newsletter_csv, Export::REDACTED_VALUE
+      refute_includes newsletter_csv, "secret_smtp_password"
+
+      settings_csv = zip.find_entry("settings.csv").get_input_stream.read
+      assert_includes settings_csv, Export::REDACTED_VALUE
+      refute_includes settings_csv, "secret_github_token"
+
+      subscribers_csv = zip.find_entry("subscribers.csv").get_input_stream.read
+      rows = CSV.parse(subscribers_csv, headers: true)
+      assert_not_includes rows.headers, "confirmation_token"
+      assert_not_includes rows.headers, "unsubscribe_token"
+    end
+  ensure
+    File.delete(exporter.zip_path) if exporter&.zip_path.present? && File.exist?(exporter.zip_path)
   end
 
   test "processes attachment nodes and fallback article content" do
@@ -269,6 +303,7 @@ class ExportTest < ActiveSupport::TestCase
     static_file.save!(validate: false)
 
     exporter = Export.new
+    FileUtils.mkdir_p(exporter.attachments_dir)
     exporter.send(:export_static_files)
 
     csv_path = File.join(exporter.export_dir, "static_files.csv")
@@ -310,18 +345,5 @@ class ExportTest < ActiveSupport::TestCase
         assert_match(/Cleaned up 3 old export\/import file/, result[:message])
       end
     end
-  end
-
-  test "exports users to csv" do
-    exporter = Export.new
-    exporter.send(:export_users)
-
-    csv_path = File.join(exporter.export_dir, "users.csv")
-    assert File.exist?(csv_path)
-    content = File.read(csv_path)
-    assert_includes content, "user_name"
-    assert_includes content, "admin"
-  ensure
-    FileUtils.rm_rf(exporter.export_dir) if exporter&.export_dir
   end
 end

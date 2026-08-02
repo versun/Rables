@@ -24,7 +24,14 @@ module CacheableSettings
 
   def self.navbar_items
     Rails.cache.fetch("navbar_items", expires_in: 24.hours) do
-      Page.published.order(page_order: :desc).select(:id, :title, :slug, :redirect_url)
+      # Eagerly load into a plain Array; caching a Relation is unsafe to serialize
+      Page.published.order(page_order: :desc).select(:id, :title, :slug, :redirect_url).to_a
+    end
+  end
+
+  def self.has_tags?
+    Rails.cache.fetch("has_tags", expires_in: 24.hours) do
+      Tag.exists?
     end
   end
 
@@ -36,9 +43,14 @@ module CacheableSettings
     Rails.cache.delete("navbar_items")
   end
 
+  def self.refresh_has_tags
+    Rails.cache.delete("has_tags")
+  end
+
   def self.refresh_all
     refresh_site_info
     refresh_navbar_items
+    refresh_has_tags
     refresh_newsletter_setting
   end
 

@@ -27,6 +27,6 @@ class Admin::SettingsControllerTest < ActionDispatch::IntegrationTest
         social_links_json: "{"
       }
     }
-    assert_response :success
+    assert_response :unprocessable_entity
   end
 end

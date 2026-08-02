@@ -21,7 +21,7 @@ module Rables
 
     config.x.article_route_prefix = ENV.fetch("ARTICLE_ROUTE_PREFIX", nil)
 
-    config.mission_control.jobs.base_controller_class = "AdminController"
+    config.mission_control.jobs.base_controller_class = "Admin::BaseController"
     config.mission_control.jobs.http_basic_auth_enabled = false
 
     # Add redirect middleware early in the stack (and after static serving, if enabled)

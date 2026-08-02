@@ -12,13 +12,12 @@ class TwitterArchiveImportSubmission
   class InvalidUploadError < StandardError; end
 
   class Result
-    attr_reader :notice, :alert, :import
+    attr_reader :notice, :alert
 
-    def initialize(success:, notice: nil, alert: nil, import: nil)
+    def initialize(success:, notice: nil, alert: nil)
       @success = success
       @notice = notice
       @alert = alert
-      @import = import
     end
 
     def success?
@@ -31,22 +30,12 @@ class TwitterArchiveImportSubmission
       blob.signed_id(purpose: DIRECT_UPLOAD_PURPOSE)
     end
 
-    def direct_upload_source_path(token)
-      "#{DIRECT_UPLOAD_SOURCE_PREFIX}#{token}"
-    end
-
     def direct_upload_source_path?(source_path)
       source_path.to_s.start_with?(DIRECT_UPLOAD_SOURCE_PREFIX)
     end
 
-    def direct_upload_token_from(source_path)
-      return unless direct_upload_source_path?(source_path)
-
-      source_path.delete_prefix(DIRECT_UPLOAD_SOURCE_PREFIX)
-    end
-
     def direct_upload_blob_from(source)
-      token = direct_upload_token_from(source) || source
+      token = source.to_s.delete_prefix(DIRECT_UPLOAD_SOURCE_PREFIX)
       ActiveStorage::Blob.find_signed(token, purpose: DIRECT_UPLOAD_PURPOSE)
     end
   end
@@ -77,7 +66,7 @@ class TwitterArchiveImportSubmission
 
     TwitterArchiveImportJob.perform_later(import.id)
 
-    Result.new(success: true, notice: SUCCESS_NOTICE, import: import)
+    Result.new(success: true, notice: SUCCESS_NOTICE)
   rescue InvalidUploadError => e
     purge_direct_upload_blob
     failure(e.message)
@@ -92,7 +81,7 @@ class TwitterArchiveImportSubmission
     fail_import(e)
     failure("Twitter archive import failed: #{e.message}")
   ensure
-    cleanup_unpersisted_source if @import.blank? || !@import.persisted?
+    cleanup_unpersisted_source unless @import&.persisted?
   end
 
   private
@@ -100,24 +89,20 @@ class TwitterArchiveImportSubmission
   def resolve_source!
     if direct_upload_blob_id?
       @direct_upload_blob = self.class.direct_upload_blob_from(@source)
-      failure!(INVALID_UPLOAD_ALERT) unless zip_blob?(@direct_upload_blob)
+      raise InvalidUploadError, INVALID_UPLOAD_ALERT unless zip_blob?(@direct_upload_blob)
       @source_filename = @direct_upload_blob.filename.to_s
     else
-      failure!(INVALID_UPLOAD_ALERT) unless valid_zip_upload?
+      raise InvalidUploadError, INVALID_UPLOAD_ALERT unless valid_zip_upload?
       @source_filename = @source.original_filename.to_s
     end
   end
 
   def prepare_source_path
     if direct_upload_blob_id?
-      self.class.direct_upload_source_path(@source)
+      "#{DIRECT_UPLOAD_SOURCE_PREFIX}#{@source}"
     else
       write_uploaded_zip
     end
-  end
-
-  def failure!(alert)
-    raise InvalidUploadError, alert
   end
 
   def direct_upload_blob_id?
@@ -139,29 +124,18 @@ class TwitterArchiveImportSubmission
     temp_dir = Rails.root.join("tmp", "twitter_archives")
     FileUtils.mkdir_p(temp_dir)
     temp_path = temp_dir.join("twitter_archive_#{Time.current.to_i}_#{SecureRandom.hex(8)}.zip")
-    source = upload_source
+    source = @source.tempfile
 
     copy_upload(source, temp_path) unless move_uploaded_tempfile(source, temp_path)
 
     temp_path.to_s
   end
 
-  def upload_source
-    if @source.respond_to?(:tempfile) && @source.tempfile
-      @source.tempfile
-    else
-      @source
-    end
-  end
-
   def move_uploaded_tempfile(source, destination)
     return false unless source.is_a?(Tempfile)
 
-    source_path = source.path.to_s
-    return false if source_path.blank? || !File.exist?(source_path)
-
-    source.flush if source.respond_to?(:flush)
-    File.rename(source_path, destination)
+    source.flush
+    File.rename(source.path.to_s, destination)
     true
   rescue SystemCallError
     false
@@ -169,7 +143,7 @@ class TwitterArchiveImportSubmission
 
   def copy_upload(source, destination)
     File.open(destination, "wb") do |file|
-      source.rewind if source.respond_to?(:rewind)
+      source.rewind
       IO.copy_stream(source, file)
     end
   end
@@ -192,14 +166,8 @@ class TwitterArchiveImportSubmission
     nil
   end
 
-  def cleanup_temp_path(path)
-    return if path.blank?
-
-    File.delete(path) if File.exist?(path)
-  end
-
   def cleanup_unpersisted_source
-    cleanup_temp_path(@source_path)
+    File.delete(@source_path) if @source_path.present? && File.exist?(@source_path)
     purge_direct_upload_blob
   end
 

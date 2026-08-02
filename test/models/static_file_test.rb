@@ -3,6 +3,29 @@
 require "test_helper"
 
 class StaticFileTest < ActiveSupport::TestCase
+  test "validates filename presence uniqueness and format" do
+    blank = StaticFile.new
+    assert_not blank.valid?
+    assert_includes blank.errors[:filename], "can't be blank"
+
+    existing = build_static_file("dup.txt")
+    existing.save!
+
+    duplicate = build_static_file("dup.txt")
+    assert_not duplicate.valid?
+    assert_includes duplicate.errors[:filename], "has already been taken"
+
+    with_slash = build_static_file("dir/evil.txt")
+    assert_not with_slash.valid?
+    assert_includes with_slash.errors[:filename], "must not contain slashes or control characters"
+
+    with_control_char = build_static_file("evil\u0007.txt")
+    assert_not with_control_char.valid?
+    assert_includes with_control_char.errors[:filename], "must not contain slashes or control characters"
+
+    assert build_static_file("valid-name_1.2.txt").valid?
+  end
+
   test "validates attachment and exposes file metadata helpers" do
     assert_nil StaticFile.new.public_path
 
@@ -44,5 +67,17 @@ class StaticFileTest < ActiveSupport::TestCase
     mb_temp.close
     mb_temp.unlink
     assert_match(/MB\z/, mb_file.file_size_human)
+  end
+
+  private
+
+  def build_static_file(filename)
+    static_file = StaticFile.new(filename: filename)
+    static_file.file.attach(
+      io: File.open(Rails.root.join("test/fixtures/files/sample.txt")),
+      filename: filename,
+      content_type: "text/plain"
+    )
+    static_file
   end
 end

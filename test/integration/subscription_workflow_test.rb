@@ -5,7 +5,21 @@ require "test_helper"
 class SubscriptionWorkflowTest < ActionDispatch::IntegrationTest
   def captcha_params(a: 3, b: 4, op: "+", answer: nil)
     expected = op == "+" ? (a + b) : (a - b)
-    { captcha: { a:, b:, op:, answer: (answer || expected).to_s } }
+    token = MathCaptchaHelper.sign_math_captcha({ a: a, b: b, op: op })
+    { captcha: { a:, b:, op:, token:, answer: (answer || expected).to_s } }
+  end
+
+  # The POST /unsubscribe route is added separately; draw it locally so the
+  # two-step flow can be exercised end to end.
+  def with_unsubscribe_post_route(&block)
+    with_routing do |set|
+      set.draw do
+        root "articles#index"
+        get "/unsubscribe", to: "subscriptions#unsubscribe", as: :unsubscribe
+        post "/unsubscribe", to: "subscriptions#unsubscribe"
+      end
+      block.call
+    end
   end
 
   test "complete subscription workflow" do
@@ -30,8 +44,16 @@ class SubscriptionWorkflowTest < ActionDispatch::IntegrationTest
     assert subscriber.confirmed?
     assert subscriber.active?
 
-    # Step 3: Unsubscribe
+    # Step 3: Unsubscribe (two-step: GET confirms, POST executes)
     get unsubscribe_path(token: subscriber.unsubscribe_token)
+
+    subscriber.reload
+    assert_not subscriber.unsubscribed?
+    assert subscriber.active?
+
+    with_unsubscribe_post_route do
+      post "/unsubscribe", params: { token: subscriber.unsubscribe_token }
+    end
 
     subscriber.reload
     assert subscriber.unsubscribed?

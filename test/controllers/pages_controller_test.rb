@@ -22,6 +22,24 @@ class PagesControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  test "show uses private cache control so shared caches do not serve per-session csrf tokens" do
+    get page_path("published-page-fixture")
+    assert_response :success
+    assert_includes response.headers["Cache-Control"], "private"
+    assert_includes response.headers["Cache-Control"], "max-age=86400"
+    assert_not_includes response.headers["Cache-Control"], "public"
+  end
+
+  test "show renders giscus only when page allows comments" do
+    get page_path("published-page-fixture")
+    assert_response :success
+    assert_includes response.body, %(<div class="giscus"></div>)
+
+    get page_path("shared-page-fixture")
+    assert_response :success
+    assert_not_includes response.body, %(<div class="giscus"></div>)
+  end
+
   test "should not show draft page to unauthenticated users" do
     get page_path("draft-page-fixture")
     assert_response :not_found
@@ -55,116 +73,5 @@ class PagesControllerTest < ActionDispatch::IntegrationTest
     # Verify no script tag with alert exists in the article-content
     article_content = response.body[/<div class="article-content">(.*?)<\/div>/m, 1]
     assert_no_match(/<script>/, article_content) if article_content
-  end
-
-  test "admin create update and destroy page via controller routes" do
-    with_routing do |set|
-      set.draw do
-        resources :pages, param: :slug, only: [ :new, :create, :edit, :update, :destroy ]
-        resource :session
-        namespace :admin do
-          get "/" => "articles#index", as: :root
-          resources :pages, only: [ :index ]
-        end
-      end
-
-      sign_in(@user)
-
-      get new_page_path
-      assert_response :not_acceptable
-
-      assert_difference "Page.count", 1 do
-        post pages_path, params: {
-          page: {
-            title: "Created Page",
-            slug: "created-page",
-            status: "draft",
-            content: "Content"
-          }
-        }
-      end
-      assert_redirected_to admin_pages_path
-
-      page = Page.find_by!(slug: "created-page")
-
-      patch page_path(page), params: { page: { title: "Updated Page" } }
-      assert_redirected_to admin_pages_path
-      assert_equal "Updated Page", page.reload.title
-
-      assert_no_difference "Page.count" do
-        delete page_path(page)
-      end
-      assert_equal "trash", page.reload.status
-    end
-  end
-
-  test "json create failure returns unprocessable" do
-    with_routing do |set|
-      set.draw do
-        resources :pages, param: :slug, only: [ :create ]
-        resource :session
-        namespace :admin do
-          get "/" => "articles#index", as: :root
-          resources :pages, only: [ :index ]
-        end
-      end
-
-      sign_in(@user)
-
-      post pages_path, params: {
-        page: { title: "", slug: "" }
-      }, as: :json
-
-      assert_response :unprocessable_entity
-    end
-  end
-
-  test "json update failure returns unprocessable" do
-    with_routing do |set|
-      set.draw do
-        resources :pages, param: :slug, only: [ :update ]
-        resource :session
-        namespace :admin do
-          get "/" => "articles#index", as: :root
-          resources :pages, only: [ :index ]
-        end
-      end
-
-      sign_in(@user)
-
-      page = pages(:published_page)
-      patch page_path(page), params: { page: { title: "" } }, as: :json
-
-      assert_response :unprocessable_entity
-    end
-  end
-
-  test "edit renders and destroy removes trashed page" do
-    with_routing do |set|
-      set.draw do
-        resources :pages, param: :slug, only: [ :edit, :destroy ]
-        resource :session
-        namespace :admin do
-          get "/" => "articles#index", as: :root
-          resources :pages, only: [ :index, :edit, :update ]
-        end
-      end
-
-      sign_in(@user)
-
-      page = Page.create!(
-        title: "Trash Page",
-        slug: "trash-page-#{Time.current.to_i}",
-        status: :trash,
-        content: "Content"
-      )
-
-      get edit_page_path(page)
-      assert_response :success
-
-      assert_difference "Page.count", -1 do
-        delete page_path(page)
-      end
-    end
   end
 end

@@ -1,20 +1,18 @@
 module MathCaptchaVerification
-  include ApplicationHelper
-
   private
 
-  # 手机端跳过验证码验证
-  def skip_captcha_for_mobile?
-    mobile_device?
-  end
-
   def math_captcha_expected(max: 10)
-    captcha = params.fetch(:captcha, {})
+    token = params.dig(:captcha, :token).to_s
+    return nil if token.blank?
 
-    a = Integer(captcha[:a].to_s, 10)
-    b = Integer(captcha[:b].to_s, 10)
-    op = captcha[:op].to_s
+    payload = MathCaptchaHelper.verify_math_captcha(token)
+    return nil unless payload.is_a?(Hash)
 
+    a = payload["a"]
+    b = payload["b"]
+    op = payload["op"].to_s
+
+    return nil unless a.is_a?(Integer) && b.is_a?(Integer)
     return nil unless (0..max).cover?(a) && (0..max).cover?(b)
 
     expected =
@@ -28,14 +26,9 @@ module MathCaptchaVerification
     return nil unless expected && (0..max).cover?(expected)
 
     expected
-  rescue ArgumentError, TypeError
-    nil
   end
 
   def math_captcha_valid?(max: 10)
-    # 手机端跳过验证
-    return true if skip_captcha_for_mobile?
-
     expected = math_captcha_expected(max:)
     return false if expected.nil?
 

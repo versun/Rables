@@ -49,4 +49,15 @@ class TagsControllerTest < ActionDispatch::IntegrationTest
     escaped_title = ERB::Util.h(fallback_title)
     assert_includes response.body, "<title>#{escaped_title}</title>"
   end
+
+  test "tag rss normalizes site url with scheme and without trailing slash" do
+    Setting.first.update!(url: "example.com/")
+    CacheableSettings.refresh_site_info
+
+    get tag_path(@tag.slug, format: :rss)
+    assert_response :success
+    assert_includes response.body, "<link>https://example.com/tags/#{@tag.slug}</link>"
+    assert_includes response.body, "<link>https://example.com/#{@article.slug}</link>"
+    assert_includes response.body, "<guid>https://example.com/#{@article.slug}</guid>"
+  end
 end

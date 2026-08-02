@@ -20,17 +20,17 @@
       
       <%= form_with url: batch_approve_admin_comments_path, method: :post, style: "display: inline;" do |f| %>
         <%= f.button "Approve", type: "submit", class: "btn btn-sm", style: "background: #28a745; color: white;",
-            onclick: "return submitBatchForm(this, 'approve')" %>
+            data: { action: "click->batch-selection#submitBatchAction", batch_selection_action_param: "approve" } %>
       <% end %>
 
       <%= form_with url: batch_reject_admin_comments_path, method: :post, style: "display: inline;" do |f| %>
         <%= f.button "Reject", type: "submit", class: "btn btn-sm", style: "background: #ffc107; color: black;",
-            onclick: "return submitBatchForm(this, 'reject')" %>
+            data: { action: "click->batch-selection#submitBatchAction", batch_selection_action_param: "reject" } %>
       <% end %>
 
       <%= form_with url: batch_destroy_admin_comments_path, method: :post, style: "display: inline;" do |f| %>
         <%= f.button "Delete", type: "submit", class: "btn btn-sm", style: "background: #dc3545; color: white;",
-            onclick: "return submitBatchForm(this, 'delete')" %>
+            data: { action: "click->batch-selection#submitBatchAction", batch_selection_action_param: "delete" } %>
       <% end %>
     </div>
 
@@ -160,7 +160,3 @@
     </div>
   <% end %>
 </div>
-
-<% content_for :javascript do %>
-  <%= render 'admin/shared/batch_form_handler' %>
-<% end %>

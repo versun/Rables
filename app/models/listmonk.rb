@@ -4,6 +4,12 @@ class Listmonk < ApplicationRecord
   # Singleton pattern - use implicit_order_column to avoid Rails 8.1 ordering warnings
   self.implicit_order_column = :id
 
+  HTTP_OPEN_TIMEOUT = 5
+  HTTP_READ_TIMEOUT = 10
+
+  # Error message from the most recent failed API call (nil when healthy)
+  attr_reader :last_error
+
   validates :api_key, presence: true
   validates :username, presence: true
   validates :url, presence: true, format: { with: URI.regexp, message: "格式无效" }
@@ -20,16 +26,18 @@ class Listmonk < ApplicationRecord
       request = Net::HTTP::Get.new(uri)
       request.basic_auth(username, api_key)
 
-      response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
+      response = http_start(uri) do |http|
         http.request(request)
       end
 
       if response.is_a?(Net::HTTPSuccess)
+        @last_error = nil
         JSON.parse(response.body)["data"]["results"]
       else
         raise "Fetch Lists failed! #{response.code} - #{response.body}"
       end
     rescue => e
+      @last_error = e.message
       ActivityLog.log!(
         action: :failed,
         target: :newsletter,
@@ -47,16 +55,18 @@ class Listmonk < ApplicationRecord
       request = Net::HTTP::Get.new(uri)
       request.basic_auth(username, api_key)
 
-      response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
+      response = http_start(uri) do |http|
         http.request(request)
       end
 
       if response.is_a?(Net::HTTPSuccess)
+        @last_error = nil
         JSON.parse(response.body)["data"]
       else
         raise "Fetch Template failed! #{response.code} - #{response.body}"
       end
     rescue => e
+      @last_error = e.message
       ActivityLog.log!(
         action: :failed,
         target: :newsletter,
@@ -86,7 +96,7 @@ class Listmonk < ApplicationRecord
         send_later: false
       }.to_json
 
-      response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
+      response = http_start(uri) do |http|
         http.request(request)
       end
 
@@ -132,7 +142,7 @@ class Listmonk < ApplicationRecord
         status: "running"
       }.to_json
       # running the campaign
-      response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
+      response = http_start(uri) do |http|
         http.request(request)
       end
 
@@ -160,11 +170,22 @@ class Listmonk < ApplicationRecord
         campaign_id: campaign_id,
         error: e.message
       )
-      nil
+      false
     end
   end
 
   private
+
+  def http_start(uri, &block)
+    Net::HTTP.start(
+      uri.hostname,
+      uri.port,
+      use_ssl: uri.scheme == "https",
+      open_timeout: HTTP_OPEN_TIMEOUT,
+      read_timeout: HTTP_READ_TIMEOUT,
+      &block
+    )
+  end
 
   def campaign_body(article)
     base_body = article.html? ? (article.html_content || "") : article.content.to_s

@@ -12,9 +12,11 @@
     <li>
       <%= link_to "Home", root_path, class: "nav-link#{' current' if current_page?(root_path)}" %>
     </li>
+    <% if CacheableSettings.has_tags? %>
     <li>
       <%= link_to "Tags", tags_path, class: "nav-link#{' current' if current_page?(tags_path)}" %>
     </li>
+    <% end %>
     <% if navbar_items.present? %>
     <% navbar_items.each do |page| %>
       <li>
@@ -53,6 +55,7 @@
           <%= hidden_field_tag "captcha[a]", captcha[:a], data: { math_captcha_target: "a" } %>
           <%= hidden_field_tag "captcha[b]", captcha[:b], data: { math_captcha_target: "b" } %>
           <%= hidden_field_tag "captcha[op]", captcha[:op], data: { math_captcha_target: "op" } %>
+          <%= hidden_field_tag "captcha[token]", captcha[:token] %>
         </div>
         <div class="newsletter-message" data-newsletter-subscription-target="message"></div>
       <% end %>

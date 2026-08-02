@@ -16,227 +16,51 @@
   </div>
 
   <% if @active_platform == "mastodon" %>
-  <div class="form-section compact">
-    <h3>Mastodon</h3>
-    <small>Get credentials: Open Mastodon → Preferences → Development → New application | Scope: profile,write:statuses</small>
-
-    <%= form_with(model: @mastodon, url: admin_crosspost_path(@mastodon.platform), method: :patch) do |f| %>
-      <%= f.hidden_field :platform, value: 'mastodon' %>
-
-      <div class="field checkbox">
-        <%= f.check_box :enabled, id: 'crosspost_enabled_mastodon' %>
-        <%= f.label :enabled, "Enable Mastodon CrossPost", for: 'crosspost_enabled_mastodon' %>
-      </div>
-
-      <div class="form-grid form-grid-2">
-        <div class="field">
-          <%= f.label :server_url, "Mastodon Server URL" %>
-          <%= f.text_field :server_url, placeholder: "https://mastodon.social" %>
-        </div>
-
-        <div class="field">
-          <%= f.label :client_key, "Client Key" %>
-          <%= f.text_field :client_key %>
-        </div>
-      </div>
-
-      <div class="form-grid form-grid-2">
-        <div class="field">
-          <%= f.label :client_secret, "Client Secret" %>
-          <%= f.text_field :client_secret %>
-        </div>
-
-        <div class="field">
-          <%= f.label :access_token, "Access Token" %>
-          <%= f.text_field :access_token %>
-        </div>
-      </div>
-
-      <div class="field">
-        <%= f.label :max_characters, "Max Characters", for: 'crosspost_max_characters_mastodon' %>
-        <%= f.number_field :max_characters, min: 1, placeholder: "500", value: @mastodon.max_characters || @mastodon.default_max_characters, id: 'crosspost_max_characters_mastodon' %>
-        <small>
-          Maximum characters for posts. If content exceeds this limit, a "Read more" link will be added. Default: 500
-        </small>
-      </div>
-
-      <div class="field checkbox">
-        <%= f.check_box :auto_fetch_comments %>
-        <%= f.label :auto_fetch_comments, "Auto-fetch Comments" %>
-      </div>
-      <div class="field">
-        <%= f.label :comment_fetch_schedule, "Comment Fetch Schedule" %>
-        <%= f.select :comment_fetch_schedule,
-            options_for_select([
-              ['Disabled', ''],
-              ['Daily at 12:00 AM', 'daily'],
-              ['Weekly on Monday at 12:00 AM', 'weekly'],
-              ['Monthly on 1st at 12:00 AM', 'monthly']
-            ], @mastodon.comment_fetch_schedule),
-            {},
-            { class: "form-select" } %>
-        <small>
-          Select the frequency for automatically fetching comments. All fetches run at 12:00 AM (midnight).
-        </small>
-      </div>
-
-      <div class="form-actions">
-        <%= f.submit "Save", class: 'btn btn-primary' %>
-        <div id="verify-button-mastodon">
-          <%= button_tag "Verify", type: 'submit', class: 'btn btn-secondary', form: "verify-form-mastodon", data: { turbo_frame: "_top" } %>
-        </div>
-      </div>
-    <% end %>
-
-    <%= form_with(url: verify_admin_crosspost_path('mastodon'), method: :post, data: { turbo: true }, id: "verify-form-mastodon") do |vf| %>
-      <%= hidden_field_tag 'crosspost[platform]', 'mastodon' %>
-      <%= hidden_field_tag 'crosspost[server_url]', @mastodon.server_url, id: 'verify_server_url_mastodon' %>
-      <%= hidden_field_tag 'crosspost[client_key]', @mastodon.client_key, id: 'verify_client_key_mastodon' %>
-      <%= hidden_field_tag 'crosspost[client_secret]', @mastodon.client_secret, id: 'verify_client_secret_mastodon' %>
-      <%= hidden_field_tag 'crosspost[access_token]', @mastodon.access_token, id: 'verify_access_token_mastodon' %>
-    <% end %>
-    <div id="verify-messages-mastodon"></div>
-  </div>
+    <%= render "platform_form",
+        platform: "mastodon",
+        crosspost: @mastodon,
+        title: "Mastodon",
+        description: "Get credentials: Open Mastodon → Preferences → Development → New application | Scope: profile,write:statuses",
+        enabled_label: "Enable Mastodon CrossPost",
+        field_rows: [
+          [[:server_url, "Mastodon Server URL", "https://mastodon.social"], [:client_key, "Client Key", nil]],
+          [[:client_secret, "Client Secret", nil], [:access_token, "Access Token", nil]]
+        ],
+        max_characters_hint: 'Maximum characters for posts. If content exceeds this limit, a "Read more" link will be added. Default: 500',
+        fetch_comments: true,
+        verify_fields: %i[server_url client_key client_secret access_token] %>
   <% end %>
 
   <% if @active_platform == "twitter" %>
-  <div class="form-section compact">
-    <h3>X (Twitter)</h3>
-    <small>First, obtain X credentials from <%= link_to "https://developer.x.com", "https://developer.x.com", target: "_blank" %></small>
-
-    <%= form_with(model: @twitter, url: admin_crosspost_path(@twitter.platform), method: :patch) do |f| %>
-      <%= f.hidden_field :platform, value: 'twitter' %>
-
-      <div class="field checkbox">
-        <%= f.check_box :enabled, id: 'crosspost_enabled_twitter' %>
-        <%= f.label :enabled, "Enable X CrossPost", for: 'crosspost_enabled_twitter' %>
-      </div>
-
-      <div class="form-grid form-grid-2">
-        <div class="field">
-          <%= f.label :access_token, "Access Token" %>
-          <%= f.text_field :access_token %>
-        </div>
-
-        <div class="field">
-          <%= f.label :access_token_secret, "Access Token Secret" %>
-          <%= f.text_field :access_token_secret %>
-        </div>
-      </div>
-
-      <div class="form-grid form-grid-2">
-        <div class="field">
-          <%= f.label :api_key, "API Key" %>
-          <%= f.text_field :api_key %>
-        </div>
-
-        <div class="field">
-          <%= f.label :api_key_secret, "API Key Secret" %>
-          <%= f.text_field :api_key_secret %>
-        </div>
-      </div>
-
-      <div class="field">
-        <%= f.label :max_characters, "Max Characters", for: 'crosspost_max_characters_twitter' %>
-        <%= f.number_field :max_characters, min: 1, placeholder: "250", value: @twitter.max_characters || @twitter.default_max_characters, id: 'crosspost_max_characters_twitter' %>
-        <small>
-          Maximum characters for posts. If content exceeds this limit, a "Read more" link will be added. Default: 250 (non-ASCII characters count as 2)
-        </small>
-      </div>
-
-      <div class="form-actions">
-        <%= f.submit "Save", class: 'btn btn-primary' %>
-        <div id="verify-button-twitter">
-          <%= button_tag "Verify", type: 'submit', class: 'btn btn-secondary', form: "verify-form-twitter", data: { turbo_frame: "_top" } %>
-        </div>
-      </div>
-    <% end %>
-
-    <%= form_with(url: verify_admin_crosspost_path('twitter'), method: :post, data: { turbo: true }, id: "verify-form-twitter") do |vf| %>
-      <%= hidden_field_tag 'crosspost[platform]', 'twitter' %>
-      <%= hidden_field_tag 'crosspost[access_token]', @twitter.access_token, id: 'verify_access_token_twitter' %>
-      <%= hidden_field_tag 'crosspost[access_token_secret]', @twitter.access_token_secret, id: 'verify_access_token_secret_twitter' %>
-      <%= hidden_field_tag 'crosspost[api_key]', @twitter.api_key, id: 'verify_api_key_twitter' %>
-      <%= hidden_field_tag 'crosspost[api_key_secret]', @twitter.api_key_secret, id: 'verify_api_key_secret_twitter' %>
-    <% end %>
-    <div id="verify-messages-twitter"></div>
-  </div>
+    <%= render "platform_form",
+        platform: "twitter",
+        crosspost: @twitter,
+        title: "X (Twitter)",
+        description: "First, obtain X credentials from #{link_to('https://developer.x.com', 'https://developer.x.com', target: '_blank')}".html_safe,
+        enabled_label: "Enable X CrossPost",
+        field_rows: [
+          [[:access_token, "Access Token", nil], [:access_token_secret, "Access Token Secret", nil]],
+          [[:api_key, "API Key", nil], [:api_key_secret, "API Key Secret", nil]]
+        ],
+        max_characters_hint: 'Maximum characters for posts. If content exceeds this limit, a "Read more" link will be added. Default: 250 (non-ASCII characters count as 2)',
+        fetch_comments: false,
+        verify_fields: %i[access_token access_token_secret api_key api_key_secret] %>
   <% end %>
 
   <% if @active_platform == "bluesky" %>
-  <div class="form-section compact">
-    <h3>Bluesky</h3>
-    <small>Get credentials: Log in to your Bluesky account and generate an App Password in settings.</small>
-
-    <%= form_with(model: @bluesky, url: admin_crosspost_path(@bluesky.platform), method: :patch) do |f| %>
-      <%= f.hidden_field :platform, value: 'bluesky' %>
-
-      <div class="field checkbox">
-        <%= f.check_box :enabled, id: 'crosspost_enabled_bluesky' %>
-        <%= f.label :enabled, "Enable Bluesky CrossPost", for: 'crosspost_enabled_bluesky' %>
-      </div>
-
-      <div class="form-grid form-grid-2">
-        <div class="field">
-          <%= f.label :username, "Username" %>
-          <%= f.text_field :username, placeholder: "your.handle" %>
-        </div>
-
-        <div class="field">
-          <%= f.label :app_password, "App Password" %>
-          <%= f.text_field :app_password %>
-        </div>
-      </div>
-
-      <div class="field">
-        <%= f.label :server_url, "Server URL" %>
-        <%= f.text_field :server_url, placeholder: "https://bsky.social/xrpc" %>
-      </div>
-
-      <div class="field">
-        <%= f.label :max_characters, "Max Characters", for: 'crosspost_max_characters_bluesky' %>
-        <%= f.number_field :max_characters, min: 1, placeholder: "300", value: @bluesky.max_characters || @bluesky.default_max_characters, id: 'crosspost_max_characters_bluesky' %>
-        <small>
-          Maximum characters for posts. If content exceeds this limit, a "Read more" link will be added. Default: 300
-        </small>
-      </div>
-
-      <div class="field checkbox">
-        <%= f.check_box :auto_fetch_comments %>
-        <%= f.label :auto_fetch_comments, "Auto-fetch Comments" %>
-      </div>
-      <div class="field">
-        <%= f.label :comment_fetch_schedule, "Comment Fetch Schedule" %>
-        <%= f.select :comment_fetch_schedule,
-            options_for_select([
-              ['Disabled', ''],
-              ['Daily at 12:00 AM', 'daily'],
-              ['Weekly on Monday at 12:00 AM', 'weekly'],
-              ['Monthly on 1st at 12:00 AM', 'monthly']
-            ], @bluesky.comment_fetch_schedule),
-            {},
-            { class: "form-select" } %>
-        <small>
-          Select the frequency for automatically fetching comments. All fetches run at 12:00 AM (midnight).
-        </small>
-      </div>
-
-      <div class="form-actions">
-        <%= f.submit "Save", class: 'btn btn-primary' %>
-        <div id="verify-button-bluesky">
-          <%= button_tag "Verify", type: 'submit', class: 'btn btn-secondary', form: "verify-form-bluesky", data: { turbo_frame: "_top" } %>
-        </div>
-      </div>
-    <% end %>
-
-    <%= form_with(url: verify_admin_crosspost_path('bluesky'), method: :post, data: { turbo: true }, id: "verify-form-bluesky") do |vf| %>
-      <%= hidden_field_tag 'crosspost[platform]', 'bluesky' %>
-      <%= hidden_field_tag 'crosspost[username]', @bluesky.username, id: 'verify_username_bluesky' %>
-      <%= hidden_field_tag 'crosspost[app_password]', @bluesky.app_password, id: 'verify_app_password_bluesky' %>
-      <%= hidden_field_tag 'crosspost[server_url]', @bluesky.server_url, id: 'verify_server_url_bluesky' %>
-    <% end %>
-    <div id="verify-messages-bluesky"></div>
-  </div>
+    <%= render "platform_form",
+        platform: "bluesky",
+        crosspost: @bluesky,
+        title: "Bluesky",
+        description: "Get credentials: Log in to your Bluesky account and generate an App Password in settings.",
+        enabled_label: "Enable Bluesky CrossPost",
+        field_rows: [
+          [[:username, "Username", "your.handle"], [:app_password, "App Password", nil]],
+          [[:server_url, "Server URL", "https://bsky.social/xrpc"]]
+        ],
+        max_characters_hint: 'Maximum characters for posts. If content exceeds this limit, a "Read more" link will be added. Default: 300',
+        fetch_comments: true,
+        verify_fields: %i[username app_password server_url] %>
   <% end %>
 
   <% if @active_platform == "xiaohongshu" %>
@@ -280,69 +104,3 @@
   <% end %>
 
 </div>
-
-<% content_for :javascript do %>
-<script>
-(function() {
-  // 使用立即执行函数避免重复绑定
-  let initialized = false;
-
-  function initFormSync() {
-    if (initialized) return;
-    initialized = true;
-
-    // 同步主表单的值到 verify 表单
-    function syncFormValues(platform) {
-      const mainForm = document.querySelector(`form[action*="/admin/crossposts/${platform}"][method="patch"]`);
-      if (!mainForm) return;
-
-      const verifyForm = document.getElementById(`verify-form-${platform}`);
-      if (!verifyForm) return;
-
-      // 获取主表单的所有字段值
-      const formData = new FormData(mainForm);
-      formData.forEach((value, key) => {
-        if (key.startsWith('crosspost[')) {
-          const fieldName = key.replace('crosspost[', '').replace(']', '');
-          const verifyField = verifyForm.querySelector(`[name="crosspost[${fieldName}]"]`);
-          if (verifyField) {
-            verifyField.value = value;
-          }
-        }
-      });
-    }
-
-    // 为每个平台设置表单同步
-    ['mastodon', 'twitter', 'bluesky'].forEach(platform => {
-      const mainForm = document.querySelector(`form[action*="/admin/crossposts/${platform}"][method="patch"]`);
-      if (mainForm) {
-        // 使用事件委托，避免重复绑定
-        mainForm.addEventListener('input', () => syncFormValues(platform), { once: false });
-        mainForm.addEventListener('change', () => syncFormValues(platform), { once: false });
-
-        // 在 verify 表单提交前同步值
-        const verifyForm = document.getElementById(`verify-form-${platform}`);
-        if (verifyForm) {
-          verifyForm.addEventListener('submit', (e) => {
-            syncFormValues(platform);
-          }, { once: false });
-        }
-      }
-    });
-  }
-
-  // 在页面加载时初始化
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initFormSync);
-  } else {
-    initFormSync();
-  }
-
-  // 支持 Turbo
-  document.addEventListener('turbo:load', function() {
-    initialized = false;
-    initFormSync();
-  });
-})();
-</script>
-<% end %>

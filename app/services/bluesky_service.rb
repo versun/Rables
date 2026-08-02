@@ -2,18 +2,23 @@
 class BlueskyService
   include ContentBuilder
   include HttpRedirectHandler
+  include TransientNetworkErrors
+  include ImageCompressor
 
   TOKEN_CACHE_KEY = :bluesky_token_data
+  # Bluesky access tokens live ~2 hours; expire cached session data sooner so
+  # a stale token is never reused after rotation.
+  TOKEN_CACHE_TTL = 1.hour
 
   def initialize
-    @settings = Crosspost.bluesky
+    @settings = Crosspost.for("bluesky")
     return unless @settings.present?
 
     @username = @settings.username
     @password = @settings.app_password
     @server_url = @settings.server_url.presence || "https://bsky.social/xrpc"
 
-    if (token_data = Rails.cache.read(TOKEN_CACHE_KEY))
+    if (token_data = Rails.cache.read(token_cache_key))
       process_tokens(token_data)
     end
   end
@@ -23,20 +28,25 @@ class BlueskyService
       return { success: false, error: "App Password and username are required" }
     end
 
-    # Temporarily store the current credentials
+    # Temporarily store the current credentials and token state
     original_username = @username
     original_password = @password
     original_server_url = @server_url
+    original_token = @token
+    original_renewal_token = @renewal_token
+    original_user_did = @user_did
+    original_token_expires_at = @token_expires_at
 
     begin
       @username = settings[:username]
       @password = settings[:app_password]
       @server_url = settings[:server_url]
 
-      # Clear any existing token data
+      # Clear any existing token data so verification always hits the API
       @token = nil
       @token_expires_at = nil
-      Rails.cache.delete(TOKEN_CACHE_KEY)
+      original_cached = Rails.cache.read(token_cache_key)
+      Rails.cache.delete(token_cache_key)
 
       # Attempt to generate new tokens with the provided credentials
       verify_tokens
@@ -44,17 +54,24 @@ class BlueskyService
     rescue => e
       { success: false, error: "Bluesky verification failed: #{e.message}" }
     ensure
-      # Restore the original credentials
+      # Restore the original credentials, token state, and cache entry so a
+      # verification attempt never pollutes the session of the active account
       @username = original_username
       @password = original_password
       @server_url = original_server_url
+      @token = original_token
+      @renewal_token = original_renewal_token
+      @user_did = original_user_did
+      @token_expires_at = original_token_expires_at
+
+      restore_cache_entry(token_cache_key_for(settings[:username]), original_cached)
     end
   end
 
   def post(article)
     return unless @settings&.enabled?
 
-    max_length = @settings.effective_max_characters || 300
+    max_length = @settings.effective_max_characters
     content = build_content(article: article, max_length: max_length)
 
     # 获取文章所有图片（Bluesky最多支持4张）
@@ -105,6 +122,8 @@ class BlueskyService
         platform: "bluesky",
         error: e.message
       )
+      raise if transient_network_error?(e)
+
       nil
     end
   end
@@ -121,10 +140,10 @@ class BlueskyService
     # facets += tag_facets(message)
 
     # Build the record - only include embed if it's present
+    # langs 故意不设置：站点没有语言配置，硬编码会把所有帖子错标为英文
     record = {
       text: message,
       createdAt: Time.now.iso8601,
-      langs: [ "en" ],
       facets: facets
     }
 
@@ -143,15 +162,6 @@ class BlueskyService
     if response_body["uri"].present?
       "https://bsky.app/profile/#{@settings.username}/post/#{response_body["uri"].split('/').last}"
     end
-  end
-
-  def unskeet(skeet_uri)
-    # Generate, refresh, or use an active token.
-    verify_tokens
-
-    did, nsid, record_key = skeet_uri.delete_prefix("at://").split("/")
-    body = { repo: did, collection: nsid, rkey: record_key }
-    post_request("#{@server_url}/com.atproto.repo.deleteRecord", body: body)
   end
 
   # Fetch comments (replies) for a Bluesky post
@@ -286,7 +296,13 @@ class BlueskyService
     end
     request.body = body.is_a?(Hash) ? body.to_json : body if body.present?
     response = http.request(request)
-  raise "#{response.code} response - #{response.body}" unless response.code.to_s.start_with?("2")
+    unless response.code.to_s.start_with?("2")
+      message = "#{response.code} response - #{response.body}"
+      # 5xx/429 属于瞬时服务端错误，走 TransientServerError 以便上层判定为可重试
+      raise TransientNetworkErrors::TransientServerError, message if response.code.to_s.start_with?("5") || response.code == "429"
+
+      raise message
+    end
 
     response.content_type == "application/json" ? JSON.parse(response.body) : response.body
   end
@@ -315,8 +331,20 @@ class BlueskyService
     if @token.nil?
       generate_tokens
     elsif @token_expires_at < Time.now.utc + 60
-      perform_token_refresh
+      refresh_or_regenerate_tokens
     end
+  end
+
+  # Refreshes the session; if the refresh token is rejected (revoked or
+  # expired), fall back to a full login once before giving up.
+  def refresh_or_regenerate_tokens
+    perform_token_refresh
+  rescue => e
+    Rails.event.notify "bluesky_service.token_refresh_failed",
+      level: "warn",
+      component: "BlueskyService",
+      error_message: e.message
+    generate_tokens
   end
 
   # Given the response body of generating or refreshing token, this pulls out
@@ -325,18 +353,40 @@ class BlueskyService
     @token = response_body["accessJwt"]
     @renewal_token = response_body["refreshJwt"]
     @user_did = response_body["did"]
-    @token_expires_at = Time.at(JSON.parse(Base64.decode64(response_body["accessJwt"].split(".")[1]))["exp"]).utc
+    @token_expires_at = Time.at(JSON.parse(decode_jwt_payload(@token))["exp"]).utc
+  end
+
+  # JWT payloads are unpadded base64url; Base64.decode64 uses the standard
+  # alphabet and silently corrupts payloads containing '-' or '_'.
+  def decode_jwt_payload(jwt)
+    payload = jwt.split(".")[1].to_s
+    payload += "=" * ((4 - payload.length % 4) % 4)
+    Base64.urlsafe_decode64(payload)
   end
 
   # Stores the token info for use later, else we'll have to generate the token
   # for every instance of this class.
   # Assumes the cached info is stored in the Rails cache store.
   def store_token_data(data)
-    Rails.cache.write(TOKEN_CACHE_KEY, data)
+    Rails.cache.write(token_cache_key, data, expires_in: TOKEN_CACHE_TTL)
   end
 
-  def upload_image_embed(attachable)
-    upload_images_embed([ attachable ])
+  # Token data is cached per account so switching credentials never reuses
+  # another account's session.
+  def token_cache_key
+    token_cache_key_for(@username)
+  end
+
+  def token_cache_key_for(username)
+    "#{TOKEN_CACHE_KEY}:#{username}"
+  end
+
+  def restore_cache_entry(key, original_cached)
+    if original_cached
+      Rails.cache.write(key, original_cached, expires_in: TOKEN_CACHE_TTL)
+    else
+      Rails.cache.delete(key)
+    end
   end
 
   def upload_images_embed(attachables)
@@ -363,7 +413,7 @@ class BlueskyService
           blob_data = upload_blob(attachable)
           filename = attachable.filename.to_s if attachable.respond_to?(:filename)
         # Handle RemoteImage
-        elsif attachable.class.name == "ActionText::Attachables::RemoteImage"
+        elsif attachable.is_a?(ActionText::Attachables::RemoteImage) || attachable.is_a?(RemoteImageWrapper)
           Rails.event.notify "bluesky_service.processing_remote_image",
             level: "info",
             component: "BlueskyService",
@@ -438,6 +488,8 @@ class BlueskyService
         component: "BlueskyService",
         error_message: e.message,
         backtrace: e.backtrace.join("\n")
+      raise if transient_network_error?(e)
+
       nil
     end
   end
@@ -455,8 +507,11 @@ class BlueskyService
       # 下载图片数据
       image_data = blob.download
 
-      # 如果图片太大，进行压缩
-      image_data, content_type = resize_image_if_needed(image_data, blob.content_type)
+      # 如果图片太大，进行压缩；压缩失败则放弃上传
+      resized = resize_image_if_needed(image_data, blob.content_type)
+      return nil unless resized
+
+      image_data, content_type = resized
 
       uri = URI("#{@server_url}/com.atproto.repo.uploadBlob")
       request = Net::HTTP::Post.new(uri)
@@ -484,6 +539,8 @@ class BlueskyService
         level: "error",
         component: "BlueskyService",
         error_message: e.message
+      raise if transient_network_error?(e)
+
       nil
     end
   end
@@ -500,8 +557,11 @@ class BlueskyService
 
       image_data, content_type = result
 
-      # 如果图片太大，进行压缩
-      image_data, content_type = resize_image_if_needed(image_data, content_type)
+      # 如果图片太大，进行压缩；压缩失败则放弃上传
+      resized = resize_image_if_needed(image_data, content_type)
+      return nil unless resized
+
+      image_data, content_type = resized
 
       # 上传到 Bluesky
       upload_uri = URI("#{@server_url}/com.atproto.repo.uploadBlob")
@@ -534,6 +594,8 @@ class BlueskyService
         component: "BlueskyService",
         error_message: e.message,
         backtrace: e.backtrace.join("\n")
+      raise if transient_network_error?(e)
+
       nil
     end
   end
@@ -545,124 +607,11 @@ class BlueskyService
       redirect_uri: redirect_uri.to_s
   end
 
-  # 如果图片太大，使用 ruby-vips 压缩
+  # 如果图片太大，使用共享的 ImageCompressor 压缩
   def resize_image_if_needed(image_data, content_type)
     return [ image_data, content_type ] if image_data.bytesize <= MAX_IMAGE_SIZE
 
-    original_path = nil
-    compressed_path = nil
-
-    begin
-      Rails.event.notify "bluesky_service.resizing_image",
-        level: "info",
-        component: "BlueskyService",
-        original_size: image_data.bytesize,
-        max_size: MAX_IMAGE_SIZE
-
-      # 创建临时文件保存原始图片
-      extension = content_type.to_s.split("/").last
-      extension = "jpg" if extension.blank? || extension == "jpeg"
-      extension = extension.downcase
-
-      temp_dir = Rails.root.join("tmp", "bluesky_uploads")
-      FileUtils.mkdir_p(temp_dir)
-
-      original_path = temp_dir.join("original_#{SecureRandom.hex(8)}.#{extension}")
-      File.binwrite(original_path, image_data)
-
-      # 使用 Vips 处理图片
-      image = Vips::Image.new_from_file(original_path.to_s)
-
-      # 计算缩放比例
-      # 首先尝试降低质量压缩
-      quality = 85
-      compressed_path = temp_dir.join("compressed_#{SecureRandom.hex(8)}.jpg")
-
-      loop do
-        image.write_to_file(compressed_path.to_s, Q: quality, strip: true)
-        compressed_size = File.size(compressed_path)
-
-        if compressed_size <= MAX_IMAGE_SIZE || quality <= 50
-          break
-        end
-
-        # 如果还是太大，继续降低质量
-        quality -= 10
-        File.delete(compressed_path) if File.exist?(compressed_path)
-      end
-
-      # 如果质量降到50还是太大，尝试缩放尺寸
-      if File.size(compressed_path) > MAX_IMAGE_SIZE
-        File.delete(compressed_path) if File.exist?(compressed_path)
-
-        # 计算需要缩小的比例
-        scale_factor = Math.sqrt(MAX_IMAGE_SIZE.to_f / image_data.bytesize) * 0.9
-        new_width = (image.width * scale_factor).to_i
-        new_height = (image.height * scale_factor).to_i
-
-        # 确保不小于最小尺寸
-        new_width = [ new_width, 100 ].max
-        new_height = [ new_height, 100 ].max
-
-        resized = image.resize(scale_factor)
-        resized.write_to_file(compressed_path.to_s, Q: 85, strip: true)
-      end
-
-      result_data = File.binread(compressed_path)
-      result_type = "image/jpeg"
-
-      Rails.event.notify "bluesky_service.image_resized",
-        level: "info",
-        component: "BlueskyService",
-        original_size: image_data.bytesize,
-        final_size: result_data.bytesize,
-        quality: quality
-
-      [ result_data, result_type ]
-    rescue => e
-      Rails.event.notify "bluesky_service.resize_failed",
-        level: "error",
-        component: "BlueskyService",
-        error_message: e.message,
-        backtrace: e.backtrace.join("\n")
-
-      # 压缩失败时返回原图，让 Bluesky 决定是否接受
-      [ image_data, content_type ]
-    ensure
-      File.delete(original_path) if original_path && File.exist?(original_path)
-      File.delete(compressed_path) if compressed_path && File.exist?(compressed_path)
-    end
-  end
-
-  # 跟随HTTP重定向获取图片
-  def fetch_with_redirect(uri, limit = 5)
-    raise "Too many HTTP redirects" if limit == 0
-
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = (uri.scheme == "https")
-    http.open_timeout = 10
-    http.read_timeout = 10
-
-    request = Net::HTTP::Get.new(uri.path + (uri.query ? "?#{uri.query}" : ""))
-    response = http.request(request)
-
-    case response
-    when Net::HTTPSuccess
-      response
-    when Net::HTTPRedirection
-      redirect_uri = URI.parse(response["location"])
-      # 如果是相对URL，补全域名
-      if redirect_uri.relative?
-        redirect_uri = URI.join("#{uri.scheme}://#{uri.host}:#{uri.port}", response["location"])
-      end
-      Rails.event.notify "bluesky_service.following_redirect",
-        level: "info",
-        component: "BlueskyService",
-        redirect_uri: redirect_uri.to_s
-      fetch_with_redirect(redirect_uri, limit - 1)
-    else
-      response
-    end
+    compress_image(image_data, content_type, MAX_IMAGE_SIZE, temp_dir: Rails.root.join("tmp", "bluesky_uploads"))
   end
 
   # Extract AT-URI from Bluesky URL

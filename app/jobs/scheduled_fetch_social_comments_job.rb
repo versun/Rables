@@ -21,34 +21,42 @@ class ScheduledFetchSocialCommentsJob < ApplicationJob
       return
     end
 
-    # Use the first platform's schedule (all should typically be the same)
-    schedule = enabled_platforms.first.comment_fetch_schedule
-    last_fetch_at = Rails.cache.read(CACHE_KEY)
+    # Each platform follows its own schedule and its own last-fetch timestamp
+    due_platforms = enabled_platforms.select do |platform|
+      last_fetch_at = Rails.cache.read(cache_key_for(platform.platform))
+      should_fetch_now?(platform.comment_fetch_schedule, last_fetch_at)
+    end
 
-    unless should_fetch_now?(schedule, last_fetch_at)
+    if due_platforms.empty?
       Rails.event.notify "scheduled_fetch_social_comments_job.skipped",
         level: "debug",
         component: "ScheduledFetchSocialCommentsJob",
         reason: "not_time_yet",
-        schedule: schedule,
-        last_fetch_at: last_fetch_at&.iso8601
+        platforms: enabled_platforms.map(&:platform)
       return
     end
 
     # Update last fetch time before triggering to avoid duplicate runs
-    Rails.cache.write(CACHE_KEY, Time.current, expires_in: 2.months)
+    due_platforms.each do |platform|
+      Rails.cache.write(cache_key_for(platform.platform), Time.current, expires_in: 2.months)
+    end
 
     Rails.event.notify "scheduled_fetch_social_comments_job.triggering",
       level: "info",
       component: "ScheduledFetchSocialCommentsJob",
-      schedule: schedule,
-      platforms_count: enabled_platforms.count
+      platforms: due_platforms.map(&:platform)
 
-    # Trigger the actual fetch job
-    FetchSocialCommentsJob.perform_later
+    # Trigger the actual fetch job for each due platform
+    due_platforms.each do |platform|
+      FetchSocialCommentsJob.perform_later(platform.platform)
+    end
   end
 
   private
+
+  def cache_key_for(platform)
+    "#{CACHE_KEY}:#{platform}"
+  end
 
   def should_fetch_now?(schedule, last_fetch_at)
     # If never fetched before, fetch now

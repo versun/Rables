@@ -8,18 +8,16 @@ class Admin::EditorImagesControllerTest < ActionDispatch::IntegrationTest
     sign_in(@user)
   end
 
-  test "successfully uploads a valid file of any type" do
+  test "rejects non-image files" do
     text_file = fixture_file_upload("sample.txt", "text/plain")
 
-    assert_difference "ActiveStorage::Blob.count", 1 do
+    assert_no_difference "ActiveStorage::Blob.count" do
       post admin_editor_images_path, params: { file: text_file }
     end
 
-    assert_response :success
+    assert_response :unsupported_media_type
     json_response = JSON.parse(response.body)
-    assert json_response["location"].present?
-    # URL is Active Storage blob URL
-    assert_match %r{/rails/active_storage/}, json_response["location"]
+    assert_equal "Unsupported file type", json_response["error"]
   end
 
   test "returns error when file is missing" do
@@ -30,14 +28,14 @@ class Admin::EditorImagesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "No file provided", json_response["error"]
   end
 
-  test "supports non-image MIME types" do
-    text_file = fixture_file_upload("sample.txt", "text/plain")
+  test "rejects SVG uploads" do
+    svg_file = fixture_file_upload("sample.txt", "image/svg+xml")
 
-    assert_difference "ActiveStorage::Blob.count", 1 do
-      post admin_editor_images_path, params: { file: text_file }
+    assert_no_difference "ActiveStorage::Blob.count" do
+      post admin_editor_images_path, params: { file: svg_file }
     end
 
-    assert_response :success
+    assert_response :unsupported_media_type
   end
 
   test "continues to accept image files" do

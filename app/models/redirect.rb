@@ -15,20 +15,18 @@ class Redirect < ApplicationRecord
 
   def match?(path)
     return false unless enabled?
-    Timeout.timeout(REGEX_TIMEOUT) { compiled_regex.match?(path) }
-  rescue RegexpError, Timeout::Error
+    compiled_regex.match?(path)
+  rescue RegexpError
+    # Invalid patterns are rejected by validation; this also covers Regexp::TimeoutError
     false
   end
 
   def apply_to(path)
     return nil unless match?(path)
-    Timeout.timeout(REGEX_TIMEOUT) do
-      result = path.sub(compiled_regex, replacement)
-      # If the regex matched the entire path (common case), return the replacement directly
-      # Otherwise return the substituted result
-      result
-    end
-  rescue RegexpError, Timeout::Error
+    # If the regex matched the entire path (common case), return the replacement directly
+    # Otherwise return the substituted result
+    path.sub(compiled_regex, replacement)
+  rescue RegexpError
     nil
   end
 
@@ -51,7 +49,13 @@ class Redirect < ApplicationRecord
   end
 
   def compiled_regex
-    @compiled_regex ||= Regexp.new(regex)
+    # Recompile when the regex attribute changed (e.g. unsaved edits on a cached instance).
+    # Ruby 3.2+ per-regexp timeout replaces the previous Timeout.timeout wrapper.
+    if @compiled_regex_source != regex
+      @compiled_regex = Regexp.new(regex, timeout: REGEX_TIMEOUT)
+      @compiled_regex_source = regex
+    end
+    @compiled_regex
   end
 
   def validate_regex_pattern

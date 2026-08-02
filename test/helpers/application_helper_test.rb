@@ -5,23 +5,6 @@ require "test_helper"
 class ApplicationHelperTest < ActionView::TestCase
   private
 
-  def with_stubbed_request(user_agent)
-    request_stub = Struct.new(:user_agent).new(user_agent)
-
-    singleton_class.class_eval do
-      alias_method :__original_request, :request
-      define_method(:request) { request_stub }
-    end
-
-    yield request_stub
-  ensure
-    singleton_class.class_eval do
-      remove_method :request
-      alias_method :request, :__original_request
-      remove_method :__original_request
-    end
-  end
-
   def with_env(key, value)
     original = ENV[key]
     ENV[key] = value
@@ -66,15 +49,6 @@ class ApplicationHelperTest < ActionView::TestCase
 
   public
 
-  test "mobile_device? detects and memoizes mobile user agents" do
-    with_stubbed_request("iphone") do |request_stub|
-      assert mobile_device?
-
-      request_stub.user_agent = "desktop"
-      assert mobile_device?
-    end
-  end
-
   test "rails_api_url normalizes env url and adds protocol" do
     with_env("RAILS_API_URL", "example.com/api/") do
       assert_equal "https://example.com/api", rails_api_url
@@ -111,6 +85,33 @@ class ApplicationHelperTest < ActionView::TestCase
       with_env("RAILS_API_URL", "https://localhost:3000/") do
         assert_equal "http://localhost:3000", rails_api_url
       end
+    end
+  end
+
+  test "absolute_og_image prefixes normalized site url for root-relative path" do
+    with_stubbed_site_info({ url: "example.com/blog/" }) do
+      assert_equal "https://example.com/blog/uploads/og.png", absolute_og_image("/uploads/og.png")
+    end
+  end
+
+  test "absolute_og_image keeps url with scheme unchanged" do
+    with_stubbed_site_info({ url: "example.com" }) do
+      assert_equal "https://cdn.other.com/a.png", absolute_og_image("https://cdn.other.com/a.png")
+      assert_equal "http://cdn.other.com/a.png", absolute_og_image("http://cdn.other.com/a.png")
+    end
+  end
+
+  test "absolute_og_image adds leading slash for bare relative path" do
+    with_stubbed_site_info({ url: "example.com/" }) do
+      assert_equal "https://example.com/uploads/og.png", absolute_og_image("uploads/og.png")
+    end
+  end
+
+  test "absolute_og_image returns original value when blank or site url missing" do
+    with_stubbed_site_info({ url: "" }) do
+      assert_equal "", absolute_og_image(nil)
+      assert_equal "/uploads/og.png", absolute_og_image("/uploads/og.png")
+      assert_equal "uploads/og.png", absolute_og_image("uploads/og.png")
     end
   end
 end

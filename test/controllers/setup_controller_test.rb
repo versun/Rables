@@ -81,4 +81,25 @@ class SetupControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "form"
   end
+
+  test "create redirects when setup already completed" do
+    Setting.first_or_create.update!(setup_completed: true, url: "https://example.com")
+
+    assert_no_difference "User.count" do
+      post setup_path, params: {
+        user: {
+          user_name: "second-admin",
+          password: "password123",
+          password_confirmation: "password123"
+        },
+        setting: {
+          title: "Test Site",
+          url: "https://example.com",
+          time_zone: "UTC"
+        }
+      }
+    end
+
+    assert_redirected_to admin_root_path
+  end
 end

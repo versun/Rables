@@ -8,7 +8,7 @@ class TwitterArchiveImport < ApplicationRecord
   validates :status, presence: true, inclusion: { in: STATUSES }
   validates :progress, presence: true, inclusion: { in: 0..100 }
   validates :queued_at, presence: true
-  validates :active_slot, uniqueness: true, allow_nil: true, if: :supports_active_slot?
+  validates :active_slot, uniqueness: true, allow_nil: true
 
   scope :active, -> { where(status: ACTIVE_STATUSES) }
   scope :recent_first, -> { order(created_at: :desc) }
@@ -27,10 +27,6 @@ class TwitterArchiveImport < ApplicationRecord
 
   def self.last_imported_at
     completed.maximum(:finished_at) || TwitterArchiveTweet.maximum(:created_at)
-  end
-
-  def status_label
-    status.to_s.humanize
   end
 
   def mark_running!
@@ -83,22 +79,12 @@ class TwitterArchiveImport < ApplicationRecord
       File.delete(path)
     end
 
-    if persisted?
-      update_column(:source_path, nil)
-    else
-      self.source_path = nil
-    end
+    update_column(:source_path, nil)
   end
 
   private
 
   def sync_active_slot
-    return unless supports_active_slot?
-
     self.active_slot = ACTIVE_STATUSES.include?(status.to_s) ? 1 : nil
-  end
-
-  def supports_active_slot?
-    has_attribute?(:active_slot)
   end
 end

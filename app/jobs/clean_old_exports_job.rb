@@ -17,12 +17,16 @@ class CleanOldExportsJob < ApplicationJob
 
     result = Export.cleanup_old_exports(days: days)
 
+    # Also purge activity logs older than 90 days
+    activity_logs_deleted = ActivityLog.where("created_at < ?", 90.days.ago).delete_all
+
     # 创建ActivityLog记录
     ActivityLog.log!(
       action: :completed,
       target: :export_cleanup,
       level: result[:errors] > 0 ? :warn : :info,
       error_count: result[:errors],
+      activity_logs_deleted: activity_logs_deleted,
       message: result[:message]
     )
 
@@ -30,7 +34,8 @@ class CleanOldExportsJob < ApplicationJob
       level: "info",
       component: "CleanOldExportsJob",
       message: result[:message],
-      errors: result[:errors]
+      errors: result[:errors],
+      activity_logs_deleted: activity_logs_deleted
     result
   end
 end

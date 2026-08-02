@@ -8,6 +8,9 @@ module TwitterApi
     DELAY_BETWEEN_REQUESTS = 6 # seconds
     DEFAULT_MAX_RETRIES = 3
     BASE_BACKOFF_TIME = 15 # seconds
+    # Never sleep longer than this; a reset window further out would block the
+    # worker for hours, so such waits are treated as failures instead.
+    MAX_SLEEP_TIME = 5.minutes
 
     def initialize
       @last_request_time = nil
@@ -93,6 +96,14 @@ module TwitterApi
         wait_time = retry_wait_time(e, retries)
         rate_limit_info = rate_limit_info_from_error(e, wait_time)
 
+        if wait_time > MAX_SLEEP_TIME
+          # The reset window is too far out to sleep through; fail so the job
+          # can be rescheduled instead of blocking the worker.
+          log_max_retries_exceeded(max_retries)
+          log_rate_limit_exceeded(rate_limit_info)
+          raise
+        end
+
         if retries <= max_retries
           log_retry(wait_time, retries, max_retries)
           log_rate_limit_exceeded(rate_limit_info)
@@ -108,14 +119,16 @@ module TwitterApi
 
     # Check if an error is a rate limit error
     def rate_limit_error?(error)
-      x_rate_limit_error = defined?(X::TooManyRequests) && error.is_a?(X::TooManyRequests)
-      x_rate_limit_error || rate_limit_error_message?(error.message.to_s)
+      return true if defined?(X::TooManyRequests) && error.is_a?(X::TooManyRequests)
+      return true if http_status_429?(error)
+
+      rate_limit_error_message?(error.message.to_s)
     end
 
     # Calculate exponential backoff time for retries
     def calculate_backoff_time(retry_count)
       # Exponential backoff: 15s, 30s, 60s
-      [ BASE_BACKOFF_TIME * (2 ** (retry_count - 1)), 300 ].min # Cap at 5 minutes
+      [ BASE_BACKOFF_TIME * (2 ** (retry_count - 1)), MAX_SLEEP_TIME ].min # Cap at 5 minutes
     end
 
     # Extract rate limit info from error
@@ -156,8 +169,14 @@ module TwitterApi
       end
     end
 
+    # Prefer the HTTP status over message text when the error carries one
+    # (e.g. x gem HTTPError subclasses expose the response status code).
+    def http_status_429?(error)
+      error.respond_to?(:code) && error.code.to_s == "429"
+    end
+
     def rate_limit_error_message?(message)
-      message.include?("Too Many Requests") || message.include?("Rate limit") || message.include?("429")
+      message.include?("Too Many Requests") || message.match?(/\brate limit(?:ed)?\b/i)
     end
 
     def retry_wait_time(error, retry_count)

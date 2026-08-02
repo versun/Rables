@@ -8,9 +8,17 @@ class ApplicationController < ActionController::Base
   allow_browser versions: :modern
   protect_from_forgery with: :exception
 
+  # Invalid pagination params (e.g. ?page=abc, ?page=0) raise WillPaginate::InvalidPage;
+  # render the static 404 page, same as the RecordNotFound handling in production.
+  rescue_from WillPaginate::InvalidPage, with: :render_not_found
+
   helper_method :navbar_items
 
   private
+
+  def render_not_found
+    render file: Rails.public_path.join("404.html"), status: :not_found, layout: false
+  end
 
   def set_time_zone
     Time.zone = CacheableSettings.site_info[:time_zone] || "UTC"

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 
 class ActivityLogTest < ActiveSupport::TestCase
   test "track_activity returns most recent 10 for target and enum is defined" do
@@ -56,5 +57,11 @@ class ActivityLogTest < ActiveSupport::TestCase
     )
 
     assert_equal "warn", log.level
+  end
+
+  test "log! returns nil and warns instead of raising when persistence fails" do
+    ActivityLog.stub(:create!, ->(**) { raise ActiveRecord::RecordInvalid }) do
+      assert_nil ActivityLog.log!(action: :created, target: :article)
+    end
   end
 end

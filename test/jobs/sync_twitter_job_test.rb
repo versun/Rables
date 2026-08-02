@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 
 class SyncTwitterJobTest < ActiveJob::TestCase
   test "perform delegates to TwitterSyncService" do
@@ -33,5 +34,9 @@ class SyncTwitterJobTest < ActiveJob::TestCase
 
   test "job limits concurrency to a single execution" do
     assert_equal 1, SyncTwitterJob.concurrency_limit
+  end
+
+  test "job holds the concurrency lock long enough for a full sync" do
+    assert_equal 1.hour, SyncTwitterJob.concurrency_duration
   end
 end

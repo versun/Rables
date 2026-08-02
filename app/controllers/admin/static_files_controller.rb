@@ -20,8 +20,8 @@ class Admin::StaticFilesController < Admin::BaseController
     existing_file = StaticFile.find_by(filename: new_filename)
 
     if existing_file
-      # 更新记录
-      if existing_file.update(static_file_params)
+      # Update the existing record in place, keeping its original filename
+      if existing_file.update(static_file_params.except(:filename))
         ActivityLog.log!(
           action: :updated,
           target: :static_file,

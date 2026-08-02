@@ -6,12 +6,12 @@ require "json"
 
 class TwitterService
   include ContentBuilder
-  include HttpRedirectHandler
+  include TransientNetworkErrors
 
   LOOKUP_RETRY_DELAY = 15.minutes
 
   def initialize
-    @settings = Crosspost.twitter
+    @settings = Crosspost.for("twitter")
     @rate_limiter = TwitterApi::RateLimiter.new
     @media_uploader = TwitterApi::MediaUploader.new(@settings)
   end
@@ -44,7 +44,7 @@ class TwitterService
     return unless @settings&.enabled?
 
     client = create_client
-    max_length = @settings.effective_max_characters || 250
+    max_length = @settings.effective_max_characters
 
     quote_tweet_id = quote_tweet_id_for_article(article)
     tweet = if quote_tweet_id
@@ -76,6 +76,8 @@ class TwitterService
       handle_tweet_response(response, article, tweet, quote_tweet_id, media_ids, client, username)
     rescue => e
       log_post_error(e, article)
+      raise if transient_network_error?(e)
+
       nil
     end
   end
@@ -159,13 +161,23 @@ class TwitterService
     referenced_tweets_map = build_referenced_tweets_map(search_response)
 
     search_response["data"].each do |tweet|
-      author = users_map[tweet["author_id"]]
-      next unless author
+      begin
+        author = users_map[tweet["author_id"]]
+        next unless author
 
-      parent_external_id = find_parent_external_id(tweet, parent_tweet_id)
+        parent_external_id = find_parent_external_id(tweet, parent_tweet_id)
 
-      comment_data = build_comment_data(tweet, author, parent_external_id)
-      comments << comment_data
+        comment_data = build_comment_data(tweet, author, parent_external_id)
+        comments << comment_data
+      rescue => e
+        # A single malformed tweet must not discard the whole batch
+        Rails.event.notify "twitter_service.process_tweet_skipped",
+          level: "warn",
+          component: "TwitterService",
+          error_message: e.message,
+          tweet_id: tweet.is_a?(Hash) ? tweet["id"] : nil
+        next
+      end
     end
 
     comments
@@ -329,6 +341,8 @@ class TwitterService
         platform: "twitter",
         error: "#{original_error} (fallback_failed: #{fallback_error.message})"
       )
+      raise if transient_network_error?(fallback_error)
+
       nil
     end
   end
@@ -418,7 +432,9 @@ class TwitterService
 
   def fetch_quote_tweets(client, post_url, tweet_id, rate_limit_info)
     begin
-      quote_query = "url:#{CGI.escape(post_url)} is:quote"
+      # Escape the whole query exactly once; escaping post_url here too would
+      # double-encode it and the search would never match.
+      quote_query = "url:#{post_url} is:quote"
       quote_response, rate_limit_info = @rate_limiter.make_request_with_info(
         client,
         "tweets/search/recent?query=#{CGI.escape(quote_query)}&expansions=author_id,referenced_tweets.id&tweet.fields=created_at,referenced_tweets,conversation_id&user.fields=username,name,profile_image_url&max_results=100"
@@ -582,7 +598,7 @@ class TwitterService
     case attachable
     when ActiveStorage::Blob
       attachable.content_type == "image/gif"
-    when ->(obj) { obj.class.name == "ActionText::Attachables::RemoteImage" }
+    when ActionText::Attachables::RemoteImage, RemoteImageWrapper
       remote_gif_attachable_url?(attachable.try(:url))
     else
       false
@@ -617,21 +633,5 @@ class TwitterService
 
   def calculate_backoff_time(retry_count)
     @rate_limiter.calculate_backoff_time(retry_count)
-  end
-
-  # HttpRedirectHandler callbacks
-  def log_redirect(redirect_uri)
-    Rails.event.notify "twitter_service.following_redirect",
-      level: "info",
-      component: "TwitterService",
-      redirect_uri: redirect_uri.to_s
-  end
-
-  def log_download_error(error, url)
-    Rails.event.notify "twitter_service.download_remote_image_error",
-      level: "error",
-      component: "TwitterService",
-      error_message: error.message,
-      url: url
   end
 end

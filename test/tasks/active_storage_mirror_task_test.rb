@@ -90,7 +90,12 @@ class ActiveStorageMirrorTaskTest < ActiveSupport::TestCase
     end
 
     assert_equal 1, mirror.uploads.length
-    assert_equal [ "a", "data-a", "checksum-a" ], mirror.uploads.first
+    key, io, checksum = mirror.uploads.first
+    assert_equal "a", key
+    assert_equal "checksum-a", checksum
+    # Disk services require an IO, so the rake task wraps the downloaded string
+    assert_instance_of StringIO, io
+    assert_equal "data-a", io.read
   end
 
   private

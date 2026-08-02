@@ -1,9 +1,10 @@
 class Admin::CrosspostsController < Admin::BaseController
   def index
-    @mastodon = Crosspost.mastodon
-    @twitter = Crosspost.twitter
-    @bluesky = Crosspost.bluesky
-    @xiaohongshu = Crosspost.xiaohongshu
+    # Read-only: build in-memory records so GET never writes to the database
+    @mastodon = Crosspost.find_or_initialize_by(platform: "mastodon")
+    @twitter = Crosspost.find_or_initialize_by(platform: "twitter")
+    @bluesky = Crosspost.find_or_initialize_by(platform: "bluesky")
+    @xiaohongshu = Crosspost.find_or_initialize_by(platform: "xiaohongshu")
     @active_platform = Crosspost::PLATFORMS.include?(params[:platform]) ? params[:platform] : "mastodon"
   end
 
@@ -32,6 +33,16 @@ class Admin::CrosspostsController < Admin::BaseController
       # Rails.logger.error "Failed to update Crosspost: #{@settings.errors.full_messages}"
       redirect_to admin_crossposts_path(platform: params[:id]), alert: @settings.errors.full_messages.join(", ")
     end
+  rescue => e
+    Rails.logger.error "Failed to update Crosspost settings for #{params[:id]}: #{e.message}"
+    ActivityLog.log!(
+      action: :failed,
+      target: :crosspost,
+      level: :error,
+      platform: params[:id],
+      errors: e.message
+    )
+    redirect_to admin_crossposts_path(platform: params[:id]), alert: "Failed to update CrossPost settings."
   end
 
   def verify
@@ -78,10 +89,9 @@ class Admin::CrosspostsController < Admin::BaseController
         @message = results[:error]
       end
     rescue => e
-      # Rails.logger.error "Verification error for #{params[:id]}: #{e.message}"
-      # Rails.logger.error e.backtrace.join("\n")
+      Rails.logger.error "Verification error for #{params[:id]}: #{e.message}"
       @status = "error"
-      @message = "Error: #{e.message}"
+      @message = "Verification failed. Please check your settings and try again."
     end
 
     respond_to do |format|
@@ -94,7 +104,7 @@ class Admin::CrosspostsController < Admin::BaseController
 
   def crosspost_params
     params.expect(crosspost: [
-      :platform, :server_url, :enabled, :access_token, :access_token_secret, :client_key, :api_key, :api_key_secret, :app_password, :username, :auto_fetch_comments, :comment_fetch_schedule, :max_characters ]
+      :server_url, :enabled, :access_token, :access_token_secret, :client_key, :client_secret, :api_key, :api_key_secret, :app_password, :username, :auto_fetch_comments, :comment_fetch_schedule, :max_characters ]
     )
   end
 end

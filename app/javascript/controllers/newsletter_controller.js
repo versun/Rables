@@ -23,11 +23,13 @@ export default class extends Controller {
     verifyStatus.style.color = 'gray'
     verifyBtn.disabled = true
 
-    // 获取表单数据
+    // 获取表单数据（带上当前选中的列表与模板，后端据此回显选中项）
     const formData = {
       url: document.getElementById('listmonk_url').value,
       username: document.getElementById('listmonk_username').value,
-      api_key: document.getElementById('listmonk_api_key').value
+      api_key: document.getElementById('listmonk_api_key').value,
+      list_id: listSelect.value,
+      template_id: templateSelect.value
     }
 
     try {
@@ -52,7 +54,8 @@ export default class extends Controller {
           const option = document.createElement('option')
           option.value = list.id
           option.textContent = list.name
-          if (list.id === data.current_list_id) {
+          // option.value 与 current_list_id 类型不一致（数字 vs 字符串），统一转字符串比较
+          if (String(list.id) === String(data.current_list_id)) {
             option.selected = true
           }
           listSelect.appendChild(option)
@@ -64,7 +67,7 @@ export default class extends Controller {
           const option = document.createElement('option')
           option.value = template.id
           option.textContent = template.name
-          if (template.id === data.current_template_id) {
+          if (String(template.id) === String(data.current_template_id)) {
             option.selected = true
           }
           templateSelect.appendChild(option)

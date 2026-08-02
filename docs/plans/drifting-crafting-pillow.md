@@ -489,6 +489,8 @@ end
 - 需复用 `GitIntegration#build_authenticated_url` 生成认证 URL。
 - 处理 git 命令缺失/失败/冲突场景并记录。
 
+> **注：** GitIntegration（含 `build_authenticated_url`）已从代码库移除，本节基于 Git 集成的方案不再适用，实现时需另行处理仓库认证。
+
 ### 2.13 附件/图片处理模块
 
 **现有基础设施（保留）：**
@@ -859,7 +861,7 @@ bin/rails db:migrate
 7. `CommentReplyNotificationJob` - 评论回复通知
 8. `PublishScheduledArticlesJob` - 定时发布文章
 9. `ExportDataJob` - 数据导出
-10. `ExportMarkdownJob` - Markdown 导出
+10. `ExportMarkdownJob` - Markdown 导出（已从代码库移除，此处仅为历史记录）
 11. `ImportFromRssJob` - RSS 导入
 12. `ImportFromZipJob` - ZIP 导入
 13. `CleanOldExportsJob` - 清理旧导出

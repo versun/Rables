@@ -10,12 +10,8 @@
     
     meta_title = @article.seo_meta_title
     meta_description = @article.seo_meta_description
-    meta_image = @article.seo_meta_image
-    
-    # 如果 meta_image 是相对路径，转换为绝对路径
-    if meta_image.present? && !meta_image.match?(%r{^https?://})
-      meta_image = "#{site_url}#{meta_image}" unless meta_image.start_with?("/")
-    end
+    # og:image must be an absolute URL; resolve relative paths against the normalized site URL
+    meta_image = absolute_og_image(@article.seo_meta_image)
   %>
   
   <!-- Basic Meta Tags -->
@@ -137,30 +133,14 @@
 
 <% if @article.comment? %>
 <div id="comments-section">
-  <% # Use preloaded comments - filter in Ruby to avoid N+1 queries %>
-  <% preloaded_comments = @article.comments.to_a %>
-  <% all_comments = [] %>
+  <% comment_items = grouped_comment_items(@article) %>
 
-  <% # Local approved top-level comments %>
-  <% local_comments = preloaded_comments.select { |c| c.platform.nil? && c.approved? && c.parent_id.nil? } %>
-  <% all_comments += local_comments.map { |c| { type: 'local', data: c } } %>
-
-  <% # External platform comments - only top-level %>
-  <% mastodon_comments = preloaded_comments.select { |c| c.platform == 'mastodon' && c.parent_id.nil? } %>
-  <% bluesky_comments = preloaded_comments.select { |c| c.platform == 'bluesky' && c.parent_id.nil? } %>
-  <% twitter_comments = preloaded_comments.select { |c| c.platform == 'twitter' && c.parent_id.nil? } %>
-
-  <% all_comments += mastodon_comments.map { |c| { type: 'mastodon', data: c } } %>
-  <% all_comments += bluesky_comments.map { |c| { type: 'bluesky', data: c } } %>
-  <% all_comments += twitter_comments.map { |c| { type: 'twitter', data: c } } %>
-
-  <% if all_comments.any? %>
+  <% if comment_items.any? %>
     <div style="margin-top: 2rem; margin-bottom: 1.5rem;">
-      <% total_count = preloaded_comments.count { |c| (c.platform.nil? && c.approved?) || c.platform.present? } %>
-      <h3 style="margin-bottom: 1rem; color: #333; font-size: 1.125rem;">Comments (<%= total_count %>)</h3>
+      <h3 style="margin-bottom: 1rem; color: #333; font-size: 1.125rem;">Comments (<%= visible_comments_count(@article) %>)</h3>
     </div>
-    
-    <% all_comments.each do |comment_item| %>
+
+    <% comment_items.each do |comment_item| %>
       <%= render 'comments/comment', comment_item: comment_item %>
     <% end %>
   <% end %>
@@ -172,30 +152,3 @@
 </div>
 <% end %>
 
-<script>
-  function showReplyForm(commentId) {
-    const formContainer = document.getElementById('reply-form-' + commentId);
-    if (formContainer) {
-      formContainer.style.display = 'block';
-      // Scroll to form
-      formContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      // Focus on textarea
-      const textarea = formContainer.querySelector('textarea');
-      if (textarea) {
-        setTimeout(() => textarea.focus(), 100);
-      }
-    }
-  }
-
-  function hideReplyForm(commentId) {
-    const formContainer = document.getElementById('reply-form-' + commentId);
-    if (formContainer) {
-      formContainer.style.display = 'none';
-      // Clear form
-      const form = formContainer.querySelector('form');
-      if (form) {
-        form.reset();
-      }
-    }
-  }
-</script>

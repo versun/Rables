@@ -32,23 +32,23 @@ class Admin::MigratesController < Admin::BaseController
   def handle_export
     export_type = (params[:export_type].presence || "default").to_s
 
-    export_config = {
-      "default" => { job: ExportDataJob, format: "default", description: "Export Initiated" },
-      "markdown" => { job: ExportMarkdownJob, format: "markdown", description: "Markdown Export Initiated" }
+    flash_message = {
+      "default" => "Export Initiated",
+      "markdown" => "Markdown Export Initiated"
     }.fetch(export_type, nil)
 
-    unless export_config
+    unless flash_message
       redirect_to admin_migrates_path(tab: "export"), alert: "Unsupported export type" and return
     end
 
-    export_config[:job].perform_later
+    ExportDataJob.perform_later(export_type)
     ActivityLog.log!(
       action: :queued,
       target: :export,
       level: :info,
-      format: export_config[:format]
+      format: export_type
     )
-    flash[:notice] = export_config[:description]
+    flash[:notice] = flash_message
 
     redirect_to admin_migrates_path(tab: "export")
   end
@@ -68,6 +68,7 @@ class Admin::MigratesController < Admin::BaseController
 
   def import_from_zip
     uploaded_file = params[:zip_file]
+    temp_file = nil
 
     # Validate file type
     unless uploaded_file.content_type == "application/zip" || uploaded_file.original_filename.to_s.end_with?(".zip")
@@ -93,11 +94,13 @@ class Admin::MigratesController < Admin::BaseController
       IO.copy_stream(source, f)
     end
 
-    # Execute import job
+    # Execute import job; on success the job deletes the temp file itself
     ImportFromZipJob.perform_later(temp_file.to_s)
 
     redirect_to admin_migrates_path(tab: "import"), notice: "ZIP Import in progress, please check the logs for details"
   rescue StandardError => e
+    # Remove the uploaded zip when the job never took ownership of it
+    FileUtils.rm_f(temp_file) if temp_file
     Rails.event.notify(
       "admin.migrates_controller.zip_import_error",
       level: "error",
@@ -106,8 +109,6 @@ class Admin::MigratesController < Admin::BaseController
       filename: uploaded_file&.original_filename
     )
     redirect_to admin_migrates_path(tab: "import"), alert: "ZIP import failed: #{e.message}"
-  ensure
-    # 清理临时文件将在job完成后进行
   end
 
   def migrate_tab(value)

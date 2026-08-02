@@ -16,7 +16,9 @@ class Admin::SubscribersController < Admin::BaseController
     emails_text = params[:emails_text] || ""
     return redirect_to admin_subscribers_path, alert: "请输入邮箱地址。" if emails_text.blank?
 
-    success_count = 0
+    new_count = 0
+    updated_count = 0
+    skipped_count = 0
     error_count = 0
     errors = []
 
@@ -38,45 +40,42 @@ class Admin::SubscribersController < Admin::BaseController
 
       # 查找或创建订阅者
       subscriber = Subscriber.find_or_initialize_by(email: email)
-      is_new = subscriber.new_record?
 
-      # 如果是新订阅者，先保存
-      unless subscriber.save
-        error_count += 1
-        errors << "#{email}: #{subscriber.errors.full_messages.join(', ')}"
-        next
-      end
+      if subscriber.new_record?
+        unless subscriber.save
+          error_count += 1
+          errors << "#{email}: #{subscriber.errors.full_messages.join(', ')}"
+          next
+        end
 
-      # 如果是新订阅者，自动确认
-      subscriber.confirm! if is_new && !subscriber.confirmed?
-
-      # 处理tags
-      if tag_names.any?
-        tags = tag_names.map { |name| Tag.find_or_create_by(name: name) }
-        subscriber.tags = tags
+        # New subscribers are auto-confirmed; no tags means subscribed to everything
+        subscriber.confirm! unless subscriber.confirmed?
+        subscriber.tags = Tag.find_or_create_by_names(tag_names.join(","))
+        new_count += 1
+      elsif tag_names.any?
+        # Existing subscribers keep their tags unless the line explicitly provides new ones
+        subscriber.tags = Tag.find_or_create_by_names(tag_names.join(","))
+        updated_count += 1
       else
-        # 如果没有指定tags，设为空（订阅所有内容）
-        subscriber.tags = []
-      end
-
-      if subscriber.save
-        success_count += 1
-      else
-        error_count += 1
-        errors << "#{email}: #{subscriber.errors.full_messages.join(', ')}"
+        skipped_count += 1
       end
     end
 
-    if success_count > 0
+    handled_count = new_count + updated_count + skipped_count
+    if handled_count > 0
       ActivityLog.log!(
         action: :created,
         target: :subscriber,
         level: error_count > 0 ? :warn : :info,
-        success_count: success_count,
+        success_count: new_count,
+        updated_count: updated_count,
+        skipped_count: skipped_count,
         error_count: error_count,
         errors: errors.any? ? errors.join("; ") : nil
       )
-      notice = "成功添加 #{success_count} 个订阅者。"
+      notice = "成功添加 #{new_count} 个订阅者。"
+      notice += " #{updated_count} 个已存在并更新 tags。" if updated_count > 0
+      notice += " #{skipped_count} 个已存在跳过。" if skipped_count > 0
       notice += " #{error_count} 个失败。" if error_count > 0
       redirect_to admin_subscribers_path, notice: notice
     else
@@ -111,14 +110,10 @@ class Admin::SubscribersController < Admin::BaseController
     ids.each do |id|
       subscriber = Subscriber.find_by(id: id)
       next unless subscriber
-      next if subscriber.active?
+      # Only confirm pending addresses; never reactivate someone who unsubscribed
+      next if subscriber.confirmed? || subscriber.unsubscribed?
 
-      attrs = {}
-      attrs[:confirmed_at] = Time.current unless subscriber.confirmed?
-      attrs[:unsubscribed_at] = nil if subscriber.unsubscribed?
-
-      next if attrs.blank?
-      count += 1 if subscriber.update(attrs)
+      count += 1 if subscriber.update(confirmed_at: Time.current)
     end
 
     ActivityLog.log!(

@@ -56,3 +56,9 @@ replit.nix
 /config/*.key
 
 /coverage
+
+# Exported data files (may contain sensitive configuration)
+/export/
+
+# Cloudflare Wrangler local cache
+/.wrangler/

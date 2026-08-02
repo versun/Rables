@@ -9,7 +9,12 @@ class Admin::TwitterArchivesController < Admin::BaseController
   end
 
   def create
-    result = TwitterArchiveImportSubmission.new(params.dig(:twitter_archive, :file)).submit
+    # Malformed requests (e.g. twitter_archive posted as a plain string)
+    # fall through to the submission's invalid-upload alert instead of 500.
+    archive_params = params[:twitter_archive]
+    file = archive_params.is_a?(ActionController::Parameters) ? archive_params[:file] : nil
+
+    result = TwitterArchiveImportSubmission.new(file).submit
 
     if result.success?
       redirect_to admin_twitter_archives_path, notice: result.notice

@@ -20,33 +20,40 @@ class Admin::NewsletterController < Admin::BaseController
     # Create a temporary Listmonk instance with form data (not persisted)
     @listmonk = Listmonk.new(verify_params)
 
-    if @listmonk.configured?
-      lists = @listmonk.fetch_lists
-      templates = @listmonk.fetch_templates
-
-      # Check if fetch was successful by verifying we got data back
-      if lists.present? && templates.present?
-        render json: {
-          success: true,
-          lists: lists,
-          templates: templates,
-          current_list_id: @listmonk.list_id,
-          current_template_id: @listmonk.template_id
-        }
-      else
-        # Fetch failed - check activity logs for error details
-        last_error = ActivityLog.where(target: "newsletter", level: :error).order(created_at: :desc).first
-        error_message = last_error&.description || "Failed to fetch lists or templates. Please check your configuration."
-
-        render json: {
-          success: false,
-          error: error_message
-        }, status: :unprocessable_entity
-      end
-    else
+    unless @listmonk.configured?
       render json: {
         success: false,
         error: "Please configure all required fields first"
+      }, status: :unprocessable_entity
+      return
+    end
+
+    begin
+      lists = @listmonk.fetch_lists
+      templates = @listmonk.fetch_templates
+    rescue => e
+      # Surface the real error from this verification attempt
+      Rails.logger.error "Listmonk verification failed: #{e.message}"
+      render json: {
+        success: false,
+        error: e.message
+      }, status: :unprocessable_entity
+      return
+    end
+
+    # Check if fetch was successful by verifying we got data back
+    if lists.present? && templates.present?
+      render json: {
+        success: true,
+        lists: lists,
+        templates: templates,
+        current_list_id: @listmonk.list_id,
+        current_template_id: @listmonk.template_id
+      }
+    else
+      render json: {
+        success: false,
+        error: @listmonk.last_error.presence || "Failed to fetch lists or templates. Please check your configuration."
       }, status: :unprocessable_entity
     end
   end
@@ -184,8 +191,6 @@ class Admin::NewsletterController < Admin::BaseController
       if @newsletter_setting.update(setting_params)
         # Clear newsletter setting cache
         CacheableSettings.refresh_newsletter_setting
-        # Configure ActionMailer for SMTP if native is enabled
-        configure_action_mailer if @newsletter_setting.enabled? && @newsletter_setting.native?
         redirect_to admin_newsletter_path(tab: @active_tab), notice: "Newsletter settings updated successfully."
         return
       else
@@ -224,25 +229,6 @@ class Admin::NewsletterController < Admin::BaseController
 
   def verify_smtp_params
     params.permit(:smtp_address, :smtp_port, :smtp_user_name, :smtp_password, :smtp_domain, :smtp_authentication, :smtp_enable_starttls, :from_email)
-  end
-
-  def configure_action_mailer
-    return unless @newsletter_setting.configured?
-
-    domain = @newsletter_setting.smtp_domain.presence || @newsletter_setting.from_email&.split("@")&.last
-    authentication = @newsletter_setting.smtp_authentication.presence || "plain"
-
-    # Configure ActionMailer for SMTP
-    Rails.application.config.action_mailer.delivery_method = :smtp
-    Rails.application.config.action_mailer.smtp_settings = {
-      address: @newsletter_setting.smtp_address,
-      port: @newsletter_setting.smtp_port || 587,
-      domain: domain,
-      user_name: @newsletter_setting.smtp_user_name,
-      password: @newsletter_setting.smtp_password,
-      authentication: authentication.to_sym,
-      enable_starttls_auto: @newsletter_setting.smtp_enable_starttls != false
-    }
   end
 
   def load_listmonk_options

@@ -25,20 +25,20 @@ if Rails.env.development? && ENV.fetch("FILTER_PUMA_PARSE_ERRORS", "true") == "t
         @buffer = lines.pop || "" # Keep incomplete line in buffer
 
         lines.each do |line|
-          # Filter out HTTP parse errors - they're usually from port scanners
-          # or clients sending non-HTTP data to the HTTP port
-          unless line.include?("HTTP parse error") ||
-                 line.include?("Invalid HTTP format") ||
-                 line.include?("malformed request") ||
-                 line.match?(/Bad method/)
-            @original.write(line + "\n")
-          end
+          write_line(line + "\n")
         end
       end
     end
 
     def flush
+      flush_buffer
       @original.flush
+    end
+
+    def close
+      # Flush any buffered partial line so it is not lost at shutdown
+      flush_buffer
+      @original.close
     end
 
     def method_missing(method, *args, &block)
@@ -47,6 +47,27 @@ if Rails.env.development? && ENV.fetch("FILTER_PUMA_PARSE_ERRORS", "true") == "t
 
     def respond_to_missing?(method, include_private = false)
       @original.respond_to?(method, include_private) || super
+    end
+
+    private
+
+    def flush_buffer
+      return if @buffer.empty?
+
+      line = @buffer
+      @buffer = ""
+      write_line(line)
+    end
+
+    def write_line(line)
+      # Filter out HTTP parse errors - they're usually from port scanners
+      # or clients sending non-HTTP data to the HTTP port
+      unless line.include?("HTTP parse error") ||
+             line.include?("Invalid HTTP format") ||
+             line.include?("malformed request") ||
+             line.match?(/Bad method/)
+        @original.write(line)
+      end
     end
   end.new(original_stderr)
 

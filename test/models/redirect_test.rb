@@ -95,4 +95,27 @@ class RedirectTest < ActiveSupport::TestCase
     assert_not @redirect.valid?
     assert_includes @redirect.errors[:regex].first, "is not a valid regular expression"
   end
+
+  test "match? returns false when the regex exceeds its timeout" do
+    redirect = Redirect.new(
+      regex: "^(a+)+$",
+      replacement: "/new-path",
+      enabled: true
+    )
+
+    assert_not redirect.match?("#{'a' * 30}b")
+  end
+
+  test "compiled regex is rebuilt when the regex attribute changes" do
+    redirect = Redirect.new(
+      regex: "^/old-path$",
+      replacement: "/new-path",
+      enabled: true
+    )
+    assert redirect.match?("/old-path")
+
+    redirect.regex = "^/new-path$"
+    assert_not redirect.match?("/old-path")
+    assert redirect.match?("/new-path")
+  end
 end

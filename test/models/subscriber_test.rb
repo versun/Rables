@@ -51,6 +51,25 @@ class SubscriberTest < ActiveSupport::TestCase
     assert_not_nil @subscriber.unsubscribe_token
   end
 
+  test "should keep pre-set tokens on create" do
+    subscriber = Subscriber.create!(
+      email: "keep-tokens@example.com",
+      confirmation_token: "preset-confirmation-token",
+      unsubscribe_token: "preset-unsubscribe-token"
+    )
+    assert_equal "preset-confirmation-token", subscriber.confirmation_token
+    assert_equal "preset-unsubscribe-token", subscriber.unsubscribe_token
+  end
+
+  test "should generate only missing tokens on create" do
+    subscriber = Subscriber.create!(
+      email: "partial-tokens@example.com",
+      confirmation_token: "preset-confirmation-token"
+    )
+    assert_equal "preset-confirmation-token", subscriber.confirmation_token
+    assert_not_nil subscriber.unsubscribe_token
+  end
+
   test "confirmed scope should return only confirmed subscribers" do
     confirmed = subscribers(:confirmed_subscriber)
     unconfirmed = subscribers(:unconfirmed_subscriber)

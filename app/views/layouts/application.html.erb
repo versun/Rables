@@ -41,7 +41,8 @@
     <%= raw site_settings[:head_code] %>
 
     <style>
-      <%= site_settings[:custom_css] %>
+      <%# custom_css is trusted content configured by the site admin in Settings; output raw so valid CSS is not HTML-escaped %>
+      <%= raw site_settings[:custom_css] %>
     </style>
   </head>
 
@@ -109,37 +110,20 @@
       <main class="main-content">
         <div class="limiter">
           <% if notice %>
-            <div class="flash flash-notice" style="padding: 1rem; margin-bottom: 1rem; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; color: #155724;">
+            <div class="flash flash-notice" data-controller="flash" style="padding: 1rem; margin-bottom: 1rem; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; color: #155724;">
               <%= notice %>
             </div>
           <% end %>
           <% if alert %>
-            <div class="flash flash-alert" style="padding: 1rem; margin-bottom: 1rem; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24;">
+            <div class="flash flash-alert" data-controller="flash" style="padding: 1rem; margin-bottom: 1rem; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24;">
               <%= alert %>
             </div>
           <% end %>
           <%= yield %>
         </div>
       </main>
-      
-      <script>
-        // Auto-dismiss flash messages after 5 seconds
-        document.addEventListener('DOMContentLoaded', function() {
-          const flashMessages = document.querySelectorAll('.flash');
-          flashMessages.forEach(function(flash) {
-            setTimeout(function() {
-              flash.style.transition = 'opacity 0.5s';
-              flash.style.opacity = '0';
-              setTimeout(function() {
-                flash.remove();
-              }, 500);
-            }, 5000);
-          });
-        });
-      </script>
     </div>
 
     <%= raw site_settings[:tool_code] %>
-    <%= yield :javascript %>
   </body>
 </html>

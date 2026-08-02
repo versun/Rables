@@ -1,23 +1,12 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 
 class ScheduledFetchSocialCommentsJobTest < ActiveJob::TestCase
-  class RecordingNotifier
-    attr_reader :events
-
-    def initialize
-      @events = []
-    end
-
-    def notify(name, **payload)
-      @events << [ name, payload ]
-    end
-  end
-
   test "skips when no enabled platforms" do
-    Crosspost.mastodon.update!(enabled: false, auto_fetch_comments: false, comment_fetch_schedule: "daily")
-    Crosspost.bluesky.update!(enabled: false, auto_fetch_comments: false, comment_fetch_schedule: "daily")
+    Crosspost.for("mastodon").update!(enabled: false, auto_fetch_comments: false, comment_fetch_schedule: "daily")
+    Crosspost.for("bluesky").update!(enabled: false, auto_fetch_comments: false, comment_fetch_schedule: "daily")
 
     notifier = RecordingNotifier.new
 
@@ -29,7 +18,7 @@ class ScheduledFetchSocialCommentsJobTest < ActiveJob::TestCase
   end
 
   test "skips when schedule is not due" do
-    Crosspost.mastodon.update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "daily")
+    Crosspost.for("mastodon").update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "daily")
 
     notifier = RecordingNotifier.new
 
@@ -43,7 +32,7 @@ class ScheduledFetchSocialCommentsJobTest < ActiveJob::TestCase
   end
 
   test "enqueues fetch job when schedule is due" do
-    Crosspost.mastodon.update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "daily")
+    Crosspost.for("mastodon").update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "daily")
 
     Rails.cache.stub(:read, 2.days.ago) do
       Rails.cache.stub(:write, true) do
@@ -55,7 +44,7 @@ class ScheduledFetchSocialCommentsJobTest < ActiveJob::TestCase
   end
 
   test "unknown schedule logs warning and skips" do
-    Crosspost.mastodon.update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "hourly")
+    Crosspost.for("mastodon").update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "hourly")
 
     notifier = RecordingNotifier.new
 
@@ -66,6 +55,41 @@ class ScheduledFetchSocialCommentsJobTest < ActiveJob::TestCase
     end
 
     assert notifier.events.any? { |name, payload| name == "scheduled_fetch_social_comments_job.unknown_schedule" && payload[:schedule] == "hourly" }
+  end
+
+  test "each platform follows its own schedule" do
+    Crosspost.for("mastodon").update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "daily")
+    Crosspost.for("bluesky").update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "monthly")
+
+    # Mastodon fetched 2 days ago (daily -> due), bluesky just fetched (monthly -> not due)
+    read_stub = ->(key, *) { key.to_s.end_with?(":mastodon") ? 2.days.ago : Time.current }
+
+    Rails.cache.stub(:read, read_stub) do
+      Rails.cache.stub(:write, true) do
+        assert_enqueued_jobs 1, only: FetchSocialCommentsJob do
+          ScheduledFetchSocialCommentsJob.perform_now
+        end
+      end
+    end
+
+    assert_enqueued_with(job: FetchSocialCommentsJob, args: [ "mastodon" ])
+  end
+
+  test "enqueues each due platform separately" do
+    Crosspost.for("mastodon").update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "daily")
+    Crosspost.for("bluesky").update!(enabled: true, auto_fetch_comments: true, comment_fetch_schedule: "weekly")
+
+    # Neither platform fetched recently -> both are due
+    Rails.cache.stub(:read, nil) do
+      Rails.cache.stub(:write, true) do
+        assert_enqueued_jobs 2, only: FetchSocialCommentsJob do
+          ScheduledFetchSocialCommentsJob.perform_now
+        end
+      end
+    end
+
+    assert_enqueued_with(job: FetchSocialCommentsJob, args: [ "mastodon" ])
+    assert_enqueued_with(job: FetchSocialCommentsJob, args: [ "bluesky" ])
   end
 
   private

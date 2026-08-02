@@ -15,17 +15,9 @@ class TwitterArchiveImportJob < ApplicationJob
       import_id: import.id
     )
 
-    last_progress = import.progress
-    last_message = import.status_message
     summary = TwitterArchiveImporter.new(
       source_path,
-      progress_callback: lambda do |progress, message|
-        next if progress == last_progress && message == last_message
-
-        last_progress = progress
-        last_message = message
-        import.update_import_progress!(progress, message)
-      end
+      progress_callback: ->(progress, message) { import.update_import_progress!(progress, message) }
     ).import!
 
     import.complete_import!(
@@ -49,29 +41,23 @@ class TwitterArchiveImportJob < ApplicationJob
       likes: summary[:likes]
     )
   rescue StandardError => e
-    handle_failure(import, e) if import
+    if import
+      import.fail_import!(e)
+
+      ActivityLog.log!(
+        action: :failed,
+        target: :twitter_archive,
+        level: :error,
+        filename: import.source_filename,
+        import_id: import.id,
+        error: e.message
+      )
+    end
   ensure
-    cleanup_source_file(import) if import
+    import.cleanup_source_file! if import
   end
 
   private
-
-  def handle_failure(import, error)
-    import.fail_import!(error)
-
-    ActivityLog.log!(
-      action: :failed,
-      target: :twitter_archive,
-      level: :error,
-      filename: import.source_filename,
-      import_id: import.id,
-      error: error.message
-    )
-  end
-
-  def cleanup_source_file(import)
-    import.cleanup_source_file!
-  end
 
   def materialize_source_path(import)
     return import.source_path unless TwitterArchiveImportSubmission.direct_upload_source_path?(import.source_path)

@@ -6,15 +6,16 @@ Rails.application.routes.draw do
   root "articles#index"
 
   # User authentication and management
-  resources :users
-  resource :session
-  resources :passwords
+  resources :users, only: %i[ new create edit update ]
+  resource :session, only: %i[ new create destroy ]
+  resources :passwords, only: %i[ new create edit update ]
   resource :setup, only: [ :show, :create ], controller: "setup"
 
   # Newsletter subscriptions
   resources :subscriptions, only: [ :index, :create ]
   get "/confirm", to: "subscriptions#confirm", as: :confirm_subscription
   get "/unsubscribe", to: "subscriptions#unsubscribe", as: :unsubscribe
+  post "/unsubscribe", to: "subscriptions#unsubscribe"
 
   # Admin namespace - 统一所有后台管理功能
   namespace :admin do
@@ -45,9 +46,6 @@ Rails.application.routes.draw do
         post :batch_destroy
         post :batch_publish
         post :batch_unpublish
-      end
-      member do
-        patch :reorder
       end
     end
 
@@ -93,11 +91,6 @@ Rails.application.routes.draw do
     # 导出文件下载
     get "downloads/:filename", to: "downloads#show", as: :download, constraints: { filename: /[^\/]+/ }
     resources :crossposts, only: [ :index, :update ] do
-      member do
-        post :verify
-      end
-    end
-    resources :git_integrations, only: [ :index, :update ] do
       member do
         post :verify
       end

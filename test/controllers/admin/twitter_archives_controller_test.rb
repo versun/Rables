@@ -55,34 +55,19 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
 
   test "index uses the model's unified last imported time" do
     import_time = Time.zone.parse("2026-04-04 12:34:56 UTC")
-    original_last_imported_at = TwitterArchiveImport.method(:last_imported_at)
-    TwitterArchiveImport.define_singleton_method(:last_imported_at) { import_time }
+    TwitterArchiveImport.create!(
+      source_filename: "twitter-archive.zip",
+      status: "completed",
+      progress: 100,
+      queued_at: import_time - 1.minute,
+      started_at: import_time - 1.minute,
+      finished_at: import_time
+    )
 
     get admin_twitter_archives_path
 
     assert_response :success
     assert_match import_time.to_fs(:long), response.body
-  ensure
-    TwitterArchiveImport.define_singleton_method(:last_imported_at, original_last_imported_at)
-  end
-
-  test "index does not enqueue archive handle sync jobs" do
-    Crosspost.twitter.update!(
-      enabled: true,
-      api_key: "api_key",
-      api_key_secret: "api_key_secret",
-      access_token: "access_token",
-      access_token_secret: "access_token_secret"
-    )
-    TwitterArchiveConnection.create!(
-      account_id: "900",
-      relationship_type: "follower",
-      user_link: "https://twitter.com/intent/user?user_id=900"
-    )
-
-    assert_no_enqueued_jobs do
-      get admin_twitter_archives_path
-    end
   end
 
   test "create queues twitter archive import and redirects back to archive page" do
@@ -123,7 +108,7 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
 
     assert_difference("TwitterArchiveImport.count", 1) do
       assert_enqueued_with(job: TwitterArchiveImportJob) do
-        post admin_twitter_archives_path, params: { twitter_archive: { file: twitter_archive_direct_upload_token(blob) } }
+        post admin_twitter_archives_path, params: { twitter_archive: { file: blob.signed_id(purpose: :twitter_archive_import) } }
       end
     end
 
@@ -209,6 +194,17 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     assert_equal existing_tweet_ids, TwitterArchiveTweet.order(:tweet_id).pluck(:tweet_id)
   end
 
+  test "create rejects malformed twitter_archive params with a friendly alert" do
+    assert_no_difference("TwitterArchiveImport.count") do
+      assert_no_enqueued_jobs only: TwitterArchiveImportJob do
+        post admin_twitter_archives_path, params: { twitter_archive: "not-a-hash" }
+      end
+    end
+
+    assert_redirected_to admin_twitter_archives_path
+    assert_equal TwitterArchiveImportSubmission::INVALID_UPLOAD_ALERT, flash[:alert]
+  end
+
   private
 
   def build_zip(files)
@@ -230,9 +226,5 @@ class Admin::TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
         zip.write(content)
       end
     end.string
-  end
-
-  def twitter_archive_direct_upload_token(blob)
-    blob.signed_id(purpose: :twitter_archive_import)
   end
 end

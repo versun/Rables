@@ -38,10 +38,8 @@
   </div>
 
   <div style="margin-bottom: 1rem;">
-    <%= f.label :approved, style: "display: inline-block; font-weight: bold;" do %>
-      <%= f.check_box :approved, style: "margin-right: 0.5rem;" %>
-      Approved
-    <% end %>
+    <%= f.label :status, style: "display: block; margin-bottom: 0.25rem; font-weight: bold;" %>
+    <%= f.select :status, Comment.statuses.keys.map { |s| [ s.humanize, s ] }, {}, style: "padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;" %>
   </div>
 
   <div>

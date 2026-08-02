@@ -83,6 +83,7 @@ class Admin::NewsletterControllerTest < ActionDispatch::IntegrationTest
     assert_response :unprocessable_entity
     assert_equal false, JSON.parse(response.body)["success"]
 
+    # A stale error log from an earlier operation must not leak into this response
     ActivityLog.create!(
       action: "failed",
       target: "newsletter",
@@ -97,7 +98,22 @@ class Admin::NewsletterControllerTest < ActionDispatch::IntegrationTest
         url: "https://listmonk.example"
       }, as: :json
       assert_response :unprocessable_entity
-      assert_equal false, JSON.parse(response.body)["success"]
+      body = JSON.parse(response.body)
+      assert_equal false, body["success"]
+      assert_equal "Failed to fetch lists or templates. Please check your configuration.", body["error"]
+    end
+
+    # An exception raised during this verification is reported with its real message
+    with_raising_listmonk do
+      post verify_admin_newsletter_path, params: {
+        username: "user",
+        api_key: "key",
+        url: "https://listmonk.example"
+      }, as: :json
+      assert_response :unprocessable_entity
+      body = JSON.parse(response.body)
+      assert_equal false, body["success"]
+      assert_equal "Connection refused", body["error"]
     end
 
     with_stubbed_listmonk(configured: true, lists: [ { "id" => 1 } ], templates: [ { "id" => 2 } ]) do
@@ -170,6 +186,18 @@ class Admin::NewsletterControllerTest < ActionDispatch::IntegrationTest
     Listmonk.define_method(:configured?, original_configured)
     Listmonk.define_method(:fetch_lists, original_fetch_lists)
     Listmonk.define_method(:fetch_templates, original_fetch_templates)
+  end
+
+  def with_raising_listmonk
+    original_configured = Listmonk.instance_method(:configured?)
+    original_fetch_lists = Listmonk.instance_method(:fetch_lists)
+
+    Listmonk.define_method(:configured?) { true }
+    Listmonk.define_method(:fetch_lists) { raise StandardError, "Connection refused" }
+    yield
+  ensure
+    Listmonk.define_method(:configured?, original_configured)
+    Listmonk.define_method(:fetch_lists, original_fetch_lists)
   end
 
   def with_stubbed_smtp(behavior:)

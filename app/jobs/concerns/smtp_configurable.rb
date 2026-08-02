@@ -1,6 +1,10 @@
 module SmtpConfigurable
   extend ActiveSupport::Concern
 
+  def self.active?(newsletter_setting)
+    newsletter_setting&.enabled? && newsletter_setting.native? && newsletter_setting.configured?
+  end
+
   private
 
   def prepare_smtp_config(newsletter_setting)
@@ -32,37 +36,8 @@ module SmtpConfigurable
     }
   end
 
-  def configure_action_mailer(newsletter_setting)
-    return unless newsletter_setting&.configured?
-
-    smtp_settings = prepare_smtp_config(newsletter_setting)
-
-    # 动态配置 ActionMailer 的 SMTP 设置
-    # 同时设置类级别和实例级别，确保在后台任务中生效
-    ActionMailer::Base.delivery_method = :smtp
-    ActionMailer::Base.smtp_settings = smtp_settings
-
-    # 也设置 Rails 应用配置，确保一致性
-    Rails.application.config.action_mailer.delivery_method = :smtp
-    Rails.application.config.action_mailer.smtp_settings = smtp_settings
-
-    # 设置默认的 from 地址
-    ActionMailer::Base.default from: newsletter_setting.from_email
-
-    Rails.event.notify "smtp_configurable.action_mailer_configured",
-      level: "info",
-      component: "SmtpConfigurable",
-      smtp_address: newsletter_setting.smtp_address,
-      smtp_port: newsletter_setting.smtp_port,
-      from_email: newsletter_setting.from_email
-    Rails.event.notify "smtp_configurable.smtp_settings",
-      level: "debug",
-      component: "SmtpConfigurable",
-      smtp_settings: smtp_settings.except(:password)
-  end
-
   def apply_smtp_config_to_mail(mail, newsletter_setting)
-    return mail unless newsletter_setting&.enabled? && newsletter_setting.native? && newsletter_setting.configured?
+    return mail unless SmtpConfigurable.active?(newsletter_setting)
 
     smtp_config = prepare_smtp_config(newsletter_setting)
     return mail unless smtp_config[:address].present?

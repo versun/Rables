@@ -29,6 +29,13 @@ class TinymceConfigTest < ActiveSupport::TestCase
     assert_includes config, ":not(pre) > code:not([class*=\"language-\"])"
   end
 
+  test "initializes only on turbo:load to avoid double initialization" do
+    config = File.read(Rails.root.join("app/javascript/tinymce_config.js"))
+
+    assert_includes config, "document.addEventListener('turbo:load', initTinyMCE)"
+    refute_match(/addEventListener\(\s*["']DOMContentLoaded/, config)
+  end
+
   test "initTinyMCE does not require formatter during setup" do
     module_url = "file://#{Rails.root.join('app/javascript/tinymce_config.js')}"
 

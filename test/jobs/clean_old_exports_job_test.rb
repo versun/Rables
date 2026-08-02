@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 
 class CleanOldExportsJobTest < ActiveJob::TestCase
   test "cleans old exports with default days" do
@@ -49,5 +50,55 @@ class CleanOldExportsJobTest < ActiveJob::TestCase
 
     log = ActivityLog.last
     assert_equal "completed", log.action
+  end
+
+  test "deletes activity logs older than 90 days" do
+    old_log = ActivityLog.log!(action: :completed, target: :export_cleanup, message: "ancient")
+    old_log.update_column(:created_at, 91.days.ago)
+
+    mock_result = { errors: 0, message: "Cleaned" }
+
+    Export.stub :cleanup_old_exports, mock_result do
+      CleanOldExportsJob.perform_now
+    end
+
+    assert_not ActivityLog.exists?(old_log.id)
+  end
+
+  test "keeps activity logs newer than 90 days" do
+    recent_log = ActivityLog.log!(action: :completed, target: :export_cleanup, message: "recent")
+
+    mock_result = { errors: 0, message: "Cleaned" }
+
+    Export.stub :cleanup_old_exports, mock_result do
+      CleanOldExportsJob.perform_now
+    end
+
+    assert ActivityLog.exists?(recent_log.id)
+  end
+
+  test "reports the number of deleted activity logs" do
+    2.times do |i|
+      log = ActivityLog.log!(action: :completed, target: :export_cleanup, message: "ancient #{i}")
+      log.update_column(:created_at, 100.days.ago)
+    end
+
+    mock_result = { errors: 0, message: "Cleaned" }
+
+    notifier = RecordingNotifier.new
+
+    Export.stub :cleanup_old_exports, mock_result do
+      original_event = Rails.event
+      Rails.define_singleton_method(:event) { notifier }
+      begin
+        CleanOldExportsJob.perform_now
+      ensure
+        Rails.define_singleton_method(:event) { original_event }
+      end
+    end
+
+    event = notifier.events.find { |name, _| name == "clean_old_exports_job.completed" }
+    assert_not_nil event
+    assert_equal 2, event[1][:activity_logs_deleted]
   end
 end

@@ -1,6 +1,5 @@
 <% parent_id = local_assigns[:parent_id] %>
 <% is_reply = parent_id.present? %>
-<% is_mobile = mobile_device? %>
 <%
   commentable =
     if defined?(@page) && @page.present?
@@ -23,17 +22,15 @@
       comments_path(article_id: "")
     end
 %>
-<div class="comment-form <%= 'reply-form' if is_reply %>" id="<%= is_reply ? "comment-form-#{parent_id}" : 'comment-form-container' %>" style="margin-top: <%= is_reply ? '0.5rem' : '1.5rem' %>; padding: 1rem; border: 1px solid #e0e0e0; border-radius: 6px; background: #fafafa;" <%= "data-controller=math-captcha data-math-captcha-max-value=10" unless is_mobile %>>
-  <%= form_with(model: comment, url: form_url, data: is_mobile ? {} : { action: "submit->math-captcha#ensureValid" }) do |f| %>
+<div class="comment-form <%= 'reply-form' if is_reply %>" id="<%= is_reply ? "comment-form-#{parent_id}" : 'comment-form-container' %>" style="margin-top: <%= is_reply ? '0.5rem' : '1.5rem' %>; padding: 1rem; border: 1px solid #e0e0e0; border-radius: 6px; background: #fafafa;" data-controller="math-captcha" data-math-captcha-max-value="10">
+  <%= form_with(model: comment, url: form_url, data: { action: "submit->math-captcha#ensureValid" }) do |f| %>
     <%= f.hidden_field :parent_id, value: parent_id if parent_id %>
-    <% unless is_mobile %>
-      <% captcha = math_captcha_challenge(max: 10) %>
-      <% captcha_answer_id = "comment-captcha-answer-#{SecureRandom.hex(6)}" %>
-    <% end %>
+    <% captcha = math_captcha_challenge(max: 10) %>
+    <% captcha_answer_id = "comment-captcha-answer-#{SecureRandom.hex(6)}" %>
 
     <div class="comment-form-row">
       <div class="comment-form-field">
-        <%= f.text_field :author_name, required: true, placeholder: "Name *", class: "comment-form-input", data: is_mobile ? {} : { action: "focus->math-captcha#show" } %>
+        <%= f.text_field :author_name, required: true, placeholder: "Name *", class: "comment-form-input", data: { action: "focus->math-captcha#show" } %>
       </div>
       <div class="comment-form-field">
         <%= f.email_field :author_email, placeholder: "Email (optional, for reply notifications)", class: "comment-form-input" %>
@@ -47,10 +44,9 @@
     </div>
 
     <div style="margin-bottom: 0.75rem;">
-      <%= f.text_area :content, required: true, placeholder: is_reply ? "Reply *" : "Comment *", rows: 3, class: "comment-form-textarea", data: is_mobile ? {} : { action: "focus->math-captcha#show" } %>
+      <%= f.text_area :content, required: true, placeholder: is_reply ? "Reply *" : "Comment *", rows: 3, class: "comment-form-textarea", data: { action: "focus->math-captcha#show" } %>
     </div>
 
-    <% unless is_mobile %>
     <div data-math-captcha-target="container" style="margin-bottom: 0.75rem;">
       <div class="comment-form-captcha">
         <label for="<%= captcha_answer_id %>" style="font-size: 0.875rem; color: #333; white-space: nowrap;"><span data-math-captcha-target="question"><%= captcha[:question] %></span></label>
@@ -60,8 +56,8 @@
       <%= hidden_field_tag "captcha[a]", captcha[:a], data: { math_captcha_target: "a" } %>
       <%= hidden_field_tag "captcha[b]", captcha[:b], data: { math_captcha_target: "b" } %>
       <%= hidden_field_tag "captcha[op]", captcha[:op], data: { math_captcha_target: "op" } %>
+      <%= hidden_field_tag "captcha[token]", captcha[:token] %>
     </div>
-    <% end %>
 
     <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
       <%= f.submit is_reply ? "Reply" : "Submit", style: "padding: 0.5rem 1.25rem; background-color: #333; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.875rem;" %>
@@ -76,7 +72,7 @@
         </span>
       <% end %>
       <% if is_reply %>
-        <button type="button" onclick="hideReplyForm(<%= parent_id %>)" class="comment-form-cancel">Cancel</button>
+        <button type="button" data-controller="reply-form" data-reply-form-comment-id-value="<%= parent_id %>" data-action="click->reply-form#hide" class="comment-form-cancel">Cancel</button>
       <% end %>
     </div>
   <% end %>

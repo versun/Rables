@@ -1,5 +1,3 @@
-require "json"
-
 class Admin::SourcesController < Admin::BaseController
   # POST /admin/sources/fetch_twitter
   # Fetch tweet content for source reference

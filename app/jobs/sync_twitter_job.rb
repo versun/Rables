@@ -11,7 +11,7 @@
 class SyncTwitterJob < ApplicationJob
   queue_as :default
 
-  limits_concurrency to: 1, key: "twitter_sync", duration: 10.minutes
+  limits_concurrency to: 1, key: "twitter_sync", duration: 1.hour
 
   def perform(force: false)
     TwitterSyncService.new.perform(force: force)

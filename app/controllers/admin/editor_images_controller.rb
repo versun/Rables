@@ -1,4 +1,6 @@
 class Admin::EditorImagesController < Admin::BaseController
+  ALLOWED_CONTENT_TYPES = %w[image/png image/jpeg image/gif image/webp].freeze
+
   def create
     uploaded_file = params[:file]
 
@@ -10,6 +12,11 @@ class Admin::EditorImagesController < Admin::BaseController
       return render json: { error: "File too large (max 100MB)" }, status: :bad_request
     end
 
+    # Only allow common web image types; reject SVG and other active content
+    unless ALLOWED_CONTENT_TYPES.include?(uploaded_file.content_type)
+      return render json: { error: "Unsupported file type" }, status: :unsupported_media_type
+    end
+
     # Create a unique filename
     extension = File.extname(uploaded_file.original_filename).downcase
     filename = "#{SecureRandom.uuid}#{extension}"
@@ -18,7 +25,7 @@ class Admin::EditorImagesController < Admin::BaseController
     blob = ActiveStorage::Blob.create_and_upload!(
       io: uploaded_file.to_io,
       filename: filename,
-      content_type: uploaded_file.content_type.presence || "application/octet-stream"
+      content_type: uploaded_file.content_type
     )
 
     # Generate a permanent URL that never expires
@@ -34,6 +41,6 @@ class Admin::EditorImagesController < Admin::BaseController
     render json: { location: file_url }
   rescue => e
     Rails.logger.error "TinyMCE upload failed: #{e.message}"
-    render json: { error: "Upload failed: #{e.message}" }, status: :internal_server_error
+    render json: { error: "Upload failed" }, status: :internal_server_error
   end
 end

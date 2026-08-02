@@ -22,7 +22,7 @@ class Admin::TagsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to admin_tags_path
 
     post admin_tags_path, params: { tag: { name: "" } }
-    assert_response :success
+    assert_response :unprocessable_entity
 
     get edit_admin_tag_path(@tag)
     assert_response :success
@@ -32,7 +32,7 @@ class Admin::TagsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Updated Tag", @tag.reload.name
 
     patch admin_tag_path(@tag), params: { tag: { name: "" } }
-    assert_response :success
+    assert_response :unprocessable_entity
 
     article = articles(:published_article)
     article.tags << @tag unless article.tags.include?(@tag)

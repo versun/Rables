@@ -6,6 +6,7 @@ require "zip"
 class TwitterArchiveImporter
   class ImportError < StandardError; end
   MEDIA_DIRECTORIES = %w[data/tweets_media/ data/tweet_media/].freeze
+  TWEET_BATCH_SIZE = 100 # Tweets committed per transaction during replace
 
   attr_reader :source, :progress_callback
 
@@ -24,44 +25,61 @@ class TwitterArchiveImporter
 
     raise ImportError, "No supported archive items found in archive" if summary[:total_items].zero?
 
-    previous_blob_ids = existing_archive_media_blob_ids
     report_progress(55, "Archive parsed")
     report_progress(80, "Replacing stored archive")
 
     Zip::File.open(source_path) do |zip|
-      ActiveRecord::Base.transaction do
-        TwitterArchiveTweet.destroy_all
-        TwitterArchiveConnection.destroy_all
-        TwitterArchiveLike.destroy_all
-
-        archive_data[:tweets].each do |row|
-          media_entry_names = row.delete(:media_entry_names)
-          tweet = TwitterArchiveTweet.create!(row)
-          attach_media_files(tweet, zip, media_entry_names)
-        end
-
-        archive_data[:followers].each do |row|
-          TwitterArchiveConnection.create!(row)
-        end
-
-        archive_data[:following].each do |row|
-          TwitterArchiveConnection.create!(row)
-        end
-
-        archive_data[:likes].each do |row|
-          TwitterArchiveLike.create!(row)
-        end
-      end
+      replace_archive_data(zip, archive_data)
     end
 
-    report_progress(95, "Cleaning up media")
-    purge_replaced_media_blobs(previous_blob_ids)
     report_progress(100, "Import completed")
 
     summary
   end
 
   private
+
+  # Replaces the stored archive. Tweets are committed in batches so the
+  # SQLite write lock is released between batches instead of being held for
+  # the whole import; media files are uploaded to storage before each batch
+  # transaction opens, keeping slow disk writes out of the transaction.
+  # Destroyed tweets' blobs are cleaned up by has_many_attached
+  # (dependent: :purge_later), so no manual blob purge happens here.
+  def replace_archive_data(zip, archive_data)
+    ActiveRecord::Base.transaction do
+      TwitterArchiveTweet.destroy_all
+      TwitterArchiveConnection.destroy_all
+      TwitterArchiveLike.destroy_all
+    end
+
+    archive_data[:tweets].each_slice(TWEET_BATCH_SIZE) do |rows|
+      prepared = rows.map do |row|
+        blobs = upload_media_blobs(zip, row.delete(:media_entry_names))
+        [ row, blobs ]
+      end
+
+      ActiveRecord::Base.transaction do
+        prepared.each do |row, blobs|
+          tweet = TwitterArchiveTweet.create!(row)
+          blobs.each { |blob| tweet.media.attach(blob) }
+        end
+      end
+    end
+
+    ActiveRecord::Base.transaction do
+      archive_data[:followers].each do |row|
+        TwitterArchiveConnection.create!(row)
+      end
+
+      archive_data[:following].each do |row|
+        TwitterArchiveConnection.create!(row)
+      end
+
+      archive_data[:likes].each do |row|
+        TwitterArchiveLike.create!(row)
+      end
+    end
+  end
 
   def parse_archive_data
     ensure_zip_file!
@@ -353,8 +371,12 @@ class TwitterArchiveImporter
     end
   end
 
-  def attach_media_files(tweet, zip, media_entry_names)
-    Array(media_entry_names).each do |entry_name|
+  # Reads media entries from the zip and uploads them to storage, returning
+  # the created blobs. Runs outside the batch transaction so slow disk
+  # writes don't hold the database write lock; the blobs are attached to
+  # their tweet inside the transaction.
+  def upload_media_blobs(zip, media_entry_names)
+    Array(media_entry_names).filter_map do |entry_name|
       entry = zip.find_entry(entry_name)
 
       unless entry
@@ -370,22 +392,12 @@ class TwitterArchiveImporter
       content_type = Marcel::MimeType.for(io, name: filename) || "application/octet-stream"
       io.rewind
 
-      tweet.media.attach(
+      ActiveStorage::Blob.create_and_upload!(
         io: io,
         filename: filename,
         content_type: content_type
       )
     end
-  end
-
-  def existing_archive_media_blob_ids
-    ActiveStorage::Attachment.where(record_type: "TwitterArchiveTweet", name: "media").distinct.pluck(:blob_id)
-  end
-
-  def purge_replaced_media_blobs(blob_ids)
-    return if blob_ids.blank?
-
-    ActiveStorage::Blob.unattached.where(id: blob_ids).find_each(&:purge)
   end
 
   def extract_referenced_media_basenames(tweet)

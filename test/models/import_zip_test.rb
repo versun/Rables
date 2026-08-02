@@ -408,38 +408,6 @@ class ImportZipTest < ActiveSupport::TestCase
     File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
   end
 
-  test "imports git integrations by provider" do
-    git_integrations_csv = CSV.generate(
-      write_headers: true,
-      headers: %w[id provider name server_url username access_token enabled created_at updated_at]
-    ) do |csv|
-      csv << [
-        1,
-        "github",
-        "GitHub Updated",
-        "https://github.com",
-        "",
-        "ghp_new_token_67890",
-        true,
-        Time.current,
-        Time.current
-      ]
-    end
-
-    zip_path = build_zip("git_integrations.csv" => git_integrations_csv)
-
-    importer = ImportZip.new(zip_path)
-
-    assert importer.import_data, importer.error_message
-
-    git_integration = GitIntegration.find_by!(provider: "github")
-    assert_equal "GitHub Updated", git_integration.name
-    assert_equal "https://github.com", git_integration.server_url
-    assert_equal "ghp_new_token_67890", git_integration.access_token
-  ensure
-    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
-  end
-
   test "imports redirects with numeric enabled and permanent flags" do
     redirect_slug = "import-redirect-#{SecureRandom.hex(4)}"
     redirects_csv = CSV.generate(
@@ -484,7 +452,6 @@ class ImportZipTest < ActiveSupport::TestCase
     Setting.delete_all
     NewsletterSetting.delete_all
     Crosspost.delete_all
-    GitIntegration.delete_all
     Listmonk.delete_all
 
     tag_slug = "tag-#{SecureRandom.hex(4)}"
@@ -570,10 +537,6 @@ class ImportZipTest < ActiveSupport::TestCase
 
     listmonks_csv = CSV.generate(write_headers: true, headers: %w[id url username api_key list_id template_id enabled created_at updated_at]) do |csv|
       csv << [ 1, "https://listmonk.example.com", "user", "key", 1, 2, "true", Time.current, Time.current ]
-    end
-
-    git_integrations_csv = CSV.generate(write_headers: true, headers: %w[id provider name server_url username access_token enabled created_at updated_at]) do |csv|
-      csv << [ 1, "github", "GitHub", "https://github.com", "user", "", "true", Time.current, Time.current ]
     end
 
     pages_csv = CSV.generate(write_headers: true, headers: %w[id title slug content status redirect_url page_order content_type html_content created_at updated_at]) do |csv|
@@ -688,7 +651,6 @@ class ImportZipTest < ActiveSupport::TestCase
       "article_tags.csv" => article_tags_csv,
       "crossposts.csv" => crossposts_csv,
       "listmonks.csv" => listmonks_csv,
-      "git_integrations.csv" => git_integrations_csv,
       "pages.csv" => pages_csv,
       "settings.csv" => settings_csv,
       "setting_footers.csv" => setting_footers_csv,
@@ -729,7 +691,6 @@ class ImportZipTest < ActiveSupport::TestCase
       content_type: "image/png"
     )
     blob_url = Rails.application.routes.url_helpers.rails_blob_path(blob, only_path: true)
-    assert_equal blob, importer.send(:extract_blob_from_url, blob_url)
     assert_equal ".png", importer.send(:extract_extension_from_url, "http://example.com/image.png")
     assert_nil importer.send(:extract_extension_from_url, "http://example.com/noext")
 
@@ -797,8 +758,6 @@ class ImportZipTest < ActiveSupport::TestCase
     missing_img = Nokogiri::HTML.fragment("<img src=\"attachments/missing.png\">").at_css("img")
     importer.send(:process_imported_image_element, missing_img, "rec", "image")
 
-    assert_nil importer.send(:extract_blob_from_url, "/rails/active_storage/blobs/redirect/bad-signed-id")
-
     Net::HTTP.stub(:start, ->(*_args, **_kwargs, &_block) { raise "boom" }) do
       assert_equal "image/jpeg", importer.send(:detect_content_type_from_url, "http://example.com/image.png")
     end
@@ -827,6 +786,140 @@ class ImportZipTest < ActiveSupport::TestCase
 
     other_base = Rails.root.join("tmp")
     assert_equal File.join(other_base, "path.txt"), importer.send(:safe_join_path, other_base, "path.txt")
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+    FileUtils.rm_rf(importer.import_dir) if importer&.import_dir
+  end
+
+  test "skips article and page rows with invalid status without aborting the import" do
+    good_article_slug = "import-valid-status-#{SecureRandom.hex(4)}"
+    bad_article_slug = "import-bad-status-#{SecureRandom.hex(4)}"
+    good_page_slug = "import-valid-page-status-#{SecureRandom.hex(4)}"
+    bad_page_slug = "import-bad-page-status-#{SecureRandom.hex(4)}"
+
+    articles_csv = CSV.generate(write_headers: true, headers: %w[id title slug description content status scheduled_at created_at updated_at]) do |csv|
+      csv << [ 1, "Bad Status", bad_article_slug, "", "<p>Bad</p>", "bogus", nil, Time.current, Time.current ]
+      csv << [ 2, "Good Status", good_article_slug, "", "<p>Good</p>", "publish", nil, Time.current, Time.current ]
+    end
+
+    pages_csv = CSV.generate(write_headers: true, headers: %w[id title slug content status redirect_url page_order created_at updated_at]) do |csv|
+      csv << [ 1, "Bad Page Status", bad_page_slug, "<p>Bad</p>", "bogus", "", 0, Time.current, Time.current ]
+      csv << [ 2, "Good Page Status", good_page_slug, "<p>Good</p>", "publish", "", 0, Time.current, Time.current ]
+    end
+
+    zip_path = build_zip("articles.csv" => articles_csv, "pages.csv" => pages_csv)
+
+    importer = ImportZip.new(zip_path)
+
+    assert importer.import_data, importer.error_message
+    assert Article.find_by(slug: good_article_slug), "expected valid article to be imported"
+    assert_nil Article.find_by(slug: bad_article_slug), "expected invalid status article to be skipped"
+    assert Page.find_by(slug: good_page_slug), "expected valid page to be imported"
+    assert_nil Page.find_by(slug: bad_page_slug), "expected invalid status page to be skipped"
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
+  test "preserves subscriber tokens from the csv" do
+    email = "import-tokens-#{SecureRandom.hex(4)}@example.com"
+    subscribers_csv = CSV.generate(write_headers: true, headers: %w[id email confirmation_token confirmed_at unsubscribe_token unsubscribed_at created_at updated_at]) do |csv|
+      csv << [ 1, email, "csv-confirmation-token", "", "csv-unsubscribe-token", "", Time.current, Time.current ]
+    end
+
+    zip_path = build_zip("subscribers.csv" => subscribers_csv)
+
+    importer = ImportZip.new(zip_path)
+
+    assert importer.import_data, importer.error_message
+    subscriber = Subscriber.find_by!(email: email)
+    assert_equal "csv-confirmation-token", subscriber.confirmation_token
+    assert_equal "csv-unsubscribe-token", subscriber.unsubscribe_token
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
+  test "updates the singleton listmonk config and keeps api key when redacted" do
+    Listmonk.delete_all
+    Listmonk.create!(url: "https://old.example.com", username: "old", api_key: "real-key", list_id: 1, template_id: 1, enabled: false)
+
+    listmonks_csv = CSV.generate(write_headers: true, headers: %w[id url username api_key list_id template_id enabled created_at updated_at]) do |csv|
+      csv << [ 1, "https://new.example.com", "new", Export::REDACTED_VALUE, 2, 3, "true", Time.current, Time.current ]
+    end
+
+    zip_path = build_zip("listmonks.csv" => listmonks_csv)
+
+    importer = ImportZip.new(zip_path)
+
+    assert importer.import_data, importer.error_message
+    assert_equal 1, Listmonk.count, "expected the existing singleton config to be updated"
+    listmonk = Listmonk.first
+    assert_equal "https://new.example.com", listmonk.url
+    assert_equal "new", listmonk.username
+    assert_equal "real-key", listmonk.api_key, "expected redacted placeholder not to overwrite the stored api key"
+    assert listmonk.enabled?
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
+  test "imports setting footer even when settings csv has no rows" do
+    setting = Setting.first
+    setting.footer = nil
+    setting.save!
+
+    settings_csv = CSV.generate_line(%w[id title description author url time_zone created_at updated_at])
+    setting_footers_csv = CSV.generate(write_headers: true, headers: %w[content]) do |csv|
+      csv << [ "<p>Restored Footer</p>" ]
+    end
+
+    zip_path = build_zip("settings.csv" => settings_csv, "setting_footers.csv" => setting_footers_csv)
+
+    importer = ImportZip.new(zip_path)
+
+    assert importer.import_data, importer.error_message
+    assert_includes setting.reload.footer.to_s, "Restored Footer"
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
+  test "casts newsletter setting booleans with false defaults" do
+    NewsletterSetting.delete_all
+    newsletter_settings_csv = CSV.generate(
+      write_headers: true,
+      headers: %w[id provider enabled smtp_address smtp_port smtp_user_name smtp_password smtp_domain smtp_authentication smtp_enable_starttls from_email footer created_at updated_at]
+    ) do |csv|
+      csv << [ 1, "native", "", "", "", "", "", "", "", "", "", "", Time.current, Time.current ]
+    end
+
+    zip_path = build_zip("newsletter_settings.csv" => newsletter_settings_csv)
+
+    importer = ImportZip.new(zip_path)
+
+    assert importer.import_data, importer.error_message
+    newsletter_setting = NewsletterSetting.first
+    assert_not newsletter_setting.enabled?
+    assert_not newsletter_setting.smtp_enable_starttls?
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
+  test "rejects zip entries with path traversal outside import dir" do
+    zip_path = build_zip("../evil_traversal.txt" => "evil")
+    importer = ImportZip.new(zip_path)
+
+    refute importer.import_data
+    assert_match(/unsafe path/i, importer.error_message)
+    refute File.exist?(Rails.root.join("tmp", "imports", "evil_traversal.txt"))
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
+  test "safe_file_path? rejects sibling directories sharing the import dir prefix" do
+    zip_path = build_zip("tags.csv" => "id,name\n")
+    importer = ImportZip.new(zip_path)
+
+    sibling = Pathname.new("#{importer.import_dir}-evil")
+    refute importer.send(:safe_file_path?, sibling.join("evil.txt"))
+    assert importer.send(:safe_file_path?, importer.import_dir.join("ok.txt"))
   ensure
     File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
     FileUtils.rm_rf(importer.import_dir) if importer&.import_dir

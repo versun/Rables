@@ -185,8 +185,34 @@ class ContentBuilderTest < ActiveSupport::TestCase
   end
 
   test "build_content truncates long title when needed" do
-    post = @builder.build_content("slug", "VeryLongTitle", "content", nil, max_length: 40, always_add_link: true)
+    post = @builder.build_content("slug", "VeryLongTitle", "content", nil, max_length: 50, always_add_link: true)
 
     assert_includes post, "..."
+  end
+
+  test "build_post_url keeps a non-default port from the site url" do
+    setting = Setting.first
+    original_url = setting.url
+    setting.update!(url: "http://localhost:3000")
+
+    post_url = @builder.build_post_url("my-post")
+
+    assert_includes post_url, "localhost:3000"
+    assert_includes post_url, "my-post"
+  ensure
+    setting.update!(url: original_url)
+  end
+
+  test "build_post_url omits the default port from the site url" do
+    setting = Setting.first
+    original_url = setting.url
+    setting.update!(url: "https://example.com:443")
+
+    post_url = @builder.build_post_url("my-post")
+
+    assert_includes post_url, "https://example.com/"
+    assert_not_includes post_url, ":443"
+  ensure
+    setting.update!(url: original_url)
   end
 end

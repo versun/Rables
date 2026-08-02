@@ -1,12 +1,18 @@
 class FetchSocialCommentsJob < ApplicationJob
   queue_as :default
 
-  def perform
-    fetch_mastodon_comments if mastodon_enabled?
-    fetch_bluesky_comments if bluesky_enabled?
+  # When platform is given, only fetch comments for that platform so each
+  # platform can follow its own schedule. Nil fetches all enabled platforms.
+  def perform(platform = nil)
+    fetch_mastodon_comments if fetch_platform?(platform, "mastodon") && mastodon_enabled?
+    fetch_bluesky_comments if fetch_platform?(platform, "bluesky") && bluesky_enabled?
   end
 
   private
+
+  def fetch_platform?(requested, platform)
+    requested.nil? || requested == platform
+  end
 
   def mastodon_enabled?
     mastodon_settings = Crosspost.find_by(platform: "mastodon")
@@ -26,7 +32,6 @@ class FetchSocialCommentsJob < ApplicationJob
 
     articles = Article.published
                       .joins(:social_media_posts)
-                      .includes(:comments)
                       .where(social_media_posts: { platform: "mastodon" })
                       .where.not(social_media_posts: { url: nil })
                       .distinct
@@ -42,7 +47,6 @@ class FetchSocialCommentsJob < ApplicationJob
 
     articles = Article.published
                       .joins(:social_media_posts)
-                      .includes(:comments)
                       .where(social_media_posts: { platform: "bluesky" })
                       .where.not(social_media_posts: { url: nil })
                       .distinct
@@ -56,10 +60,15 @@ class FetchSocialCommentsJob < ApplicationJob
     total_comments = 0
     stopped_due_to_rate_limit = false
 
+    # Load the posts for all articles in one query, indexed by
+    # [ article_id, platform ], instead of a find_by per article.
+    posts_by_article_and_platform = SocialMediaPost.where(article_id: articles.map(&:id))
+                                                   .index_by { |post| [ post.article_id, post.platform ] }
+
     articles.each do |article|
       begin
-        post = article.social_media_posts.find_by(platform: platform)
-        next unless post&.url
+        post = posts_by_article_and_platform[[ article.id, platform ]]
+        next unless post&.url.presence
 
         # Fetch comments from platform
         result = service.fetch_comments(post.url)
@@ -105,30 +114,17 @@ class FetchSocialCommentsJob < ApplicationJob
 
         # Create or update comments with deduplication
         comments_data.each do |comment_data|
-          comment = article.comments.find_or_initialize_by(
-            platform: platform,
-            external_id: comment_data[:external_id]
-          )
+          _comment, upsert_result = Comment.upsert_from_external(article, platform, comment_data)
 
-          comment.assign_attributes(
-            author_name: comment_data[:author_name],
-            author_username: comment_data[:author_username],
-            author_avatar_url: comment_data[:author_avatar_url],
-            content: comment_data[:content],
-            published_at: comment_data[:published_at],
-            url: comment_data[:url]
-          )
-
-          if comment.new_record?
-            comment.save!
+          case upsert_result
+          when :created
             total_comments += 1
             Rails.event.notify "fetch_social_comments_job.comment_created",
               level: "info",
               component: "FetchSocialCommentsJob",
               platform: platform,
               article_slug: article.slug
-          elsif comment.changed?
-            comment.save!
+          when :updated
             Rails.event.notify "fetch_social_comments_job.comment_updated",
               level: "info",
               component: "FetchSocialCommentsJob",

@@ -5,18 +5,21 @@ class Admin::TwitterSyncController < Admin::BaseController
 
   def update
     @sync = TwitterSync.instance
-    attrs = twitter_sync_params
+    @sync.assign_attributes(twitter_sync_params)
 
-    # Switching accounts restarts archiving from scratch
-    if attrs[:username].to_s.strip.sub(/\A@/, "") != @sync.username.to_s
-      attrs = attrs.merge(user_id: nil, since_id: nil)
-    elsif attrs[:start_date].to_s != @sync.start_date.to_s
-      # A changed start date re-backfills from the new date; existing
-      # articles are kept and not duplicated (slug uniqueness)
-      attrs = attrs.merge(since_id: nil)
+    # Switching accounts restarts archiving from scratch; a changed start
+    # date re-backfills from the new date (existing articles are kept,
+    # not duplicated thanks to slug uniqueness). The sync cursor, last
+    # success time, and last error no longer apply to the new configuration.
+    cursor_reset = @sync.will_save_change_to_username? || @sync.will_save_change_to_start_date?
+    @sync.user_id = nil if @sync.will_save_change_to_username?
+    if cursor_reset
+      @sync.since_id = nil
+      @sync.last_synced_at = nil
+      @sync.last_error = nil
     end
 
-    if @sync.update(attrs)
+    if @sync.save
       ActivityLog.log!(
         action: :updated,
         target: :twitter_sync,
@@ -29,6 +32,13 @@ class Admin::TwitterSyncController < Admin::BaseController
   end
 
   def sync_now
+    @sync = TwitterSync.instance
+
+    unless @sync.enabled? && @sync.username.present? && Crosspost.for("twitter")&.enabled?
+      return redirect_to admin_twitter_sync_path,
+        alert: "Twitter sync is not enabled or the X/Twitter credentials are missing. Enable it in the settings before syncing."
+    end
+
     SyncTwitterJob.perform_later(force: true)
     redirect_to admin_twitter_sync_path, notice: "Twitter sync has been queued."
   end

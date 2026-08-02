@@ -15,26 +15,6 @@ class TwitterArchiveImportTest < ActiveSupport::TestCase
     assert_not_nil import.queued_at
   end
 
-  test "remains valid when active_slot support is unavailable" do
-    import = TwitterArchiveImport.new(
-      source_filename: "twitter-archive.zip",
-      status: "queued",
-      progress: 0,
-      queued_at: Time.current
-    )
-
-    import.define_singleton_method(:has_attribute?) do |name|
-      return false if name.to_s == "active_slot"
-
-      super(name)
-    end
-    import.define_singleton_method(:active_slot=) do |_value|
-      raise NoMethodError, "undefined method 'active_slot='"
-    end
-
-    assert_predicate import, :valid?
-  end
-
   test "marks itself running and clears previous completion data" do
     import = twitter_archive_import
     import.update!(
@@ -100,6 +80,7 @@ class TwitterArchiveImportTest < ActiveSupport::TestCase
 
   test "cleans source file without raising when it is already missing" do
     import = twitter_archive_import(source_path: Rails.root.join("tmp", "missing-twitter-archive.zip").to_s)
+    import.save!
 
     assert_nothing_raised do
       import.cleanup_source_file!

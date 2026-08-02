@@ -3,6 +3,7 @@ class CommentsController < ApplicationController
   # Allow unauthenticated users to submit comments
   allow_unauthenticated_access only: [ :create ]
   before_action :set_commentable, only: [ :create ]
+  rate_limit to: 5, within: 3.minutes, only: :create, with: -> { redirect_to determine_redirect_path, alert: "评论太频繁，请稍后再试。" }
 
   def create
     commentable_ref = commentable_reference
@@ -159,6 +160,11 @@ class CommentsController < ApplicationController
       @page = @commentable # Set @page for page views
     else
       raise ActiveRecord::RecordNotFound, "No article_id or page_id provided"
+    end
+
+    # Only published/shared content with comments enabled accepts comments
+    unless %w[publish shared].include?(@commentable.status) && @commentable.comment?
+      raise ActiveRecord::RecordNotFound, "Comments are not available for this content"
     end
   end
 

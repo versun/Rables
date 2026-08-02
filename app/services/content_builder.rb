@@ -136,13 +136,12 @@ module ContentBuilder
     # 确保URL有scheme
     site_url = "https://#{site_url}" unless site_url.match?(%r{^https?://})
 
-    # 解析获取host和scheme
+    # 解析获取host、scheme和port（Setting.url带端口时不能丢）
     uri = URI.parse(site_url)
 
-    Rails.application.routes.url_helpers.article_url(
-      slug,
-      host: uri.host,
-      protocol: uri.scheme
-    )
+    url_options = { host: uri.host, protocol: uri.scheme }
+    url_options[:port] = uri.port if uri.port != uri.default_port
+
+    Rails.application.routes.url_helpers.article_url(slug, **url_options)
   end
 end

@@ -60,7 +60,8 @@ namespace :active_storage do
         puts "[#{index + 1}/#{total_blobs}] Blob #{blob.id} (#{blob.filename}): Downloading from primary storage..."
 
         # 使用 download 方法获取文件内容
-        io = primary_service.download(blob.key)
+        # download returns a String, but Disk service upload expects an IO
+        io = StringIO.new(primary_service.download(blob.key))
 
         # 上传到镜像存储
         mirror_service.upload(blob.key, io, checksum: blob.checksum)

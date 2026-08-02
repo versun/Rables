@@ -67,12 +67,12 @@
 
     <%= form_with url: batch_confirm_admin_subscribers_path, method: :post, style: "display: inline;" do |f| %>
       <%= f.button "改为已确认", type: "submit", class: "btn btn-sm", style: "background: #28a745; color: white;",
-          onclick: "return submitBatchForm(this, 'confirm')" %>
+          data: { action: "click->batch-selection#submitBatchAction", batch_selection_action_param: "confirm" } %>
     <% end %>
 
     <%= form_with url: batch_destroy_admin_subscribers_path, method: :post, style: "display: inline;" do |f| %>
       <%= f.button "删除", type: "submit", class: "btn btn-sm", style: "background: #dc3545; color: white;",
-          onclick: "return submitBatchForm(this, 'delete')" %>
+          data: { action: "click->batch-selection#submitBatchAction", batch_selection_action_param: "delete" } %>
     <% end %>
   </div>
 
@@ -137,7 +137,3 @@
 <p style="margin-top: 20px;">
   <%= link_to "返回 Newsletter 设置", admin_newsletter_path, class: "btn btn-secondary" %>
 </p>
-
-<% content_for :javascript do %>
-  <%= render "admin/shared/batch_form_handler" %>
-<% end %>

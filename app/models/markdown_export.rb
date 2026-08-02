@@ -43,6 +43,7 @@ class MarkdownExport
 
     articles_dir = File.join(@export_dir, "articles")
     FileUtils.mkdir_p(articles_dir)
+    used_basenames = []
 
     Article.order(:id).includes(:tags).find_each do |article|
       html = html_for_article(article)
@@ -63,9 +64,12 @@ class MarkdownExport
         "tags" => article.tags.map(&:name)
       }.compact
 
+      basename = dedupe_basename(safe_basename(article.slug.presence || "article_#{article.id}"), used_basenames, record: article)
+      used_basenames << basename
+
       write_markdown_file(
         dir: articles_dir,
-        basename: safe_basename(article.slug.presence || "article_#{article.id}"),
+        basename: basename,
         front_matter: front_matter,
         body: body
       )
@@ -79,6 +83,7 @@ class MarkdownExport
 
     pages_dir = File.join(@export_dir, "pages")
     FileUtils.mkdir_p(pages_dir)
+    used_basenames = []
 
     Page.order(:id).find_each do |page|
       html = html_for_page(page)
@@ -96,9 +101,12 @@ class MarkdownExport
         "updated_at" => page.updated_at&.iso8601
       }.compact
 
+      basename = dedupe_basename(safe_basename(page.slug.presence || "page_#{page.id}"), used_basenames, record: page)
+      used_basenames << basename
+
       write_markdown_file(
         dir: pages_dir,
-        basename: safe_basename(page.slug.presence || "page_#{page.id}"),
+        basename: basename,
         front_matter: front_matter,
         body: markdown
       )
@@ -197,5 +205,17 @@ class MarkdownExport
     value = value.gsub(/_+/, "_").gsub(/\A_+|_+\z/, "")
     value = value.gsub(/\A\.+/, "").gsub(/[. ]+\z/, "")
     value.presence || SecureRandom.hex(8)
+  end
+
+  # Different slugs can normalize to the same basename; append a slug/id suffix to dedupe
+  def dedupe_basename(basename, used_basenames, record:)
+    return basename unless used_basenames.include?(basename)
+
+    [ record.slug.presence, record.id ].compact.each do |suffix|
+      candidate = "#{basename}-#{suffix}"
+      return candidate unless used_basenames.include?(candidate)
+    end
+
+    "#{basename}-#{SecureRandom.hex(4)}"
   end
 end

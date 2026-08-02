@@ -9,22 +9,19 @@ class Export
   include Exports::HtmlAttachmentProcessing
   include Exports::ZipPackaging
 
+  # Placeholder written to CSVs in place of sensitive credentials
+  REDACTED_VALUE = "[REDACTED]"
+
   attr_reader :zip_path, :error_message, :export_dir, :attachments_dir
 
-  def initialize
+  def initialize(redact_secrets: true)
     @zip_path = nil
     @error_message = nil
+    @redact_secrets = redact_secrets
     timestamp = Time.current.strftime("%Y%m%d_%H%M%S")
     unique_suffix = "#{Process.pid}_#{SecureRandom.hex(4)}"
     @export_dir = Rails.root.join("tmp", "exports", "export_#{timestamp}_#{unique_suffix}")
     @attachments_dir = File.join(@export_dir, "attachments")
-
-    # 创建导出目录
-    FileUtils.mkdir_p(@export_dir)
-    FileUtils.mkdir_p(@attachments_dir)
-
-    # 检查数据库连接
-    check_database_connection
   end
 
   def check_database_connection
@@ -40,14 +37,19 @@ class Export
   end
 
   def generate
+    # Abort early when the database is unreachable
+    return false unless check_database_connection
+
     begin
+      # 创建导出目录
+      FileUtils.mkdir_p(@export_dir)
+      FileUtils.mkdir_p(@attachments_dir)
+
       Rails.event.notify("export.generation_started", component: "Export", export_dir: @export_dir, level: "info")
 
-      # export_activity_logs
       export_articles
       export_crossposts
       export_listmonks
-      export_git_integrations
       export_pages
       export_settings
       export_social_media_posts
@@ -59,7 +61,6 @@ class Export
       export_subscribers
       export_article_tags
       export_subscriber_tags
-      # export_users
 
       # 创建ZIP文件
       create_zip_file
@@ -75,24 +76,10 @@ class Export
 
   private
 
-  def export_activity_logs
-    Rails.event.notify("export.activity_logs_started", component: "Export", level: "info")
-
-    CSV.open(File.join(@export_dir, "activity_logs.csv"), "w", write_headers: true, headers: %w[id action target level description created_at updated_at]) do |csv|
-      ActivityLog.order(:id).find_each do |log|
-        csv << [
-          log.id,
-          log.action,
-          log.target,
-          log.level,
-          log.description,
-          log.created_at,
-          log.updated_at
-        ]
-      end
-    end
-
-    Rails.event.notify("export.activity_logs_completed", component: "Export", count: ActivityLog.count, level: "info")
+  # Redact credentials by default; pass redact_secrets: false to keep them
+  def redact_secret(value)
+    return value unless @redact_secrets
+    value.present? ? REDACTED_VALUE : value
   end
 
   def export_articles
@@ -175,14 +162,14 @@ class Export
           crosspost.id,
           crosspost.platform,
           crosspost.server_url,
-          crosspost.client_key,
-          crosspost.client_secret,
-          crosspost.access_token,
-          crosspost.access_token_secret,
-          crosspost.api_key,
-          crosspost.api_key_secret,
+          redact_secret(crosspost.client_key),
+          redact_secret(crosspost.client_secret),
+          redact_secret(crosspost.access_token),
+          redact_secret(crosspost.access_token_secret),
+          redact_secret(crosspost.api_key),
+          redact_secret(crosspost.api_key_secret),
           crosspost.username,
-          crosspost.app_password,
+          redact_secret(crosspost.app_password),
           crosspost.enabled,
           crosspost.auto_fetch_comments,
           crosspost.comment_fetch_schedule,
@@ -206,7 +193,7 @@ class Export
           listmonk.id,
           listmonk.url,
           listmonk.username,
-          listmonk.api_key,
+          redact_secret(listmonk.api_key),
           listmonk.list_id,
           listmonk.template_id,
           listmonk.enabled,
@@ -217,33 +204,6 @@ class Export
     end
 
     Rails.event.notify("export.listmonks_completed", component: "Export", count: Listmonk.count, level: "info")
-  end
-
-  def export_git_integrations
-    Rails.event.notify("export.git_integrations_started", component: "Export", level: "info")
-
-    CSV.open(
-      File.join(@export_dir, "git_integrations.csv"),
-      "w",
-      write_headers: true,
-      headers: %w[id provider name server_url username access_token enabled created_at updated_at]
-    ) do |csv|
-      GitIntegration.order(:id).find_each do |integration|
-        csv << [
-          integration.id,
-          integration.provider,
-          integration.name,
-          integration.server_url,
-          integration.username,
-          integration.access_token,
-          integration.enabled,
-          integration.created_at,
-          integration.updated_at
-        ]
-      end
-    end
-
-    Rails.event.notify("export.git_integrations_completed", component: "Export", count: GitIntegration.count, level: "info")
   end
 
   def export_pages
@@ -325,7 +285,7 @@ class Export
           setting.setup_completed,
           setting.github_backup_enabled,
           setting.github_repo_url,
-          setting.github_token,
+          redact_secret(setting.github_token),
           setting.github_backup_branch,
           setting.created_at,
           setting.updated_at
@@ -484,7 +444,7 @@ class Export
           setting.smtp_address,
           setting.smtp_port,
           setting.smtp_user_name,
-          setting.smtp_password,
+          redact_secret(setting.smtp_password),
           setting.smtp_domain,
           setting.smtp_authentication,
           setting.smtp_enable_starttls,
@@ -509,14 +469,13 @@ class Export
   def export_subscribers
     Rails.event.notify("export.subscribers_started", component: "Export", level: "info")
 
-    CSV.open(File.join(@export_dir, "subscribers.csv"), "w", write_headers: true, headers: %w[id email confirmation_token confirmed_at unsubscribe_token unsubscribed_at created_at updated_at]) do |csv|
+    # Subscriber tokens are never exported: they authenticate confirm/unsubscribe links
+    CSV.open(File.join(@export_dir, "subscribers.csv"), "w", write_headers: true, headers: %w[id email confirmed_at unsubscribed_at created_at updated_at]) do |csv|
       Subscriber.order(:id).find_each do |subscriber|
         csv << [
           subscriber.id,
           subscriber.email,
-          subscriber.confirmation_token,
           subscriber.confirmed_at,
-          subscriber.unsubscribe_token,
           subscriber.unsubscribed_at,
           subscriber.created_at,
           subscriber.updated_at
@@ -567,23 +526,6 @@ class Export
     end
 
     Rails.event.notify("export.subscriber_tags_completed", component: "Export", count: SubscriberTag.count, level: "info")
-  end
-
-  def export_users
-    Rails.event.notify("export.users_started", component: "Export", level: "info")
-
-    CSV.open(File.join(@export_dir, "users.csv"), "w", write_headers: true, headers: %w[id user_name created_at updated_at]) do |csv|
-      User.order(:id).find_each do |user|
-        csv << [
-          user.id,
-          user.user_name,
-          user.created_at,
-          user.updated_at
-        ]
-      end
-    end
-
-    Rails.event.notify("export.users_completed", component: "Export", count: User.count, level: "info")
   end
 
   def create_zip_file

@@ -1,10 +1,7 @@
 class PagesController < ApplicationController
-  allow_unauthenticated_access only: %i[ index show ] # %i 是一种字面量符号数组的简写方式，表示[:index]
-  before_action :set_Page, only: %i[ show edit update destroy ]
+  allow_unauthenticated_access only: %i[ show ]
+  before_action :set_Page, only: %i[ show ]
 
-  def index
-  end
-  # GET /1
   def show
     if @page.nil? || (!%w[publish shared].include?(@page.status) && !authenticated?)
       # 404 页面设置较短的缓存时间
@@ -14,8 +11,10 @@ class PagesController < ApplicationController
     else
       # 已发布的页面设置 1 天缓存
       if %w[publish shared].include?(@page.status)
-        # 公开页面：缓存 1 天
-        headers["Cache-Control"] = "public, max-age=86400, s-maxage=86400"
+        # Published page: browser cache for 1 day. Must stay private (no s-maxage)
+        # because the page embeds a per-session CSRF token in the comment form;
+        # a shared cache/CDN copy would make every visitor's comment submit fail with InvalidAuthenticityToken.
+        headers["Cache-Control"] = "private, max-age=86400"
       else
         # 需要认证的页面：不缓存或短缓存
         headers["Cache-Control"] = "private, no-cache" if authenticated?
@@ -23,76 +22,9 @@ class PagesController < ApplicationController
     end
   end
 
-  # GET /Pages/new
-  def new
-    @page = Page.new(comment: true)
-    max_order = Page.all.maximum(:page_order) || 0
-    @page.page_order = max_order + 1
-  end
-
-  # GET /1/edit
-  def edit
-    render "admin/pages/edit"
-  end
-
-  # POST / or /Pages.json
-  def create
-    @page = Page.new(page_params)
-
-    respond_to do |format|
-      if @page.save
-        refresh_pages
-        format.html { redirect_to admin_pages_path, notice: "Created successfully." }
-        format.json { render :show, status: :created, location: @page }
-      else
-        format.html { render :new, status: :unprocessable_entity }
-        format.json { render json: @page.errors, status: :unprocessable_entity }
-      end
-    end
-  end
-
-  # PATCH/PUT /1 or /1.json
-  def update
-    respond_to do |format|
-      if @page.update(page_params)
-        refresh_pages
-        format.html { redirect_to admin_pages_path, notice: "Updated successfully." }
-        format.json { render :show, status: :ok, location: @page }
-      else
-        format.html { render :edit, status: :unprocessable_entity }
-        format.json { render json: @page.errors, status: :unprocessable_entity }
-      end
-    end
-  end
-
-  # DELETE /1 or /1.json
-  def destroy
-    notice_message = if @page.status != "trash"
-                       @page.update(status: "trash")
-                       "Page was successfully moved to trash."
-    else
-                       @page.destroy!
-                       "Page was successfully destroyed."
-    end
-
-    respond_to do |format|
-      format.html { redirect_to admin_pages_path, status: :see_other, notice: notice_message }
-      format.json { head :no_content }
-    end
-  end
-
   private
 
   def set_Page
     @page = Page.includes(comments: [ :replies ]).find_by(slug: params[:slug])
-  end
-
-  def page_params
-    params.expect(page: [ :title,
-                         :content,
-                         :status,
-                         :slug,
-                         :page_order,
-                         :redirect_url ])
   end
 end

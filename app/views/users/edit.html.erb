@@ -18,6 +18,11 @@
   </div>
 
   <div>
+    <%= form.label :current_password, "Current Password (required to change password)" %>
+    <%= form.password_field :current_password %>
+  </div>
+
+  <div>
     <%= form.label :password, "New Password" %>
     <%= form.password_field :password %>
   </div>

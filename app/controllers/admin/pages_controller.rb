@@ -1,5 +1,5 @@
 class Admin::PagesController < Admin::BaseController
-  before_action :set_page, only: [ :show, :edit, :update, :destroy, :reorder ]
+  before_action :set_page, only: [ :show, :edit, :update, :destroy ]
 
   def index
     @scope = Page.all
@@ -31,7 +31,6 @@ class Admin::PagesController < Admin::BaseController
         )
         refresh_pages
         format.html { redirect_to admin_pages_path, notice: "Page was successfully created." }
-        format.json { render :show, status: :created, location: @page }
       else
         ActivityLog.log!(
           action: :failed,
@@ -41,7 +40,7 @@ class Admin::PagesController < Admin::BaseController
           slug: @page.slug,
           errors: @page.errors.full_messages.join(", ")
         )
-        format.html { render :new }
+        format.html { render :new, status: :unprocessable_entity }
         format.json { render json: @page.errors, status: :unprocessable_entity }
       end
     end
@@ -59,7 +58,6 @@ class Admin::PagesController < Admin::BaseController
         )
         refresh_pages
         format.html { redirect_to admin_pages_path, notice: "Page was successfully updated." }
-        format.json { render :show, status: :ok, location: @page }
       else
         ActivityLog.log!(
           action: :failed,
@@ -69,7 +67,7 @@ class Admin::PagesController < Admin::BaseController
           slug: @page.slug,
           errors: @page.errors.full_messages.join(", ")
         )
-        format.html { render :edit }
+        format.html { render :edit, status: :unprocessable_entity }
         format.json { render json: @page.errors, status: :unprocessable_entity }
       end
     end
@@ -93,29 +91,6 @@ class Admin::PagesController < Admin::BaseController
     end
   end
 
-  def reorder
-    if @page.insert_at(params[:position].to_i)
-      ActivityLog.log!(
-        action: :updated,
-        target: :page,
-        level: :info,
-        title: @page.title,
-        slug: @page.slug,
-        position: params[:position]
-      )
-      head :ok
-    else
-      ActivityLog.log!(
-        action: :failed,
-        target: :page,
-        level: :error,
-        title: @page.title,
-        slug: @page.slug
-      )
-      head :unprocessable_entity
-    end
-  end
-
   private
 
   def after_batch_action
@@ -129,10 +104,6 @@ class Admin::PagesController < Admin::BaseController
   end
 
   def page_params
-    params.require(:page).permit(:title, :content, :html_content, :content_type, :slug, :page_order, :meta_description, :redirect_url, :status, :comment)
-  end
-
-  def refresh_pages
-    # 更新页面缓存或执行其他必要的刷新操作
+    params.require(:page).permit(:title, :content, :html_content, :content_type, :slug, :page_order, :meta_description, :redirect_url, :status, :comment, :scheduled_at)
   end
 end

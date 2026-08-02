@@ -19,27 +19,9 @@ class NewsletterMailer < ApplicationMailer
     @article_url = article_full_url(@article, @site_url)
 
     # Build unsubscribe URL using rails_api_url
-    api_uri = URI.parse(ApplicationController.helpers.rails_api_url)
-    port = api_uri.port
-    port = nil if (api_uri.scheme == "http" && port == 80) || (api_uri.scheme == "https" && port == 443)
+    @unsubscribe_url = build_token_url(subscriber.unsubscribe_token, :unsubscribe_url)
 
-    script_name = api_uri.path.presence
-    script_name = nil if script_name == "/"
-
-    url_options = { token: subscriber.unsubscribe_token, host: api_uri.host, protocol: api_uri.scheme }
-    url_options[:port] = port if port
-    url_options[:script_name] = script_name if script_name
-
-    @unsubscribe_url = Rails.application.routes.url_helpers.unsubscribe_url(**url_options)
-
-    from_email = @newsletter_setting.from_email
-    if from_email.blank?
-      Rails.event.notify "newsletter.mailer.missing_from_email",
-        level: "error",
-        component: "newsletter_mailer",
-        fallback_email: "noreply@example.com"
-      from_email = "noreply@example.com"
-    end
+    from_email = resolved_from_email(@newsletter_setting)
 
     Rails.event.notify "newsletter.mailer.creating_email",
       level: "info",
@@ -70,21 +52,9 @@ class NewsletterMailer < ApplicationMailer
   def confirmation_email(subscriber, site_info)
     @subscriber = subscriber
     @site_info = site_info
-    api_uri = URI.parse(ApplicationController.helpers.rails_api_url)
-    port = api_uri.port
-    port = nil if (api_uri.scheme == "http" && port == 80) || (api_uri.scheme == "https" && port == 443)
+    @confirmation_url = build_token_url(subscriber.confirmation_token, :confirm_subscription_url)
 
-    script_name = api_uri.path.presence
-    script_name = nil if script_name == "/"
-
-    url_options = { token: subscriber.confirmation_token, host: api_uri.host, protocol: api_uri.scheme }
-    url_options[:port] = port if port
-    url_options[:script_name] = script_name if script_name
-
-    @confirmation_url = Rails.application.routes.url_helpers.confirm_subscription_url(**url_options)
-
-    newsletter_setting = NewsletterSetting.instance
-    from_email = newsletter_setting.from_email || "noreply@example.com"
+    from_email = resolved_from_email(NewsletterSetting.instance)
 
     mail(
       to: @subscriber.email,
@@ -94,6 +64,33 @@ class NewsletterMailer < ApplicationMailer
   end
 
   private
+
+  # Build a token-based URL (unsubscribe / confirm subscription) using rails_api_url as base
+  def build_token_url(token, route_helper)
+    api_uri = URI.parse(ApplicationController.helpers.rails_api_url)
+    port = api_uri.port
+    port = nil if (api_uri.scheme == "http" && port == 80) || (api_uri.scheme == "https" && port == 443)
+
+    script_name = api_uri.path.presence
+    script_name = nil if script_name == "/"
+
+    url_options = { token: token, host: api_uri.host, protocol: api_uri.scheme }
+    url_options[:port] = port if port
+    url_options[:script_name] = script_name if script_name
+
+    Rails.application.routes.url_helpers.public_send(route_helper, **url_options)
+  end
+
+  def resolved_from_email(newsletter_setting)
+    from_email = newsletter_setting.from_email
+    return from_email if from_email.present?
+
+    Rails.event.notify "newsletter.mailer.missing_from_email",
+      level: "error",
+      component: "newsletter_mailer",
+      fallback_email: "noreply@example.com"
+    "noreply@example.com"
+  end
 
   def normalized_site_url
     return "" unless Setting.respond_to?(:table_exists?) && Setting.table_exists?

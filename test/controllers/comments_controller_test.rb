@@ -3,9 +3,24 @@
 require "test_helper"
 
 class CommentsControllerTest < ActionDispatch::IntegrationTest
+  setup do
+    # Comments must be enabled on the fixture article for most tests
+    articles(:published_article).update_column(:comment, true)
+  end
+
   def captcha_params(a: 3, b: 4, op: "+", answer: nil)
     expected = op == "+" ? (a + b) : (a - b)
-    { captcha: { a:, b:, op:, answer: (answer || expected).to_s } }
+    token = MathCaptchaHelper.sign_math_captcha({ a: a, b: b, op: op })
+    { captcha: { a:, b:, op:, token:, answer: (answer || expected).to_s } }
+  end
+
+  # Simulate the rate limit counter already exceeding the threshold
+  def with_rate_limit_count(count)
+    cache = Rails.cache
+    cache.define_singleton_method(:increment) { |*| count }
+    yield
+  ensure
+    cache.singleton_class.send(:remove_method, :increment)
   end
 
   test "should reject comment without captcha" do
@@ -355,5 +370,124 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to root_path
   ensure
     Article.define_method(:comments, original_comments)
+  end
+
+  test "rejects comment with tampered captcha token" do
+    article = articles(:published_article)
+    tampered = captcha_params
+    tampered[:captcha][:token] = "#{tampered[:captcha][:token]}tampered"
+
+    assert_no_difference "Comment.count" do
+      post comments_path(article_id: article.slug), params: {
+        comment: {
+          author_name: "Mallory",
+          content: "Forged captcha"
+        }
+      }.merge(tampered), as: :json
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal false, response.parsed_body["success"]
+  end
+
+  test "rejects comment with expired captcha token" do
+    article = articles(:published_article)
+    expired = captcha_params
+
+    travel(MathCaptchaHelper::MATH_CAPTCHA_TTL + 1.minute) do
+      assert_no_difference "Comment.count" do
+        post comments_path(article_id: article.slug), params: {
+          comment: {
+            author_name: "Late",
+            content: "Too late"
+          }
+        }.merge(expired), as: :json
+      end
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal false, response.parsed_body["success"]
+  end
+
+  test "rejects comment on draft article" do
+    article = articles(:draft_article)
+    article.update_column(:comment, true)
+
+    assert_no_difference "Comment.count" do
+      post comments_path(article_id: article.slug), params: {
+        comment: {
+          author_name: "Alice",
+          content: "Nice post!"
+        }
+      }.merge(captcha_params), as: :json
+    end
+
+    assert_response :not_found
+  end
+
+  test "rejects comment when comments are disabled" do
+    article = articles(:published_article)
+    article.update_column(:comment, false)
+
+    assert_no_difference "Comment.count" do
+      post comments_path(article_id: article.slug), params: {
+        comment: {
+          author_name: "Alice",
+          content: "Nice post!"
+        }
+      }.merge(captcha_params), as: :json
+    end
+
+    assert_response :not_found
+  end
+
+  test "creates comment on shared article with comments enabled" do
+    article = articles(:shared_article)
+    article.update_column(:comment, true)
+
+    assert_difference "Comment.count", 1 do
+      post comments_path(article_id: article.slug), params: {
+        comment: {
+          author_name: "Alice",
+          content: "Nice share!"
+        }
+      }.merge(captcha_params), as: :json
+    end
+
+    assert_response :created
+  end
+
+  test "rejects comment on draft page" do
+    page = pages(:draft_page)
+    page.update_column(:comment, true)
+
+    assert_no_difference "Comment.count" do
+      post comments_path(page_id: page.slug), params: {
+        comment: {
+          author_name: "Page User",
+          content: "Nice page!"
+        }
+      }.merge(captcha_params), as: :json
+    end
+
+    assert_response :not_found
+  end
+
+  test "rate limits comment creation per ip" do
+    article = articles(:published_article)
+
+    assert_no_difference "Comment.count" do
+      with_rate_limit_count(6) do
+        post comments_path(article_id: article.slug), params: {
+          comment: {
+            author_name: "Spam Bot",
+            content: "Spam"
+          }
+        }.merge(captcha_params)
+      end
+    end
+
+    assert_redirected_to article_path(article)
+    assert_match "请稍后再试", flash[:alert]
   end
 end

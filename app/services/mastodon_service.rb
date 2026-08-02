@@ -4,9 +4,15 @@ require "uri"
 class MastodonService
   include ContentBuilder
   include HttpRedirectHandler
+  include TransientNetworkErrors
+
+  # Network timeouts for all Mastodon API calls, aligned with BlueskyService
+  # (~5s) so a hung server cannot block the job worker.
+  HTTP_OPEN_TIMEOUT = 5
+  HTTP_READ_TIMEOUT = 5
 
   def initialize
-    @settings = Crosspost.mastodon
+    @settings = Crosspost.for("mastodon")
   end
 
   def verify(settings)
@@ -18,8 +24,7 @@ class MastodonService
       uri = mastodon_api_uri("/api/v1/accounts/verify_credentials", settings[:server_url])
       return { success: false, error: "Server URL must be a valid http(s) URL" } unless uri
 
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl = uri.scheme == "https"
+      http = build_http(uri)
 
       request = Net::HTTP::Get.new(uri)
       request["Authorization"] = "Bearer #{settings[:access_token]}"
@@ -37,7 +42,11 @@ class MastodonService
 
   def post(article)
     return unless @settings&.enabled?
-    max_length = @settings.effective_max_characters || 500
+
+    uri = mastodon_api_uri("/api/v1/statuses")
+    return nil unless uri
+
+    max_length = @settings.effective_max_characters
     status_text = build_content(article: article, max_length: max_length)
 
     # 获取文章所有图片（Mastodon最多支持4张）
@@ -64,12 +73,8 @@ class MastodonService
       end
     end
 
-    uri = mastodon_api_uri("/api/v1/statuses")
-    return nil unless uri
-
     begin
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl = uri.scheme == "https"
+      http = build_http(uri)
 
       request = Net::HTTP::Post.new(uri)
       form_data = [
@@ -124,6 +129,8 @@ class MastodonService
         platform: "mastodon",
         error: e.message
       )
+      raise if transient_network_error?(e)
+
       nil
     end
   end
@@ -144,8 +151,7 @@ class MastodonService
       uri = mastodon_api_uri("/api/v1/statuses/#{status_id}/context")
       return default_response unless uri
 
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl = uri.scheme == "https"
+      http = build_http(uri)
 
       request = Net::HTTP::Get.new(uri)
       request["Authorization"] = "Bearer #{@settings.access_token}"
@@ -165,21 +171,11 @@ class MastodonService
       if response.is_a?(Net::HTTPSuccess)
         context_data = JSON.parse(response.body)
         descendants = context_data["descendants"] || []
-        original_status_id = status_id.to_s
 
-        # Parse descendants into comment data
-        comments = descendants.map do |reply|
-          {
-            external_id: reply["id"],
-            author_name: reply["account"]["display_name"].presence || reply["account"]["username"],
-            author_username: reply["account"]["acct"],
-            author_avatar_url: reply["account"]["avatar"],
-            content: reply["content"],
-            published_at: Time.parse(reply["created_at"]),
-            url: reply["url"],
-            # Extract parent external_id: if in_reply_to_id exists and is not the original post, use it
-            parent_external_id: reply["in_reply_to_id"].present? && reply["in_reply_to_id"] != original_status_id ? reply["in_reply_to_id"] : nil
-          }
+        # Parse descendants into comment data; a single malformed reply must
+        # not discard the whole batch
+        comments = descendants.filter_map do |reply|
+          build_comment_data(reply, status_id.to_s)
         end
 
         { comments: comments, rate_limit: rate_limit_info }
@@ -203,6 +199,53 @@ class MastodonService
 
   private
 
+  def build_http(uri)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = uri.scheme == "https"
+    http.open_timeout = HTTP_OPEN_TIMEOUT
+    http.read_timeout = HTTP_READ_TIMEOUT
+    http
+  end
+
+  # Builds one comment hash from a context reply. Returns nil for replies
+  # with malformed data or a non-http(s) URL so one bad entry never discards
+  # the whole batch.
+  def build_comment_data(reply, original_status_id)
+    url = reply["url"]
+    unless http_url?(url)
+      Rails.event.notify "mastodon_service.comment_url_skipped",
+        level: "warn",
+        component: "MastodonService",
+        url: url.to_s
+      return nil
+    end
+
+    {
+      external_id: reply["id"],
+      author_name: reply["account"]["display_name"].presence || reply["account"]["username"],
+      author_username: reply["account"]["acct"],
+      author_avatar_url: reply["account"]["avatar"],
+      content: reply["content"],
+      published_at: Time.parse(reply["created_at"]),
+      url: url,
+      # Extract parent external_id: if in_reply_to_id exists and is not the original post, use it
+      parent_external_id: reply["in_reply_to_id"].present? && reply["in_reply_to_id"] != original_status_id ? reply["in_reply_to_id"] : nil
+    }
+  rescue => e
+    Rails.event.notify "mastodon_service.comment_skipped",
+      level: "warn",
+      component: "MastodonService",
+      error_message: e.message
+    nil
+  end
+
+  def http_url?(url)
+    uri = URI.parse(url.to_s)
+    uri.is_a?(URI::HTTP) && uri.host.present?
+  rescue URI::InvalidURIError
+    false
+  end
+
   def upload_image(attachable)
     Rails.event.notify "mastodon_service.upload_image_started",
       level: "info",
@@ -225,7 +268,7 @@ class MastodonService
         filename = attachable.filename.to_s if attachable.respond_to?(:filename)
         content_type = attachable.content_type
       # Handle RemoteImage
-      elsif attachable.class.name == "ActionText::Attachables::RemoteImage"
+      elsif attachable.is_a?(ActionText::Attachables::RemoteImage) || attachable.is_a?(RemoteImageWrapper)
         Rails.event.notify "mastodon_service.processing_remote_image",
           level: "info",
           component: "MastodonService",
@@ -272,8 +315,7 @@ class MastodonService
       uri = mastodon_api_uri("/api/v2/media")
       return nil unless uri
 
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl = uri.scheme == "https"
+      http = build_http(uri)
 
       request = Net::HTTP::Post.new(uri)
       request["Authorization"] = "Bearer #{@settings.access_token}"
@@ -282,11 +324,15 @@ class MastodonService
       boundary = "----WebKitFormBoundary#{SecureRandom.hex(16)}"
       request["Content-Type"] = "multipart/form-data; boundary=#{boundary}"
 
+      # Escape quotes and strip CR/LF so the filename cannot break out of the
+      # Content-Disposition header
+      escaped_filename = filename.to_s.gsub(/[\r\n]/, "").gsub('"', '\\"')
+
       # 构建 multipart 表单数据，确保正确的编码
       # 所有部分都需要使用 ASCII-8BIT 编码以兼容二进制数据
       body_parts = []
       body_parts << "--#{boundary}\r\n"
-      body_parts << "Content-Disposition: form-data; name=\"file\"; filename=\"#{filename}\"\r\n"
+      body_parts << "Content-Disposition: form-data; name=\"file\"; filename=\"#{escaped_filename}\"\r\n"
       body_parts << "Content-Type: #{content_type}\r\n\r\n"
       body_parts << image_data
       body_parts << "\r\n--#{boundary}--\r\n"
@@ -317,6 +363,8 @@ class MastodonService
         component: "MastodonService",
         error_message: e.message,
         backtrace: e.backtrace.join("\n")
+      raise if transient_network_error?(e)
+
       nil
     end
   end

@@ -1,0 +1,18 @@
+
+    <div class="container">
+      <% if @subscriber %>
+        <h1>确认取消订阅</h1>
+        <p class="message">您确定要取消订阅 <%= CacheableSettings.site_info[:title] %> 的邮件列表吗？</p>
+        <p class="sub-message">取消后，<%= @subscriber.email %> 将不再收到我们的邮件通知。</p>
+        <%= form_with url: unsubscribe_path, method: :post, local: true do |form| %>
+          <%= hidden_field_tag :token, params[:token] %>
+          <%= form.submit "确认取消订阅", class: "button" %>
+        <% end %>
+        <p class="sub-message"><a href="<%= root_path %>">返回首页</a></p>
+      <% else %>
+        <h1 style="color: #dc3545;">取消订阅失败</h1>
+        <p class="message">无效的取消订阅链接。</p>
+        <p class="sub-message">请检查您收到的邮件中的链接是否正确，或联系管理员获取帮助。</p>
+        <a href="<%= root_path %>" class="button">返回首页</a>
+      <% end %>
+    </div>

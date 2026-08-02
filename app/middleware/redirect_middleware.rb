@@ -10,6 +10,10 @@ class RedirectMiddleware
     # Skip redirects for admin pages, assets, and API endpoints
     return @app.call(env) if path.start_with?("/admin", "/assets", "/rails", "/up")
 
+    # Only redirect GET/HEAD requests; redirecting POST/PUT/etc. would drop
+    # the request body (e.g. form submissions).
+    return @app.call(env) unless request.get? || request.head?
+
     # Check all redirects
     redirect = find_matching_redirect(path)
     if redirect

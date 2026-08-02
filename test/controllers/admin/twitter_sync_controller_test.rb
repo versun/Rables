@@ -99,12 +99,94 @@ class Admin::TwitterSyncControllerTest < ActionDispatch::IntegrationTest
     assert_equal "999", @sync.reload.since_id
   end
 
-  test "sync_now enqueues SyncTwitterJob with force" do
+  test "update clears last_synced_at and last_error when username changes" do
+    @sync.update!(
+      enabled: false,
+      username: "olduser",
+      user_id: "111",
+      since_id: "222",
+      last_synced_at: 1.hour.ago,
+      last_error: "previous failure"
+    )
+
+    patch admin_twitter_sync_path, params: {
+      twitter_sync: { enabled: "1", username: "newuser" }
+    }
+
+    @sync.reload
+    assert_nil @sync.last_synced_at
+    assert_nil @sync.last_error
+  end
+
+  test "update clears last_synced_at and last_error when start_date changes" do
+    @sync.update!(
+      enabled: false,
+      username: "",
+      since_id: "999",
+      last_synced_at: 1.hour.ago,
+      last_error: "previous failure"
+    )
+
+    patch admin_twitter_sync_path, params: {
+      twitter_sync: { enabled: "0", username: "", sync_schedule: "hourly", start_date: "2026-07-01" }
+    }
+
+    @sync.reload
+    assert_equal Date.new(2026, 7, 1), @sync.start_date
+    assert_nil @sync.last_synced_at
+    assert_nil @sync.last_error
+  end
+
+  test "update keeps last_synced_at when neither username nor start_date change" do
+    synced_at = 1.hour.ago
+    @sync.update!(enabled: false, username: "", since_id: "999", last_synced_at: synced_at)
+
+    patch admin_twitter_sync_path, params: {
+      twitter_sync: { enabled: "0", username: "", sync_schedule: "daily" }
+    }
+
+    assert_in_delta synced_at.to_f, @sync.reload.last_synced_at.to_f, 1
+  end
+
+  test "sync_now enqueues SyncTwitterJob with force when sync and credentials are configured" do
+    @sync.update!(enabled: true, username: "testuser")
+    Crosspost.for("twitter").update!(
+      enabled: true,
+      api_key: "api_key",
+      api_key_secret: "api_key_secret",
+      access_token: "access_token",
+      access_token_secret: "access_token_secret"
+    )
+
     assert_enqueued_with(job: SyncTwitterJob, args: [ { force: true } ]) do
       post sync_now_admin_twitter_sync_path
     end
 
     assert_redirected_to admin_twitter_sync_path
+    assert_match "queued", flash[:notice].downcase
+  end
+
+  test "sync_now does not enqueue and says so when sync is disabled" do
+    @sync.update!(enabled: false, username: "")
+
+    assert_no_enqueued_jobs only: SyncTwitterJob do
+      post sync_now_admin_twitter_sync_path
+    end
+
+    assert_redirected_to admin_twitter_sync_path
+    assert_match "not enabled", flash[:alert]
+  end
+
+  test "sync_now does not enqueue when crosspost credentials are missing" do
+    @sync.update!(enabled: true, username: "testuser")
+    Crosspost.for("twitter").update!(enabled: false)
+
+    assert_no_enqueued_jobs only: SyncTwitterJob do
+      post sync_now_admin_twitter_sync_path
+    end
+
+    assert_redirected_to admin_twitter_sync_path
+    assert_match "not enabled", flash[:alert]
   end
 
   test "requires authentication" do

@@ -66,7 +66,7 @@
                 <span class="truncate" title="<%= import.source_filename %>"><%= import.source_filename %></span>
               </td>
               <td>
-                <span class="twitter-archive-import-status twitter-archive-import-status--<%= import.status %>"><%= import.status_label %></span>
+                <span class="twitter-archive-import-status twitter-archive-import-status--<%= import.status %>"><%= import.status.humanize %></span>
                 <% if import.status_message.present? %>
                   <div class="twitter-archive-import-note"><%= import.status_message %></div>
                 <% end %>

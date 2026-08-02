@@ -40,6 +40,26 @@ class Admin::StaticFilesControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to admin_static_files_path
   end
 
+  test "overwrite keeps original filename when form submits a different one" do
+    uploaded = fixture_file_upload("sample.txt", "text/plain")
+    static_file = StaticFile.create!(
+      file: uploaded,
+      filename: "sample.txt",
+      description: "Sample"
+    )
+
+    replacement = fixture_file_upload("sample.txt", "text/plain")
+    assert_no_difference "StaticFile.count" do
+      post admin_static_files_path, params: {
+        static_file: { file: replacement, filename: "renamed.txt", description: "Updated" }
+      }
+    end
+
+    assert_redirected_to admin_static_files_path
+    assert_equal "sample.txt", static_file.reload.filename
+    assert_equal "Updated", static_file.description
+  end
+
   test "renders index when update fails for existing file" do
     uploaded = fixture_file_upload("sample.txt", "text/plain")
     static_file = StaticFile.create!(

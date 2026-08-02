@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_07_23_053400) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_01_113000) do
   create_table "action_text_rich_texts", force: :cascade do |t|
     t.text "body"
     t.datetime "created_at", null: false
@@ -113,6 +113,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_23_053400) do
     t.string "url"
     t.index ["article_id", "platform", "external_id"], name: "index_comments_on_article_platform_external_id", unique: true, where: "platform IS NOT NULL AND external_id IS NOT NULL"
     t.index ["article_id"], name: "index_comments_on_article_id"
+    t.index ["commentable_type", "commentable_id", "platform", "external_id"], name: "index_comments_on_commentable_platform_external_id", unique: true, where: "external_id IS NOT NULL"
     t.index ["commentable_type", "commentable_id"], name: "index_comments_on_commentable"
     t.index ["parent_id"], name: "index_comments_on_parent_id"
   end
@@ -139,18 +140,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_23_053400) do
     t.datetime "updated_at", null: false
     t.string "username"
     t.index ["platform"], name: "index_crossposts_on_platform", unique: true
-  end
-
-  create_table "git_integrations", force: :cascade do |t|
-    t.string "access_token"
-    t.datetime "created_at", null: false
-    t.boolean "enabled", default: false, null: false
-    t.string "name", null: false
-    t.string "provider", null: false
-    t.string "server_url"
-    t.datetime "updated_at", null: false
-    t.string "username"
-    t.index ["provider"], name: "index_git_integrations_on_provider", unique: true
   end
 
   create_table "listmonks", force: :cascade do |t|
@@ -186,6 +175,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_23_053400) do
     t.text "html_content"
     t.integer "page_order", default: 0, null: false
     t.string "redirect_url"
+    t.datetime "scheduled_at"
     t.string "slug"
     t.integer "status", default: 0, null: false
     t.string "title"

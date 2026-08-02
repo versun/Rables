@@ -461,7 +461,6 @@ class TwitterArchiveImporterTest < ActiveSupport::TestCase
         [ 25, "Scanning archive" ],
         [ 55, "Archive parsed" ],
         [ 80, "Replacing stored archive" ],
-        [ 95, "Cleaning up media" ],
         [ 100, "Import completed" ]
       ],
       progress_events
@@ -610,13 +609,58 @@ class TwitterArchiveImporterTest < ActiveSupport::TestCase
 
     TwitterArchiveImporter.new(zip_path).import!
 
+    # Destroyed tweets purge their blobs via has_many_attached
+    # (dependent: :purge_later); run the queued jobs to verify the cleanup.
+    perform_enqueued_jobs
+
     assert_equal [ "200" ], TwitterArchiveTweet.pluck(:tweet_id)
     assert_not ActiveStorage::Blob.exists?(existing_blob_id)
   ensure
     File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
   end
 
+  test "imports tweets in committed batches" do
+    tweet_records = (1..5).map do |i|
+      {
+        tweet: tweet_payload(
+          id: (100 + i).to_s,
+          created_at: "Wed Oct 10 20:19:24 +0000 2018",
+          full_text: "Batch tweet #{i}"
+        )
+      }
+    end
+    zip_path = build_zip(
+      "data/account.js" => js_payload("account", [
+        {
+          account: {
+            username: "archive_owner"
+          }
+        }
+      ]),
+      "data/tweets.js" => js_payload("tweets", tweet_records)
+    )
+
+    with_tweet_batch_size(2) do
+      TwitterArchiveImporter.new(zip_path).import!
+    end
+
+    assert_equal %w[101 102 103 104 105], TwitterArchiveTweet.order(:tweet_id).pluck(:tweet_id)
+  ensure
+    File.delete(zip_path) if zip_path.present? && File.exist?(zip_path)
+  end
+
   private
+
+  # Temporarily shrinks the importer's batch size (no stub_const without Mocha)
+  def with_tweet_batch_size(size)
+    original = TwitterArchiveImporter::TWEET_BATCH_SIZE
+    TwitterArchiveImporter.send(:remove_const, :TWEET_BATCH_SIZE)
+    TwitterArchiveImporter.const_set(:TWEET_BATCH_SIZE, size)
+    yield
+  ensure
+    TwitterArchiveImporter.send(:remove_const, :TWEET_BATCH_SIZE)
+    TwitterArchiveImporter.const_set(:TWEET_BATCH_SIZE, original)
+  end
 
   def build_zip(files)
     zip_path = Rails.root.join("tmp", "twitter_archive_test_#{SecureRandom.hex(6)}.zip")

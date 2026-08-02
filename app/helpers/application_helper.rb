@@ -1,13 +1,7 @@
 require "uri"
 
 module ApplicationHelper
-  # 检测是否是手机设备（通过 User-Agent）
-  def mobile_device?
-    return @is_mobile_device if defined?(@is_mobile_device)
-
-    user_agent = request.user_agent.to_s.downcase
-    @is_mobile_device = user_agent.match?(/mobile|android|iphone|ipod|webos|blackberry|opera mini|iemobile/)
-  end
+  include Sanitization
 
   def site_settings
     CacheableSettings.site_info
@@ -55,55 +49,28 @@ module ApplicationHelper
     site_url
   end
 
+  # Build an absolute URL for og:image / twitter:image from a possibly relative path:
+  # - "/uploads/a.png"   -> "<normalized site url>/uploads/a.png"
+  # - "https://…/a.png"  -> returned unchanged
+  # - "uploads/a.png"    -> "<normalized site url>/uploads/a.png" (leading slash added)
+  # Falls back to the original path when no site URL is configured.
+  def absolute_og_image(path)
+    path = path.to_s.strip
+    return path if path.blank? || path.match?(%r{^https?://})
+
+    site_url = normalized_site_url
+    return path if site_url.blank?
+
+    path.start_with?("/") ? "#{site_url}#{path}" : "#{site_url}/#{path}"
+  end
+
   # Safely render HTML content by sanitizing dangerous tags while preserving common formatting
   def safe_html_content(html_content)
     return "".html_safe if html_content.blank?
 
-    sanitized = sanitize(html_content.to_s, tags: allowed_html_tags, attributes: allowed_html_attributes)
+    sanitized = sanitize(html_content.to_s, tags: Sanitization::ALLOWED_HTML_TAGS, attributes: Sanitization::ALLOWED_HTML_ATTRIBUTES)
 
     # Add loading="lazy" to all images for better performance
-    doc = Nokogiri::HTML5.fragment(sanitized)
-    doc.css("img").each do |img|
-      img.set_attribute("loading", "lazy") unless img["loading"].present?
-    end
-    doc.to_html.html_safe
-  end
-
-  private
-
-  # List of allowed HTML tags for content rendering.
-  def allowed_html_tags
-    %w[
-      p br div span
-      h1 h2 h3 h4 h5 h6
-      a img
-      ul ol li dl dt dd
-      table thead tbody tfoot tr th td caption colgroup col
-      strong b em i u s strike del ins mark small
-      blockquote q cite pre code kbd samp var
-      hr
-      figure figcaption
-      article section aside header footer nav main
-      details summary
-      abbr address time
-      sub sup
-      ruby rt rp
-      iframe video audio source
-    ]
-  end
-
-  # List of allowed HTML attributes.
-  def allowed_html_attributes
-    %w[
-      href src alt title class id style
-      target rel
-      width height
-      colspan rowspan
-      data-controller data-action data-target
-      loading
-      controls autoplay loop muted
-      frameborder allow allowfullscreen
-      name content
-    ]
+    add_lazy_loading_to_images(sanitized)
   end
 end

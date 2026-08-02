@@ -46,8 +46,11 @@ class SubscriptionsTest < ApplicationSystemTestCase
 
     visit unsubscribe_path(token: subscriber.unsubscribe_token)
 
-    assert_text "取消订阅成功"
+    # GET only shows the confirmation page; the POST form performs the unsubscribe
+    # (POST /unsubscribe route is added separately; the click-through is covered
+    # by test/controllers/subscriptions_controller_test.rb).
+    assert_text "确认取消订阅"
     subscriber.reload
-    assert subscriber.unsubscribed?
+    assert_not subscriber.unsubscribed?
   end
 end

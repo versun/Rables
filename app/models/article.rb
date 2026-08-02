@@ -1,4 +1,6 @@
 class Article < ApplicationRecord
+  include Sanitization
+
   attr_writer :crosspost_mastodon, :crosspost_twitter, :crosspost_bluesky, :crosspost_xiaohongshu
   # Virtual attributes for newsletter functionality
   attr_writer :send_newsletter
@@ -16,6 +18,11 @@ class Article < ApplicationRecord
 
   EXCERPT_LENGTH = 200
   CROSSPOST_PLATFORMS = %w[mastodon twitter bluesky xiaohongshu].freeze
+  # Slugs that would collide with top-level routes (see config/routes.rb)
+  RESERVED_SLUGS = %w[
+    admin tags pages users session setup confirm unsubscribe subscriptions
+    static feed.xml sitemap.xml up rails twitter
+  ].freeze
 
   before_validation :generate_slug
   before_validation :sync_excerpt
@@ -23,7 +30,7 @@ class Article < ApplicationRecord
   before_validation :restore_scheduled_newsletter_selection_for_publish
   before_validation :sync_scheduled_crosspost_platforms
   before_validation :sync_scheduled_newsletter_selection
-  validates :slug, presence: true, uniqueness: true
+  validates :slug, presence: true, uniqueness: true, exclusion: { in: RESERVED_SLUGS }
   validates :scheduled_at, presence: true, if: :schedule?
   validates :html_content, presence: true, if: -> { html? }
   validate :rich_text_content_presence
@@ -33,8 +40,7 @@ class Article < ApplicationRecord
   scope :by_status, ->(status) { where(status: status) }
   scope :publishable, -> { where(status: :schedule).where("scheduled_at <= ?", Time.current) }
 
-  before_save :handle_time_zone, if: -> { schedule? && scheduled_at_changed? }
-  before_save :cleanup_empty_social_media_posts
+  before_validation :cleanup_empty_social_media_posts
   after_save :schedule_publication, if: :should_schedule?
   after_save :handle_crosspost, if: -> { Setting.table_exists? }
   after_save :handle_newsletter, if: -> { Setting.table_exists? }
@@ -44,16 +50,16 @@ class Article < ApplicationRecord
   scope :search_content, ->(query) {
     return all if query.blank?
 
-    # 简单的LIKE搜索，适用于SQLite
-    search_term = "%#{query}%"
+    # 简单的LIKE搜索，适用于SQLite；转义通配符并用 ESCAPE 使其生效
+    search_term = "%#{ActiveRecord::Base.sanitize_sql_like(query)}%"
 
     # 搜索标题、slug、描述和内容
     where(
-      "articles.title LIKE :term OR
-       articles.slug LIKE :term OR
-       articles.description LIKE :term OR
+      "articles.title LIKE :term ESCAPE '\\' OR
+       articles.slug LIKE :term ESCAPE '\\' OR
+       articles.description LIKE :term ESCAPE '\\' OR
        articles.id IN (SELECT record_id FROM action_text_rich_texts
-              WHERE record_type = 'Article' AND name = 'content' AND body LIKE :term)",
+              WHERE record_type = 'Article' AND name = 'content' AND body LIKE :term ESCAPE '\\')",
       term: search_term
     )
   }
@@ -116,7 +122,7 @@ class Article < ApplicationRecord
 
         if a.is_a?(ActiveStorage::Blob) && a.content_type&.start_with?("image/")
           images << a
-        elsif a.class.name == "ActionText::Attachables::RemoteImage"
+        elsif a.is_a?(ActionText::Attachables::RemoteImage) || a.is_a?(RemoteImageWrapper)
           url = a.try(:url)
           images << a if url.present? && url.is_a?(String)
         end
@@ -136,7 +142,8 @@ class Article < ApplicationRecord
           next if src.blank?
 
           # 如果是 ActiveStorage 的 blob URL，尝试找到对应的 Blob
-          blob = find_blob_from_url(src)
+          blob = ActiveStorageBlobFinder.find_blob_from_url(src)
+          blob = nil unless blob&.content_type&.start_with?("image/")
           if blob
             next if existing_blob_ids.include?(blob.id)
 
@@ -150,47 +157,6 @@ class Article < ApplicationRecord
     end
 
     images
-  end
-
-  # 从 ActiveStorage URL 中查找 Blob
-  def find_blob_from_url(url)
-    return nil if url.blank?
-
-    # 匹配 /rails/active_storage/blobs/redirect/:signed_id/:filename
-    # 或 /rails/active_storage/blobs/proxy/:signed_id/:filename
-    # 或 /rails/active_storage/blobs/:signed_id/:filename (旧格式)
-    # signed_id 格式: message--signature (URL-safe base64 包含 A-Z, a-z, 0-9, -, _, = 和 -- 分隔符)
-    if url =~ /\/rails\/active_storage\/blobs\/[^\/]+\/([A-Za-z0-9_-]+(?:={0,2})--[A-Za-z0-9_-]+)/
-      signed_id = $1
-      begin
-        blob = ActiveStorage::Blob.find_signed(signed_id)
-        return blob if blob&.content_type&.start_with?("image/")
-      rescue => e
-        Rails.logger.warn "Failed to find blob from signed_id: #{signed_id}, error: #{e.message}"
-      end
-    end
-
-    # 匹配 /rails/active_storage/representations/.../:signed_blob_id/...
-    if url =~ /\/rails\/active_storage\/representations\/[^\/]+\/([^\/]+)/
-      signed_id = $1
-      begin
-        blob = ActiveStorage::Blob.find_signed(signed_id)
-        return blob if blob&.content_type&.start_with?("image/")
-      rescue => e
-        Rails.logger.warn "Failed to find blob from signed_id: #{signed_id}, error: #{e.message}"
-      end
-
-      if signed_id =~ /\A\d+\z/
-        begin
-          blob = ActiveStorage::Blob.find_by(id: signed_id)
-          return blob if blob&.content_type&.start_with?("image/")
-        rescue => e
-          Rails.logger.warn "Failed to find blob from blob_id: #{signed_id}, error: #{e.message}"
-        end
-      end
-    end
-
-    nil
   end
 
   # Virtual attribute for tag list (comma-separated tags)
@@ -222,10 +188,7 @@ class Article < ApplicationRecord
   def sanitize_html(html)
     return "" if html.blank?
     sanitizer = Rails::Html::SafeListSanitizer.new
-    # Use allowed tags similar to ApplicationHelper#allowed_html_tags
-    allowed_tags = %w[p br div span h1 h2 h3 h4 h5 h6 a img ul ol li dl dt dd table thead tbody tfoot tr th td caption colgroup col strong b em i u s strike del ins mark small blockquote q cite pre code kbd samp var hr figure figcaption article section aside header footer nav main details summary abbr address time sub sup ruby rt rp iframe video audio source]
-    allowed_attributes = %w[href src alt title class id style target rel width height colspan rowspan loading controls autoplay loop muted frameborder allow allowfullscreen]
-    sanitizer.sanitize(html, tags: allowed_tags, attributes: allowed_attributes)
+    sanitizer.sanitize(html, tags: Sanitization::ALLOWED_HTML_TAGS, attributes: Sanitization::ALLOWED_HTML_ATTRIBUTES)
   end
 
   # 获取内容的纯文本版本（用于社交媒体等）
@@ -281,8 +244,8 @@ class Article < ApplicationRecord
           else
             Rails.application.routes.url_helpers.rails_blob_path(image_attachment, only_path: true)
           end
-        elsif image_attachment.class.name == "ActionText::Attachables::RemoteImage"
-          image_attachment.try(:url)
+        elsif image_attachment.is_a?(ActionText::Attachables::RemoteImage) || image_attachment.is_a?(RemoteImageWrapper)
+          image_attachment.url
         end
       else
         nil
@@ -295,7 +258,14 @@ class Article < ApplicationRecord
   def generate_slug
     if slug.blank?
       if title.present?
-        self.slug = title.parameterize
+        parameterized = title.parameterize
+        self.slug = if parameterized.present?
+          parameterized
+        else
+          # parameterize drops scripts it can't transliterate (e.g. Chinese);
+          # fall back to the cleaned-up title, mirroring Tag#generate_slug
+          unique_slug_from(title.to_s.strip.gsub(/\s+/, " "))
+        end
       else
         # Generate slug from timestamp without setting title
         self.slug = DateTime.current.strftime("%Y-%m-%d-%H-%M").parameterize
@@ -304,6 +274,16 @@ class Article < ApplicationRecord
 
     # Remove dots from slug if present
     self.slug = slug.gsub(".", "") if slug.include?(".")
+  end
+
+  def unique_slug_from(base_slug)
+    slug_candidate = base_slug
+    counter = 1
+    while Article.where(slug: slug_candidate).where.not(id: id || 0).exists?
+      slug_candidate = "#{base_slug}-#{counter}"
+      counter += 1
+    end
+    slug_candidate
   end
 
   def crosspost_selection_overrides
@@ -441,15 +421,16 @@ class Article < ApplicationRecord
   def handle_crosspost
     return false unless publish?
 
-    %w[mastodon twitter bluesky xiaohongshu].each do |platform|
-      should_post = should_crosspost_to?(platform)
+    crossposts = Crosspost.where(platform: CROSSPOST_PLATFORMS).index_by(&:platform)
+    CROSSPOST_PLATFORMS.each do |platform|
+      should_post = should_crosspost_to?(platform, crossposts[platform])
       Rails.event.notify("article.crosspost_check", level: "info", component: "Article", article_id: id, platform: platform, should_post: should_post)
       if should_post
         if platform == "xiaohongshu"
           Rails.event.notify("article.crosspost_skipped", level: "info", component: "Article", article_id: id, platform: platform, reason: "no_public_api")
           next
         end
-        CrosspostArticleJob.perform_later(id, platform)
+        CrosspostArticleJob.perform_later(id, platform, Time.current)
       end
     end
   end
@@ -522,16 +503,10 @@ class Article < ApplicationRecord
     remove_instance_variable(:@send_newsletter)
   end
 
-  def handle_time_zone
-    # Make sure scheduled_at is interpreted correctly
-    # This ensures Rails knows this time is already in the application time zone
-    self.scheduled_at = scheduled_at.in_time_zone(CacheableSettings.site_info[:time_zone]).utc if scheduled_at.present?
-  end
-
-  def should_crosspost_to?(platform)
+  def should_crosspost_to?(platform, crosspost = nil)
     # 首先检查平台是否启用（后端安全检查）
-    platform_enabled = Crosspost.find_by(platform: platform)&.enabled?
-    return false unless platform_enabled
+    crosspost ||= Crosspost.find_by(platform: platform)
+    return false unless crosspost&.enabled?
 
     # 检查 crosspost
     crosspost_checked = send("crosspost_#{platform}") == "1"
@@ -565,36 +540,5 @@ class Article < ApplicationRecord
     return nil if text.blank?
 
     text.truncate(EXCERPT_LENGTH, separator: /\s/)
-  end
-
-  def add_lazy_loading_to_images(html)
-    return html if html.blank?
-
-    doc = Nokogiri::HTML5.fragment(html)
-    doc.css("img").each do |img|
-      img.set_attribute("loading", "lazy") unless img["loading"].present?
-    end
-    doc.to_html.html_safe
-  end
-end
-
-# Wrapper class for remote image URLs extracted from HTML content
-# This class provides a compatible interface with ActionText::Attachables::RemoteImage
-# so that social media services can handle both types uniformly
-class RemoteImageWrapper
-  attr_reader :url
-
-  def initialize(url)
-    @url = url
-  end
-
-  # Allow accessing url via try method (compatible with ActionText::Attachables::RemoteImage)
-  def try(method_name)
-    method_name == :url ? @url : nil
-  end
-
-  # Return class name as string for type checking (matches ActionText::Attachables::RemoteImage)
-  def self.name
-    "ActionText::Attachables::RemoteImage"
   end
 end

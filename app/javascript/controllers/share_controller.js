@@ -97,7 +97,10 @@ export default class extends Controller {
 
   showCopySuccess(target) {
     if (!target) return
+    // 成功反馈期间忽略重复点击，避免把"已复制"当作 originalHTML 恢复
+    if (target.dataset.copying === "true") return
 
+    target.dataset.copying = "true"
     const originalHTML = target.innerHTML
     target.innerHTML = '<i class="fas fa-check"></i> 已复制'
     target.style.color = '#4caf50'
@@ -105,6 +108,7 @@ export default class extends Controller {
     setTimeout(() => {
       target.innerHTML = originalHTML
       target.style.color = ''
+      delete target.dataset.copying
       // 延迟关闭菜单，让用户看到复制成功的反馈
       this.closeMenu()
     }, 800)

@@ -14,16 +14,17 @@ class Crosspost < ApplicationRecord
   validates :platform, presence: true,
                       uniqueness: true,
                       inclusion: { in: PLATFORMS }
+  validates :max_characters, numericality: { greater_than: 0, only_integer: true }, allow_nil: true
 
   validates :client_key, :client_secret, :access_token, presence: true, if: -> { mastodon? && enabled? }
   validates :access_token, :access_token_secret, :api_key, :api_key_secret, presence: true, if: -> { twitter? && enabled? }
   validates :username, :app_password, presence: true, if: -> { bluesky? && enabled? }
   validate :server_url_http_format, if: -> { server_url.present? }
 
-  scope :mastodon, -> { find_or_create_by(platform: "mastodon") }
-  scope :twitter, -> { find_or_create_by(platform: "twitter") }
-  scope :bluesky, -> { find_or_create_by(platform: "bluesky") }
-  scope :xiaohongshu, -> { find_or_create_by(platform: "xiaohongshu") }
+  # Returns (creating when missing) the config record for a platform
+  def self.for(platform)
+    find_or_create_by(platform: platform)
+  end
 
   def mastodon?
     platform == "mastodon"

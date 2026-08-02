@@ -19,8 +19,7 @@
         <span style="margin: 0 0.5rem;">·</span>
         <%= link_to "RSS", tag_path(@tag.slug, format: :rss), style: "color: #666; text-decoration: underline;" %>
       </span>
-      <% newsletter_setting = NewsletterSetting.instance %>
-      <% if newsletter_setting.enabled? && newsletter_setting.native? %>
+      <% if @newsletter_setting.enabled? && @newsletter_setting.native? %>
         <span style="margin: 0 0.5rem;">·</span>
         <span class="tag-subscription-inline" data-controller="newsletter-subscription math-captcha" data-action="submit->newsletter-subscription#submit" data-math-captcha-max-value="10">
           <%= form_with url: subscriptions_path, method: :post, data: { newsletter_subscription_target: "form", turbo: false, action: "submit->math-captcha#ensureValid" }, class: "tag-subscription-form-inline-small" do |form| %>
@@ -43,6 +42,7 @@
               <%= hidden_field_tag "captcha[a]", captcha[:a], data: { math_captcha_target: "a" } %>
               <%= hidden_field_tag "captcha[b]", captcha[:b], data: { math_captcha_target: "b" } %>
               <%= hidden_field_tag "captcha[op]", captcha[:op], data: { math_captcha_target: "op" } %>
+              <%= hidden_field_tag "captcha[token]", captcha[:token] %>
             </div>
           <% end %>
           <div class="newsletter-message" data-newsletter-subscription-target="message" style="margin-top: 0.25rem; font-size: 12px;"></div>

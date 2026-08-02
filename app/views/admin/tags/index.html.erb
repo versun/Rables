@@ -12,7 +12,7 @@
       
       <%= form_with url: batch_destroy_admin_tags_path, method: :post, style: "display: inline;" do |f| %>
         <%= f.button "Delete", type: "submit", class: "btn btn-sm", style: "background: #dc3545; color: white;",
-            onclick: "return submitBatchForm(this, 'delete')" %>
+            data: { action: "click->batch-selection#submitBatchAction", batch_selection_action_param: "delete" } %>
       <% end %>
     </div>
 
@@ -56,7 +56,7 @@
                   <small><%= tag.slug %></small>
                 </td>
                 <td class="col-compact">
-                  <%= tag.articles.count %>
+                  <%= tag.articles_total %>
                 </td>
               </tr>
             <% end %>
@@ -72,7 +72,3 @@
     </div>
   </div>
 </div>
-
-<% content_for :javascript do %>
-  <%= render 'admin/shared/batch_form_handler' %>
-<% end %>

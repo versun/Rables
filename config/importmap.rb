@@ -8,6 +8,7 @@ pin_all_from "app/javascript/controllers", under: "controllers"
 pin "trix"
 pin "@rails/activestorage", to: "activestorage.esm.js"
 pin "@rails/actiontext", to: "actiontext.esm.js"
-pin "highlight.js", to: "https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/+esm"
+# highlight.js 11.9.0 vendored from the jsDelivr +esm build into vendor/javascript
+pin "highlight.js", to: "highlight.js"
 pin "prism_highlighting"
 pin "tinymce_config"

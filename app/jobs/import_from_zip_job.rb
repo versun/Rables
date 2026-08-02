@@ -35,14 +35,22 @@ class ImportFromZipJob < ApplicationJob
         component: "ImportFromZipJob",
         error_message: importer.error_message
     end
+  ensure
+    # Clean up the uploaded temp file even when the import raises
+    cleanup_temp_file(zip_path)
+  end
 
-    # 清理上传的临时文件
-    if zip_path.include?("/tmp/uploads/") && File.exist?(zip_path)
-      FileUtils.rm_f(zip_path)
-      Rails.event.notify "import_from_zip_job.cleanup",
-        level: "info",
-        component: "ImportFromZipJob",
-        zip_path: zip_path
-    end
+  private
+
+  def cleanup_temp_file(zip_path)
+    uploads_dir = Rails.root.join("tmp", "uploads").to_s
+    return unless zip_path.to_s.start_with?(uploads_dir + File::SEPARATOR)
+    return unless File.exist?(zip_path)
+
+    FileUtils.rm_f(zip_path)
+    Rails.event.notify "import_from_zip_job.cleanup",
+      level: "info",
+      component: "ImportFromZipJob",
+      zip_path: zip_path
   end
 end

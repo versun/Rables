@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 
 class Admin::CommentsControllerTest < ActionDispatch::IntegrationTest
   def setup
@@ -110,5 +111,28 @@ class Admin::CommentsControllerTest < ActionDispatch::IntegrationTest
 
     assert_redirected_to admin_comments_path
     assert_equal "Cannot reply to rejected comments.", flash[:alert]
+  end
+
+  test "update with invalid status renders unprocessable entity" do
+    patch admin_comment_path(@pending_comment), params: { comment: { status: "bogus" } }
+
+    assert_response :unprocessable_entity
+    assert_equal "Invalid status.", flash[:alert]
+    assert_equal "pending", @pending_comment.reload.status
+  end
+
+  test "destroy alerts when comment cannot be deleted" do
+    comment = comments(:approved_comment)
+    def comment.destroy
+      false
+    end
+
+    Comment.stub(:find, comment) do
+      delete admin_comment_path(comment)
+    end
+
+    assert_redirected_to admin_comments_path
+    assert_equal "Failed to delete comment.", flash[:alert]
+    assert Comment.exists?(comment.id)
   end
 end

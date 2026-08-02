@@ -17,5 +17,9 @@ class SocialMediaPostTest < ActiveSupport::TestCase
     missing_platform = SocialMediaPost.new(article: article, platform: nil, url: "https://example.com/post-4")
     assert_not missing_platform.valid?
     assert_includes missing_platform.errors[:platform], "can't be blank"
+
+    missing_url = SocialMediaPost.new(article: article, platform: "bluesky", url: nil)
+    assert_not missing_url.valid?
+    assert_includes missing_url.errors[:url], "can't be blank"
   end
 end

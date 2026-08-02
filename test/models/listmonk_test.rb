@@ -82,7 +82,7 @@ class ListmonkTest < ActiveSupport::TestCase
 
     listmonk.stub(:create_campaigns, 123) do
       Net::HTTP.stub(:start, ->(*_args, **_kwargs, &_block) { bad_response }) do
-        assert_nil listmonk.send_newsletter(articles(:published_article), "Site")
+        assert_equal false, listmonk.send_newsletter(articles(:published_article), "Site")
       end
     end
   end
@@ -180,6 +180,45 @@ class ListmonkTest < ActiveSupport::TestCase
 
     Net::HTTP.stub(:start, ->(*_args, **_kwargs, &block) { block.call(http) }) do
       assert_equal [], listmonk.fetch_lists
+    end
+  end
+
+  test "sets open and read timeouts on http calls" do
+    listmonk = Listmonk.create!(
+      url: "https://listmonk.example.com",
+      username: "user",
+      api_key: "key",
+      list_id: 1,
+      template_id: 2
+    )
+
+    response = Net::HTTPOK.new("1.1", "200", "OK")
+    response.body = { data: { results: [] } }.to_json
+    response.instance_variable_set(:@read, true)
+
+    captured_kwargs = nil
+    Net::HTTP.stub(:start, ->(*_args, **kwargs, &_block) { captured_kwargs = kwargs; response }) do
+      assert_equal [], listmonk.fetch_lists
+    end
+
+    assert_equal Listmonk::HTTP_OPEN_TIMEOUT, captured_kwargs[:open_timeout]
+    assert_equal Listmonk::HTTP_READ_TIMEOUT, captured_kwargs[:read_timeout]
+    assert_equal true, captured_kwargs[:use_ssl]
+  end
+
+  test "send_newsletter returns false when the request raises" do
+    listmonk = Listmonk.create!(
+      url: "https://listmonk.example.com",
+      username: "user",
+      api_key: "key",
+      list_id: 1,
+      template_id: 2
+    )
+
+    listmonk.stub(:create_campaigns, 123) do
+      Net::HTTP.stub(:start, ->(*_args, **_kwargs) { raise "boom" }) do
+        assert_equal false, listmonk.send_newsletter(articles(:published_article), "Site")
+      end
     end
   end
 end

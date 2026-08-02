@@ -1,9 +1,0 @@
-<%= turbo_stream.update "verify-messages-#{@provider}" do %>
-  <div class="flash flash-<%= @status == 'success' ? 'notice' : 'alert' %>">
-    <%= @message %>
-  </div>
-<% end %>
-
-<%= turbo_stream.update "verify-button-#{@provider}" do %>
-  <%= button_tag "验证连接", type: 'submit', class: 'btn btn-secondary', form: "verify-form-#{@provider}", data: { turbo_frame: "_top" } %>
-<% end %>

@@ -37,4 +37,40 @@ class RedirectMiddlewareTest < ActiveSupport::TestCase
     assert_equal 302, status
     assert_equal "/target", headers["Location"]
   end
+
+  test "redirects HEAD requests" do
+    Redirect.create!(regex: "^/head$", replacement: "/new", enabled: true, permanent: true)
+
+    app = ->(_env) { [ 200, { "Content-Type" => "text/plain" }, [ "ok" ] ] }
+    middleware = RedirectMiddleware.new(app)
+
+    status, headers, _body = middleware.call(Rack::MockRequest.env_for("/head", method: "HEAD"))
+
+    assert_equal 301, status
+    assert_equal "/new", headers["Location"]
+  end
+
+  test "does not redirect POST requests" do
+    Redirect.create!(regex: "^/form$", replacement: "/new", enabled: true, permanent: true)
+
+    app = ->(_env) { [ 200, { "Content-Type" => "text/plain" }, [ "ok" ] ] }
+    middleware = RedirectMiddleware.new(app)
+
+    status, _headers, body = middleware.call(Rack::MockRequest.env_for("/form", method: "POST", input: "a=1"))
+
+    assert_equal 200, status
+    assert_equal "ok", body.join
+  end
+
+  test "does not redirect PUT requests" do
+    Redirect.create!(regex: "^/resource$", replacement: "/new", enabled: true, permanent: true)
+
+    app = ->(_env) { [ 200, { "Content-Type" => "text/plain" }, [ "ok" ] ] }
+    middleware = RedirectMiddleware.new(app)
+
+    status, _headers, body = middleware.call(Rack::MockRequest.env_for("/resource", method: "PUT", input: "a=1"))
+
+    assert_equal 200, status
+    assert_equal "ok", body.join
+  end
 end

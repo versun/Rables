@@ -211,10 +211,8 @@ function initTinyMCE() {
   });
 }
 
-// Initialize on DOMContentLoaded
-document.addEventListener('DOMContentLoaded', initTinyMCE);
-
-// Initialize on Turbo load (Rails 7+ with Turbo)
+// Initialize on Turbo load, which also fires on the initial page load, so a
+// separate DOMContentLoaded listener would initialize the editor twice.
 document.addEventListener('turbo:load', initTinyMCE);
 
 // Cleanup before Turbo cache

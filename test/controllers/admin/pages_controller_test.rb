@@ -9,7 +9,7 @@ class Admin::PagesControllerTest < ActionDispatch::IntegrationTest
     sign_in(@user)
   end
 
-  test "admin pages CRUD reorder and batch actions" do
+  test "admin pages CRUD and batch actions" do
     get admin_pages_path
     assert_response :success
 
@@ -41,24 +41,19 @@ class Admin::PagesControllerTest < ActionDispatch::IntegrationTest
         html_content: "<p>Content</p>"
       }
     }
-    assert_response :success
+    assert_response :unprocessable_entity
 
     patch admin_page_path(@page.slug), params: { page: { title: "Updated Page" } }
     assert_redirected_to admin_pages_path
     assert_equal "Updated Page", @page.reload.title
 
+    scheduled_time = Time.zone.parse("2026-09-01 10:00")
+    patch admin_page_path(@page.slug), params: { page: { status: "schedule", scheduled_at: scheduled_time } }
+    assert_redirected_to admin_pages_path
+    assert_equal scheduled_time, @page.reload.scheduled_at
+
     patch admin_page_path(@page.slug), params: { page: { title: "" } }
-    assert_response :success
-
-    with_page_insert_at(true) do
-      patch reorder_admin_page_path(@page.slug), params: { position: 1 }
-      assert_response :ok
-    end
-
-    with_page_insert_at(false) do
-      patch reorder_admin_page_path(@page.slug), params: { position: 2 }
-      assert_response :unprocessable_entity
-    end
+    assert_response :unprocessable_entity
 
     post batch_publish_admin_pages_path, params: { ids: [ @page.slug ] }
     assert_redirected_to admin_pages_path
@@ -85,16 +80,24 @@ class Admin::PagesControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
-  private
+  test "new page form checks enable comments by default" do
+    get new_admin_page_path
+    assert_response :success
+    assert_select "input#page_comment[checked]"
+  end
 
-  def with_page_insert_at(result)
-    Page.class_eval do
-      define_method(:insert_at) { |_position| result }
-    end
-    yield
-  ensure
-    Page.class_eval do
-      remove_method(:insert_at) if method_defined?(:insert_at)
-    end
+  test "create validation failure keeps comment checkbox unchecked" do
+    post admin_pages_path, params: {
+      page: {
+        title: "",
+        slug: "",
+        status: "draft",
+        content_type: "html",
+        html_content: "<p>Content</p>",
+        comment: "0"
+      }
+    }
+    assert_response :unprocessable_entity
+    assert_select "input#page_comment[checked]", 0
   end
 end

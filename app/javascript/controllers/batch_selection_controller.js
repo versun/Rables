@@ -50,6 +50,15 @@ export default class extends Controller {
     }
 
     submitBatchAction(event) {
+        const form = event.params.formId
+            ? document.getElementById(event.params.formId)
+            : event.currentTarget.closest('form')
+
+        if (!form) {
+            event.preventDefault()
+            return false
+        }
+
         const selectedIds = this.getSelectedIds()
 
         if (selectedIds.length === 0) {
@@ -58,9 +67,11 @@ export default class extends Controller {
             return false
         }
 
+        this.appendSelectedIds(form, selectedIds)
+
         // Confirmation for destructive actions
-        const action = event.target.dataset.action
-        if (action && action.includes('delete') || action.includes('destroy')) {
+        const action = event.params.action
+        if (action && (action.includes('delete') || action.includes('destroy'))) {
             if (!confirm(`Are you sure you want to delete ${selectedIds.length} item(s)?`)) {
                 event.preventDefault()
                 return false
@@ -68,5 +79,45 @@ export default class extends Controller {
         }
 
         return true
+    }
+
+    openModal(event) {
+        if (this.getSelectedIds().length === 0) {
+            alert('请至少选择一个文章。')
+            return
+        }
+
+        const modal = document.getElementById(event.params.modalId)
+        // Reset checkboxes (e.g. crosspost platform selection)
+        modal.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false)
+        modal.style.display = 'block'
+    }
+
+    closeModal(event) {
+        this.hideModal(document.getElementById(event.params.modalId))
+    }
+
+    closeOnBackdropClick(event) {
+        if (event.target === event.currentTarget) {
+            this.hideModal(event.currentTarget)
+        }
+    }
+
+    hideModal(modal) {
+        modal.style.display = 'none'
+        modal.querySelectorAll('input[type="text"]').forEach(input => input.value = '')
+        modal.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false)
+    }
+
+    appendSelectedIds(form, selectedIds) {
+        form.querySelectorAll('input[name="ids[]"]').forEach(input => input.remove())
+
+        selectedIds.forEach(id => {
+            const input = document.createElement('input')
+            input.type = 'hidden'
+            input.name = 'ids[]'
+            input.value = id
+            form.appendChild(input)
+        })
     }
 }

@@ -5,7 +5,7 @@ class Admin::SettingsController < Admin::BaseController
   end
 
   def update
-    @setting = Setting.first
+    @setting = Setting.first_or_create
     if @setting.update(setting_params)
       ActivityLog.log!(
         action: :updated,
@@ -23,7 +23,7 @@ class Admin::SettingsController < Admin::BaseController
         message: "site_settings",
         errors: @setting.errors.full_messages.join(", ")
       )
-      render :edit
+      render :edit, status: :unprocessable_entity
     end
   end
 

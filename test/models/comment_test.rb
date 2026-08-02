@@ -63,6 +63,22 @@ class CommentTest < ActiveSupport::TestCase
     assert_not @comment.valid?
   end
 
+  test "should validate url format" do
+    @comment.url = "not-a-url"
+    assert_not @comment.valid?
+    assert_includes @comment.errors[:url], "must be a valid URL"
+  end
+
+  test "should accept valid url" do
+    @comment.url = "https://example.com/comment/1"
+    assert @comment.valid?
+  end
+
+  test "should allow blank url" do
+    @comment.url = ""
+    assert @comment.valid?
+  end
+
   test "should accept valid URLs" do
     @comment.author_url = "https://example.com"
     assert @comment.valid?
@@ -255,5 +271,108 @@ class CommentTest < ActiveSupport::TestCase
     assert_difference "Comment.count", -2 do
       parent_comment.destroy
     end
+  end
+
+  test "upsert_from_external creates a new comment" do
+    comment_data = {
+      external_id: "ext-1",
+      author_name: "External User",
+      author_username: "external_user",
+      author_avatar_url: "https://example.com/avatar.png",
+      content: "External comment",
+      published_at: Time.current,
+      url: "https://example.com/comment/1"
+    }
+
+    comment, result = nil, nil
+    assert_difference "Comment.count", 1 do
+      comment, result = Comment.upsert_from_external(@article, "mastodon", comment_data)
+    end
+
+    assert_equal :created, result
+    assert_equal "mastodon", comment.platform
+    assert_equal "ext-1", comment.external_id
+    assert_equal "External comment", comment.content
+    assert_equal @article, comment.commentable
+    assert_equal "pending", comment.status
+  end
+
+  test "upsert_from_external assigns status when given" do
+    comment_data = {
+      external_id: "ext-2",
+      author_name: "External User",
+      content: "External comment",
+      published_at: Time.current
+    }
+
+    comment, result = Comment.upsert_from_external(@article, "bluesky", comment_data, status: :approved)
+
+    assert_equal :created, result
+    assert_equal "approved", comment.status
+  end
+
+  test "upsert_from_external keeps existing comment status on update" do
+    existing = comments(:mastodon_comment)
+    existing.update!(status: :rejected)
+
+    comment, result = Comment.upsert_from_external(
+      existing.commentable,
+      existing.platform,
+      {
+        external_id: existing.external_id,
+        author_name: existing.author_name,
+        content: "Updated content",
+        published_at: existing.published_at,
+        url: existing.url
+      },
+      status: :approved
+    )
+
+    assert_equal :updated, result
+    assert_equal "rejected", comment.reload.status
+  end
+
+  test "upsert_from_external updates an existing comment" do
+    existing = comments(:mastodon_comment)
+
+    comment, result = nil, nil
+    assert_no_difference "Comment.count" do
+      comment, result = Comment.upsert_from_external(
+        existing.commentable,
+        existing.platform,
+        {
+          external_id: existing.external_id,
+          author_name: existing.author_name,
+          content: "Updated content",
+          published_at: existing.published_at,
+          url: existing.url
+        }
+      )
+    end
+
+    assert_equal :updated, result
+    assert_equal existing.id, comment.id
+    assert_equal "Updated content", comment.reload.content
+  end
+
+  test "upsert_from_external returns unchanged when nothing changed" do
+    existing = comments(:mastodon_comment)
+
+    comment, result = Comment.upsert_from_external(
+      existing.commentable,
+      existing.platform,
+      {
+        external_id: existing.external_id,
+        author_name: existing.author_name,
+        author_username: existing.author_username,
+        author_avatar_url: existing.author_avatar_url,
+        content: existing.content,
+        published_at: existing.published_at,
+        url: existing.url
+      }
+    )
+
+    assert_equal :unchanged, result
+    assert_equal existing.id, comment.id
   end
 end

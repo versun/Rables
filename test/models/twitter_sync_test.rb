@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 
 class TwitterSyncTest < ActiveSupport::TestCase
   test "instance returns a singleton record" do
@@ -10,6 +11,14 @@ class TwitterSyncTest < ActiveSupport::TestCase
     assert first.persisted?
     assert_equal first.id, second.id
     assert_equal 1, TwitterSync.count
+  end
+
+  test "instance falls back to the winning record on RecordNotUnique" do
+    sync = TwitterSync.instance
+
+    TwitterSync.stub(:first_or_create, -> { raise ActiveRecord::RecordNotUnique }) do
+      assert_equal sync, TwitterSync.instance
+    end
   end
 
   test "instance defaults to disabled" do

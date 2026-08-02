@@ -130,6 +130,37 @@ class MarkdownExportTest < ActiveSupport::TestCase
     article&.destroy
   end
 
+  test "dedupes colliding basenames with a slug suffix" do
+    article1 = Article.create!(
+      title: "Dup One",
+      slug: "dup/slug",
+      status: :publish,
+      content_type: :html,
+      html_content: "<p>one</p>"
+    )
+    article2 = Article.create!(
+      title: "Dup Two",
+      slug: "dup_slug",
+      status: :publish,
+      content_type: :html,
+      html_content: "<p>two</p>"
+    )
+
+    exporter = MarkdownExport.new
+    assert exporter.generate, exporter.error_message
+
+    Zip::File.open(exporter.zip_path) do |zip|
+      names = zip.entries.map(&:name).grep(%r{\Aarticles/dup_slug})
+      assert_equal 2, names.size, "expected both colliding articles to be exported, got #{names.inspect}"
+      assert_includes names, "articles/dup_slug.md"
+      assert names.any? { |n| n.start_with?("articles/dup_slug-") }, "expected a deduped filename with suffix"
+    end
+  ensure
+    File.delete(exporter.zip_path) if exporter&.zip_path.present? && File.exist?(exporter.zip_path)
+    article1&.destroy
+    article2&.destroy
+  end
+
   test "uses UTF-8 filenames and markdown image syntax" do
     article = Article.create!(
       title: "中文标题",

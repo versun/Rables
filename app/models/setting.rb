@@ -10,8 +10,18 @@ class Setting < ApplicationRecord
   # Virtual attribute for JSON textarea input
   attr_accessor :social_links_json
 
-  # Check if initial setup is incomplete
+  SETUP_INCOMPLETE_CACHE_KEY = "setting:setup_incomplete"
+
+  # Check if initial setup is incomplete (cached briefly; called on every request)
   def self.setup_incomplete?
+    Rails.cache.fetch(SETUP_INCOMPLETE_CACHE_KEY, expires_in: 5.minutes) do
+      setup_incomplete_fresh?
+    end
+  end
+
+  # Uncached variant for the setup transaction re-check, where a stale cached
+  # value would weaken the TOCTOU guard
+  def self.setup_incomplete_fresh?
     User.count.zero? || Setting.first_or_create.setup_completed == false
   end
 
@@ -32,5 +42,6 @@ class Setting < ApplicationRecord
 
   def clear_settings_cache
     CacheableSettings.refresh_site_info
+    Rails.cache.delete(SETUP_INCOMPLETE_CACHE_KEY)
   end
 end

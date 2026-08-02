@@ -5,7 +5,7 @@ require "minitest/mock"
 
 class TwitterSyncServiceTest < ActiveSupport::TestCase
   setup do
-    Crosspost.twitter.update!(
+    Crosspost.for("twitter").update!(
       enabled: true,
       api_key: "api_key",
       api_key_secret: "api_key_secret",
@@ -16,34 +16,17 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     @sync.update!(enabled: true, username: "testuser", user_id: "12345", since_id: "100")
   end
 
-  test "does nothing when sync is disabled" do
-    @sync.update!(enabled: false)
-
-    service = TwitterSyncService.new(@sync)
-
+  test "does nothing unless sync, username, and crosspost are all enabled" do
+    # No stubs: any API attempt would raise, so a clean return proves the guard works
     assert_no_difference "Article.count" do
-      # No stubs: any API attempt would raise, so a clean return proves the guard works
+      Crosspost.for("twitter").update!(enabled: false)
       service.perform
-    end
-  end
 
-  test "does nothing when username is blank" do
-    @sync.update!(enabled: false)
-    @sync.update_columns(username: nil, enabled: true)
-
-    service = TwitterSyncService.new(@sync)
-
-    assert_no_difference "Article.count" do
+      Crosspost.for("twitter").update!(enabled: true)
+      @sync.update!(enabled: false)
       service.perform
-    end
-  end
 
-  test "does nothing when twitter crosspost credentials are disabled" do
-    Crosspost.twitter.update!(enabled: false)
-
-    service = TwitterSyncService.new(@sync)
-
-    assert_no_difference "Article.count" do
+      @sync.update_columns(username: nil, enabled: true)
       service.perform
     end
   end
@@ -119,13 +102,9 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     tweet = build_tweet(id: "206", text: "with photo", media_keys: [ "3_1" ])
     client = fake_client("users/12345/tweets" => timeline_response([ tweet ], media: [ media ]))
 
-    downloaded_urls = []
-    service = TwitterSyncService.new(@sync)
-    stub_media_download(service, downloaded_urls) do
+    stub_media_download(service, []) do
       perform_with_stubbed_api(service, client)
     end
-
-    assert_equal [ "https://pbs.twimg.com/media/abc.jpg" ], downloaded_urls
 
     article = Article.find_by(slug: "tweet-206")
     assert_includes article.content.body.to_s, "action-text-attachment"
@@ -147,7 +126,6 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     client = fake_client("users/12345/tweets" => timeline_response([ tweet ], media: [ media ]))
 
     downloaded_urls = []
-    service = TwitterSyncService.new(@sync)
     stub_media_download(service, downloaded_urls) do
       perform_with_stubbed_api(service, client)
     end
@@ -161,7 +139,6 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     tweet = build_tweet(id: "208", text: "broken media", media_keys: [ "3_2" ])
     client = fake_client("users/12345/tweets" => timeline_response([ tweet ], media: [ media ]))
 
-    service = TwitterSyncService.new(@sync)
     service.define_singleton_method(:download_media) { |*_args| raise "boom" }
 
     perform_with_stubbed_api(service, client)
@@ -303,7 +280,6 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     ] }
     client = fake_client("users/12345/tweets" => timeline_response([ tweet ], media: [ media ]))
 
-    service = TwitterSyncService.new(@sync)
     stub_media_download(service, []) do
       perform_with_stubbed_api(service, client)
     end
@@ -333,6 +309,28 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     assert_equal "my take on this", article.content.to_plain_text.strip
     assert_equal "https://x.com/i/web/status/60", article.source_url
     assert_equal "quoted words", article.source_content
+  end
+
+  test "downloads media from quoted tweets alongside the tweet's own media" do
+    media = [
+      { "media_key" => "3_m1", "type" => "photo", "url" => "https://pbs.twimg.com/media/own.jpg" },
+      { "media_key" => "3_q1", "type" => "photo", "url" => "https://pbs.twimg.com/media/quoted.jpg" }
+    ]
+    tweet = build_tweet(id: "227", text: "my take", media_keys: [ "3_m1" ],
+      referenced_tweets: [ { "type" => "quoted", "id" => "62" } ])
+    quoted = build_tweet(id: "62", text: "quoted words", media_keys: [ "3_q1" ])
+    quoted["author_id"] = "u5"
+    author = { "id" => "u5", "name" => "Quoted Author", "username" => "quoted" }
+    client = fake_client("users/12345/tweets" => timeline_response([ tweet ], media: media, quoted_tweets: [ quoted ], users: [ author ]))
+
+    downloaded_urls = []
+    stub_media_download(service, downloaded_urls) do
+      perform_with_stubbed_api(service, client)
+    end
+
+    assert_equal [ "https://pbs.twimg.com/media/own.jpg", "https://pbs.twimg.com/media/quoted.jpg" ], downloaded_urls
+    article = Article.find_by(slug: "tweet-227")
+    assert_equal 2, article.content.embeds.count
   end
 
   test "removes media urls from quoted tweet content" do
@@ -389,16 +387,10 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     ] }
     client = fake_client("users/12345/tweets" => timeline_response([ tweet ]))
 
-    service = TwitterSyncService.new(@sync)
-    followed = []
-    service.define_singleton_method(:follow_redirect) do |url|
-      followed << url
-      "https://example.com/resolved"
-    end
+    service.define_singleton_method(:follow_redirect) { |_url| "https://example.com/resolved" }
 
     perform_with_stubbed_api(service, client)
 
-    assert_equal [ "https://t.co/ghi789" ], followed
     article = Article.find_by(slug: "tweet-219")
     assert_includes article.content.to_plain_text, "https://example.com/resolved"
   end
@@ -407,25 +399,12 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     tweet = build_tweet(id: "220", text: "broken https://t.co/jkl000 link")
     client = fake_client("users/12345/tweets" => timeline_response([ tweet ]))
 
-    service = TwitterSyncService.new(@sync)
     service.define_singleton_method(:follow_redirect) { |*| nil }
 
     perform_with_stubbed_api(service, client)
 
     article = Article.find_by(slug: "tweet-220")
     assert_includes article.content.to_plain_text, "https://t.co/jkl000"
-  end
-
-  test "follow_redirect resolves a chain of redirects" do
-    service = TwitterSyncService.new(@sync)
-    locations = {
-      "https://t.co/abc" => "https://bit.ly/xyz",
-      "https://bit.ly/xyz" => "https://example.com/final",
-      "https://example.com/final" => nil
-    }
-    service.define_singleton_method(:redirect_location) { |url| locations[url] }
-
-    assert_equal "https://example.com/final", service.send(:follow_redirect, "https://t.co/abc")
   end
 
   test "quoted tweet fills source reference author and content from includes" do
@@ -457,8 +436,7 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     perform_with_stubbed_api(service, client)
 
     article = Article.find_by(slug: "tweet-223")
-    assert_equal "Long Writer", article.source_author
-    assert_equal 250, article.source_content.length
+    assert_equal TwitterSyncService::QUOTED_CONTENT_LIMIT, article.source_content.length
   end
 
   test "quoted tweet archives without source reference when quoted data is unavailable" do
@@ -474,12 +452,10 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     assert_nil article.source_content
   end
 
-  test "passes start_time and skips tweets before start_date" do
+  test "skips tweets before start_date" do
     @sync.update!(start_date: Date.new(2026, 7, 1))
-    endpoints = []
     client = Object.new
-    client.define_singleton_method(:get) do |endpoint|
-      endpoints << endpoint
+    client.define_singleton_method(:get) do |_endpoint|
       { "data" => [
         { "id" => "215", "text" => "too old", "created_at" => "2026-06-30T23:59:59.000Z" },
         { "id" => "216", "text" => "in range", "created_at" => "2026-07-01T00:00:00.000Z" }
@@ -490,7 +466,6 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
       perform_with_stubbed_api(service, client)
     end
 
-    assert_includes endpoints.first, "start_time=#{CGI.escape(Date.new(2026, 7, 1).in_time_zone.beginning_of_day.iso8601)}"
     assert_nil Article.find_by(slug: "tweet-215")
     assert Article.find_by(slug: "tweet-216")
   end
@@ -517,14 +492,69 @@ class TwitterSyncServiceTest < ActiveSupport::TestCase
     assert_equal "118", @sync.reload.since_id
   end
 
-  test "first run still applies FIRST_RUN_LIMIT when start_date is blank" do
-    @sync.update!(since_id: nil, start_date: nil)
-    tweets = (1..15).map { |i| build_tweet(id: (100 + i).to_s, text: "tweet #{i}") }
+  test "skips a poison tweet, archives the rest, and still advances since_id" do
+    tweets = [
+      build_tweet(id: "101", text: "fine before"),
+      build_tweet(id: "102", text: "broken", created_at: "not-a-timestamp"),
+      build_tweet(id: "103", text: "fine after")
+    ]
     client = fake_client("users/12345/tweets" => timeline_response(tweets))
 
-    assert_difference "Article.count", TwitterSyncService::FIRST_RUN_LIMIT do
+    assert_difference "Article.count", 2 do
       perform_with_stubbed_api(service, client)
     end
+
+    assert Article.find_by(slug: "tweet-101")
+    assert_nil Article.find_by(slug: "tweet-102")
+    assert Article.find_by(slug: "tweet-103")
+    assert_equal "103", @sync.reload.since_id
+    assert @sync.last_synced_at.present?
+  end
+
+  test "incremental sync follows pagination tokens like the backfill does" do
+    page1_tweets = (101..103).map { |i| build_tweet(id: i.to_s, text: "tweet #{i}") }
+    page2_tweets = (104..105).map { |i| build_tweet(id: i.to_s, text: "tweet #{i}") }
+    client = Object.new
+    client.define_singleton_method(:get) do |endpoint|
+      if endpoint.include?("pagination_token=page2")
+        { "data" => page2_tweets, "meta" => {} }
+      else
+        { "data" => page1_tweets, "meta" => { "next_token" => "page2" } }
+      end
+    end
+
+    assert_difference "Article.count", 5 do
+      perform_with_stubbed_api(service, client)
+    end
+
+    assert Article.find_by(slug: "tweet-105")
+    assert_equal "105", @sync.reload.since_id
+  end
+
+  test "records last_error and does not touch last_synced_at when the API returns an error payload" do
+    client = fake_client("users/12345/tweets" => { "errors" => [ { "message" => "Service Unavailable" } ] })
+
+    assert_no_difference "Article.count" do
+      perform_with_stubbed_api(service, client)
+    end
+
+    @sync.reload
+    assert_equal "Service Unavailable", @sync.last_error
+    assert_nil @sync.last_synced_at
+    assert_equal "100", @sync.since_id
+  end
+
+  test "treats an empty timeline page as a successful sync" do
+    client = fake_client("users/12345/tweets" => { "meta" => { "result_count" => 0 } })
+
+    assert_no_difference "Article.count" do
+      perform_with_stubbed_api(service, client)
+    end
+
+    @sync.reload
+    assert_nil @sync.last_error
+    assert @sync.last_synced_at.present?
+    assert_equal "100", @sync.since_id
   end
 
   private

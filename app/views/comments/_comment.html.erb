@@ -53,9 +53,10 @@
         <button
           type="button"
           class="reply-button"
-          data-comment-id="<%= comment.id %>"
-          style="background: none; border: none; color: #666; font-size: <%= depth > 0 ? '0.7rem' : '0.75rem' %>; cursor: pointer; padding: 0.125rem 0; text-decoration: underline;"
-          onclick="showReplyForm(<%= comment.id %>)">
+          data-controller="reply-form"
+          data-reply-form-comment-id-value="<%= comment.id %>"
+          data-action="click->reply-form#show"
+          style="background: none; border: none; color: #666; font-size: <%= depth > 0 ? '0.7rem' : '0.75rem' %>; cursor: pointer; padding: 0.125rem 0; text-decoration: underline;">
           回复
         </button>
       <% end %>

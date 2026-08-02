@@ -5,6 +5,7 @@ class ImportZip
   require "nokogiri"
   require "open-uri"
   require "securerandom"
+  require "shellwords"
   require "stringio"
 
   attr_reader :error_message, :import_dir, :zip_path
@@ -29,21 +30,23 @@ class ImportZip
       file: @zip_path
     )
     extract_zip_file
-    import_tags
-    import_articles
-    import_article_tags
-    import_crossposts
-    import_listmonks
-    import_git_integrations
-    import_pages
-    import_settings
-    import_social_media_posts
-    import_comments
-    import_static_files
-    import_redirects
-    import_newsletter_settings
-    import_subscribers
-    import_subscriber_tags
+    # All-or-nothing: any failure rolls back the whole import
+    ActiveRecord::Base.transaction do
+      import_tags
+      import_articles
+      import_article_tags
+      import_crossposts
+      import_listmonks
+      import_pages
+      import_settings
+      import_social_media_posts
+      import_comments
+      import_static_files
+      import_redirects
+      import_newsletter_settings
+      import_subscribers
+      import_subscriber_tags
+    end
 
     ActivityLog.log!(
       action: :completed,
@@ -76,6 +79,9 @@ class ImportZip
       zip_file.each do |entry|
         next if entry.directory?
         extract_path = File.join(@import_dir.to_s, entry.name)
+        unless safe_file_path?(extract_path)
+          raise "Unsafe path in ZIP entry: #{entry.name}"
+        end
         FileUtils.mkdir_p(File.dirname(extract_path))
         begin
           File.open(extract_path, "wb") { |f| f.write(entry.get_input_stream.read) }
@@ -138,6 +144,15 @@ class ImportZip
         skipped_count += 1
         next
       end
+
+      # Validate status per row so one bad value cannot abort the whole import
+      status = row["status"].to_s
+      unless Article.statuses.key?(status)
+        Rails.event.notify("import_zip.article_skipped", component: "ImportZip", slug: row["slug"], status: row["status"], reason: "invalid_status", level: "warn")
+        skipped_count += 1
+        next
+      end
+
       article_id = row["id"].presence || "article_#{imported_count + skipped_count}"
 
       raw_content = row["content"].to_s
@@ -163,7 +178,7 @@ class ImportZip
         meta_title: row["meta_title"],
         meta_description: row["meta_description"],
         meta_image: row["meta_image"],
-        status: row["status"],
+        status: status,
         scheduled_at: row["scheduled_at"],
         scheduled_crosspost_platforms: imported_scheduled_crosspost_platforms(row),
         scheduled_send_newsletter: imported_scheduled_send_newsletter(row),
@@ -298,7 +313,7 @@ class ImportZip
       crosspost = Crosspost.find_or_initialize_by(platform: platform)
       is_new_record = crosspost.new_record?
 
-      crosspost.assign_attributes(
+      attributes = {
         server_url: row["server_url"],
         client_key: row["client_key"],
         client_secret: row["client_secret"],
@@ -315,7 +330,10 @@ class ImportZip
         settings: parse_json_field(row["settings"]) || {},
         created_at: row["created_at"],
         updated_at: row["updated_at"]
-      )
+      }
+      # Never let redacted export placeholders overwrite stored credentials
+      attributes.reject! { |_, value| redacted_value?(value) }
+      crosspost.assign_attributes(attributes)
 
       begin
         crosspost.save!
@@ -351,60 +369,37 @@ class ImportZip
     )
   end
 
-  def import_git_integrations
+  def import_listmonks
     base_dir = find_csv_base_dir
-    csv_path = File.join(base_dir, "git_integrations.csv")
+    csv_path = File.join(base_dir, "listmonks.csv")
     return unless File.exist?(csv_path)
-
-    Rails.event.notify("import_zip.git_integrations_import_started", component: "ImportZip", csv_path: csv_path, level: "info")
+    Rails.event.notify("import_zip.listmonks_import_started", component: "ImportZip", csv_path: csv_path, level: "info")
     imported_count = 0
     updated_count = 0
     skipped_count = 0
-
     CSV.foreach(csv_path, headers: true) do |row|
-      provider = row["provider"].to_s.strip.downcase
-      unless provider.present?
-        Rails.event.notify("import_zip.git_integration_skipped", component: "ImportZip", reason: "provider_missing", level: "warn")
+      url = row["url"].to_s.strip
+      unless url.present?
+        Rails.event.notify("import_zip.listmonk_skipped", component: "ImportZip", reason: "url_missing", level: "warn")
         skipped_count += 1
         next
       end
 
-      unless GitIntegration::PROVIDERS.include?(provider)
-        Rails.event.notify("import_zip.git_integration_skipped", component: "ImportZip", provider: provider, reason: "unsupported_provider", level: "warn")
-        skipped_count += 1
-        next
-      end
-
-      git_integration = GitIntegration.find_or_initialize_by(provider: provider)
-      is_new_record = git_integration.new_record?
-
-      git_integration.assign_attributes(
-        name: row["name"],
-        server_url: row["server_url"],
+      # Singleton semantics: only one Listmonk configuration is kept
+      listmonk = Listmonk.first || Listmonk.new
+      is_new_record = listmonk.new_record?
+      listmonk.assign_attributes(
+        url: url,
         username: row["username"],
-        access_token: row["access_token"],
+        list_id: row["list_id"],
+        template_id: row["template_id"],
         enabled: cast_boolean(row["enabled"], default: false),
         created_at: row["created_at"],
         updated_at: row["updated_at"]
       )
-
-      begin
-        git_integration.save!
-      rescue ActiveRecord::RecordInvalid
-        if git_integration.enabled? && git_integration.errors.added?(:access_token, "can't be blank")
-          Rails.event.notify(
-            "import_zip.git_integration_disabled_due_to_missing_token",
-            component: "ImportZip",
-            provider: provider,
-            errors: git_integration.errors.full_messages.join(", "),
-            level: "warn"
-          )
-          git_integration.enabled = false
-          git_integration.save!
-        else
-          raise
-        end
-      end
+      # Never let a redacted export placeholder overwrite the stored api_key
+      listmonk.api_key = row["api_key"] unless redacted_value?(row["api_key"])
+      listmonk.save!
 
       if is_new_record
         imported_count += 1
@@ -412,37 +407,7 @@ class ImportZip
         updated_count += 1
       end
     end
-
-    Rails.event.notify(
-      "import_zip.git_integrations_import_completed",
-      component: "ImportZip",
-      imported_count: imported_count,
-      updated_count: updated_count,
-      skipped_count: skipped_count,
-      level: "info"
-    )
-  end
-
-  def import_listmonks
-    base_dir = find_csv_base_dir
-    csv_path = File.join(base_dir, "listmonks.csv")
-    return unless File.exist?(csv_path)
-    Rails.event.notify("import_zip.listmonks_import_started", component: "ImportZip", csv_path: csv_path, level: "info")
-    imported_count = 0
-    CSV.foreach(csv_path, headers: true) do |row|
-      Listmonk.find_or_create_by(
-        url: row["url"],
-        username: row["username"],
-        api_key: row["api_key"],
-        list_id: row["list_id"],
-        template_id: row["template_id"],
-        enabled: row["enabled"],
-        created_at: row["created_at"],
-        updated_at: row["updated_at"]
-      )
-      imported_count += 1
-    end
-    Rails.event.notify("import_zip.listmonks_import_completed", component: "ImportZip", imported_count: imported_count, level: "info")
+    Rails.event.notify("import_zip.listmonks_import_completed", component: "ImportZip", imported_count: imported_count, updated_count: updated_count, skipped_count: skipped_count, level: "info")
   end
 
   def import_pages
@@ -458,6 +423,15 @@ class ImportZip
         skipped_count += 1
         next
       end
+
+      # Validate status per row so one bad value cannot abort the whole import
+      status = row["status"].to_s
+      unless Page.statuses.key?(status)
+        Rails.event.notify("import_zip.page_skipped", component: "ImportZip", slug: row["slug"], status: row["status"], reason: "invalid_status", level: "warn")
+        skipped_count += 1
+        next
+      end
+
       page_id = row["id"].presence || "page_#{imported_count + skipped_count}"
 
       raw_content = row["content"].to_s
@@ -476,7 +450,7 @@ class ImportZip
       base_attributes = {
         title: row["title"],
         slug: row["slug"],
-        status: row["status"],
+        status: status,
         redirect_url: row["redirect_url"],
         page_order: row["page_order"],
         comment: cast_boolean(row["comment"], default: false),
@@ -516,68 +490,13 @@ class ImportZip
     existing_setting = Setting.first
     if existing_setting
       csv_data = CSV.read(csv_path, headers: true).first
-      return unless csv_data
-      social_links = parse_json_field(csv_data["social_links"])
-      static_files = parse_json_field(csv_data["static_files"])
-      existing_setting.update!(
-        title: csv_data["title"],
-        description: csv_data["description"],
-        author: csv_data["author"],
-        url: csv_data["url"],
-        time_zone: csv_data["time_zone"] || "UTC",
-        giscus: csv_data["giscus"],
-        tool_code: csv_data["tool_code"],
-        head_code: csv_data["head_code"],
-        custom_css: csv_data["custom_css"],
-        social_links: social_links,
-        static_files: static_files || {},
-        auto_regenerate_triggers: parse_json_field(csv_data["auto_regenerate_triggers"]) || [],
-        deploy_branch: csv_data["deploy_branch"],
-        deploy_provider: csv_data["deploy_provider"],
-        deploy_repo_url: csv_data["deploy_repo_url"],
-        local_generation_path: csv_data["local_generation_path"],
-        static_generation_destination: csv_data["static_generation_destination"],
-        static_generation_delay: csv_data["static_generation_delay"],
-        setup_completed: cast_boolean(csv_data["setup_completed"], default: false),
-        github_backup_enabled: cast_boolean(csv_data["github_backup_enabled"], default: false),
-        github_repo_url: csv_data["github_repo_url"],
-        github_token: csv_data["github_token"],
-        github_backup_branch: csv_data["github_backup_branch"],
-        created_at: csv_data["created_at"],
-        updated_at: csv_data["updated_at"]
-      )
-      imported_count += 1
+      if csv_data
+        existing_setting.update!(**setting_attributes_from_csv(csv_data))
+        imported_count += 1
+      end
     else
       CSV.foreach(csv_path, headers: true) do |row|
-        social_links = parse_json_field(row["social_links"])
-        static_files = parse_json_field(row["static_files"])
-        Setting.create!(
-          title: row["title"],
-          description: row["description"],
-          author: row["author"],
-          url: row["url"],
-          time_zone: row["time_zone"] || "UTC",
-          giscus: row["giscus"],
-          tool_code: row["tool_code"],
-          head_code: row["head_code"],
-          custom_css: row["custom_css"],
-          social_links: social_links,
-          static_files: static_files || {},
-          auto_regenerate_triggers: parse_json_field(row["auto_regenerate_triggers"]) || [],
-          deploy_branch: row["deploy_branch"],
-          deploy_provider: row["deploy_provider"],
-          deploy_repo_url: row["deploy_repo_url"],
-          local_generation_path: row["local_generation_path"],
-          static_generation_destination: row["static_generation_destination"],
-          static_generation_delay: row["static_generation_delay"],
-          setup_completed: cast_boolean(row["setup_completed"], default: false),
-          github_backup_enabled: cast_boolean(row["github_backup_enabled"], default: false),
-          github_repo_url: row["github_repo_url"],
-          github_token: row["github_token"],
-          github_backup_branch: row["github_backup_branch"],
-          created_at: row["created_at"],
-          updated_at: row["updated_at"]
-        )
+        Setting.create!(**setting_attributes_from_csv(row))
         imported_count += 1
       end
     end
@@ -600,6 +519,39 @@ class ImportZip
   rescue StandardError => e
     Rails.event.notify("import_zip.settings_import_failed", component: "ImportZip", error: e.message, level: "error")
     raise
+  end
+
+  def setting_attributes_from_csv(csv_data)
+    attributes = {
+      title: csv_data["title"],
+      description: csv_data["description"],
+      author: csv_data["author"],
+      url: csv_data["url"],
+      time_zone: csv_data["time_zone"] || "UTC",
+      giscus: csv_data["giscus"],
+      tool_code: csv_data["tool_code"],
+      head_code: csv_data["head_code"],
+      custom_css: csv_data["custom_css"],
+      social_links: parse_json_field(csv_data["social_links"]),
+      static_files: parse_json_field(csv_data["static_files"]) || {},
+      auto_regenerate_triggers: parse_json_field(csv_data["auto_regenerate_triggers"]) || [],
+      deploy_branch: csv_data["deploy_branch"],
+      deploy_provider: csv_data["deploy_provider"],
+      deploy_repo_url: csv_data["deploy_repo_url"],
+      local_generation_path: csv_data["local_generation_path"],
+      static_generation_destination: csv_data["static_generation_destination"],
+      static_generation_delay: csv_data["static_generation_delay"],
+      setup_completed: cast_boolean(csv_data["setup_completed"], default: false),
+      github_backup_enabled: cast_boolean(csv_data["github_backup_enabled"], default: false),
+      github_repo_url: csv_data["github_repo_url"],
+      github_token: csv_data["github_token"],
+      github_backup_branch: csv_data["github_backup_branch"],
+      created_at: csv_data["created_at"],
+      updated_at: csv_data["updated_at"]
+    }
+    # Never let a redacted export placeholder overwrite the stored token
+    attributes.delete(:github_token) if redacted_value?(attributes[:github_token])
+    attributes
   end
 
   def import_social_media_posts
@@ -892,64 +844,22 @@ class ImportZip
       end
 
       existing_setting.update!(
-        provider: csv_data["provider"] || "native",
-        enabled: csv_data["enabled"] != "false",
-        smtp_address: csv_data["smtp_address"],
-        smtp_port: csv_data["smtp_port"],
-        smtp_user_name: csv_data["smtp_user_name"],
-        smtp_password: csv_data["smtp_password"],
-        smtp_domain: csv_data["smtp_domain"],
-        smtp_authentication: csv_data["smtp_authentication"] || "plain",
-        smtp_enable_starttls: csv_data["smtp_enable_starttls"] != "false",
-        from_email: csv_data["from_email"],
-        footer: processed_footer.present? ? processed_footer : nil,
-        created_at: csv_data["created_at"],
-        updated_at: csv_data["updated_at"]
+        **newsletter_setting_attributes_from_csv(csv_data),
+        footer: processed_footer.presence
       )
       imported_count += 1
     else
       CSV.foreach(csv_path, headers: true) do |row|
-        # 处理 footer 内容
-        footer_content = row["footer"].presence || ""
-        processed_footer = ""
-        if footer_content.present?
-          # 对于新创建的记录，先创建再处理 footer
-          newsletter_setting = NewsletterSetting.create!(
-            provider: row["provider"] || "native",
-            enabled: row["enabled"] != "false",
-            smtp_address: row["smtp_address"],
-            smtp_port: row["smtp_port"],
-            smtp_user_name: row["smtp_user_name"],
-            smtp_password: row["smtp_password"],
-            smtp_domain: row["smtp_domain"],
-            smtp_authentication: row["smtp_authentication"] || "plain",
-            smtp_enable_starttls: row["smtp_enable_starttls"] != "false",
-            from_email: row["from_email"],
-            created_at: row["created_at"],
-            updated_at: row["updated_at"]
-          )
+        # 对于新创建的记录，先创建再处理 footer
+        newsletter_setting = NewsletterSetting.create!(**newsletter_setting_attributes_from_csv(row))
 
-          if footer_content.present?
-            processed_footer = process_newsletter_setting_footer_content(footer_content, newsletter_setting.id, "newsletter_setting")
-            processed_footer = fix_content_sgid_references(processed_footer)
-            newsletter_setting.update!(footer: processed_footer)
-          end
-        else
-          NewsletterSetting.create!(
-            provider: row["provider"] || "native",
-            enabled: row["enabled"] != "false",
-            smtp_address: row["smtp_address"],
-            smtp_port: row["smtp_port"],
-            smtp_user_name: row["smtp_user_name"],
-            smtp_password: row["smtp_password"],
-            smtp_domain: row["smtp_domain"],
-            smtp_authentication: row["smtp_authentication"] || "plain",
-            smtp_enable_starttls: row["smtp_enable_starttls"] != "false",
-            from_email: row["from_email"],
-            created_at: row["created_at"],
-            updated_at: row["updated_at"]
-          )
+        footer_content = row["footer"].presence
+        if footer_content.present?
+          processed_footer = process_newsletter_setting_footer_content(footer_content, newsletter_setting.id, "newsletter_setting")
+          processed_footer = fix_content_sgid_references(processed_footer)
+          newsletter_setting.update!(footer: processed_footer)
         end
+
         imported_count += 1
         break # 只允许有一个 NewsletterSetting，处理完第一行后退出循环
       end
@@ -957,16 +867,30 @@ class ImportZip
     Rails.event.notify("import_zip.newsletter_settings_import_completed", component: "ImportZip", imported_count: imported_count, level: "info")
   end
 
+  def newsletter_setting_attributes_from_csv(csv_data)
+    attributes = {
+      provider: csv_data["provider"] || "native",
+      enabled: cast_boolean(csv_data["enabled"], default: false),
+      smtp_address: csv_data["smtp_address"],
+      smtp_port: csv_data["smtp_port"],
+      smtp_user_name: csv_data["smtp_user_name"],
+      smtp_password: csv_data["smtp_password"],
+      smtp_domain: csv_data["smtp_domain"],
+      smtp_authentication: csv_data["smtp_authentication"] || "plain",
+      smtp_enable_starttls: cast_boolean(csv_data["smtp_enable_starttls"], default: false),
+      from_email: csv_data["from_email"],
+      created_at: csv_data["created_at"],
+      updated_at: csv_data["updated_at"]
+    }
+    # Never let a redacted export placeholder overwrite the stored password
+    attributes.delete(:smtp_password) if redacted_value?(attributes[:smtp_password])
+    attributes
+  end
+
   def process_newsletter_setting_footer_content(content, record_id = nil, record_type = nil)
-    return content if content.blank?
     record_id ||= "newsletter_setting"
     record_type ||= "newsletter_setting"
-    Rails.event.notify("import_zip.newsletter_footer_processing", component: "ImportZip", record_id: record_id, level: "info")
-    doc = Nokogiri::HTML.fragment(content)
-    doc.css("action-text-attachment").each { |a| safe_process { process_imported_attachment_element(a, record_id, record_type) } }
-    doc.css("figure[data-trix-attachment]").each { |f| safe_process { process_imported_figure_element(f, record_id, record_type) } }
-    doc.css("img").each { |img| safe_process { process_imported_image_element(img, record_id, record_type) } }
-    doc.to_html
+    process_embedded_content(content, record_id, record_type, "import_zip.newsletter_footer_processing")
   end
 
   def import_subscribers
@@ -1057,10 +981,14 @@ class ImportZip
 
   # ----- 内容和附件处理通用工具方法 -----
   def process_imported_content(content, record_id = nil, record_type = nil)
-    return content if content.blank?
     record_id ||= "unknown"
     record_type ||= "content"
-    Rails.event.notify("import_zip.content_processing", component: "ImportZip", record_id: record_id, record_type: record_type, level: "info")
+    process_embedded_content(content, record_id, record_type, "import_zip.content_processing")
+  end
+
+  def process_embedded_content(content, record_id, record_type, event_name)
+    return content if content.blank?
+    Rails.event.notify(event_name, component: "ImportZip", record_id: record_id, record_type: record_type, level: "info")
     doc = Nokogiri::HTML.fragment(content)
 
     doc.css("action-text-attachment").each { |a| safe_process { process_imported_attachment_element(a, record_id, record_type) } }
@@ -1093,7 +1021,7 @@ class ImportZip
         Rails.event.notify("import_zip.attachment_not_found", component: "ImportZip", attachment_path: attachment_path, level: "warn")
       end
     elsif is_active_storage_url?(original_url)
-      blob = extract_blob_from_url(original_url)
+      blob = ActiveStorageBlobFinder.find_blob_from_url(original_url)
       update_attachment_element_with_blob(attachment, blob) if blob
     end
   end
@@ -1126,7 +1054,7 @@ class ImportZip
         Rails.event.notify("import_zip.figure_attachment_not_found", component: "ImportZip", attachment_path: attachment_path, level: "warn")
       end
     elsif is_active_storage_url?(original_url)
-      blob = extract_blob_from_url(original_url)
+      blob = ActiveStorageBlobFinder.find_blob_from_url(original_url)
       if blob
         attachment_data["url"] = Rails.application.routes.url_helpers.rails_blob_path(blob, only_path: true)
         figure["sgid"] = blob.to_sgid.to_s
@@ -1159,7 +1087,7 @@ class ImportZip
         Rails.event.notify("import_zip.image_not_found", component: "ImportZip", attachment_path: attachment_path, level: "warn")
       end
     elsif is_active_storage_url?(original_url)
-      blob = extract_blob_from_url(original_url)
+      blob = ActiveStorageBlobFinder.find_blob_from_url(original_url)
       if blob
         new_url = Rails.application.routes.url_helpers.rails_blob_path(blob, only_path: true)
         img["src"] = new_url
@@ -1206,7 +1134,8 @@ class ImportZip
 
   def detect_content_type_from_url(url)
     require "net/http"
-    Net::HTTP.start(URI.parse(url).host, use_ssl: true) do |http|
+    uri = URI.parse(url)
+    Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") do |http|
       response = http.head(url)
       content_type = response["Content-Type"]
       if content_type.present?
@@ -1226,15 +1155,9 @@ class ImportZip
   end
 
   def process_setting_footer_content(content, record_id = nil, record_type = nil)
-    return content if content.blank?
     record_id ||= "setting"
     record_type ||= "setting"
-    Rails.event.notify("import_zip.setting_footer_processing", component: "ImportZip", record_id: record_id, level: "info")
-    doc = Nokogiri::HTML.fragment(content)
-    doc.css("action-text-attachment").each { |a| safe_process { process_imported_attachment_element(a, record_id, record_type) } }
-    doc.css("figure[data-trix-attachment]").each { |f| safe_process { process_imported_figure_element(f, record_id, record_type) } }
-    doc.css("img").each { |img| safe_process { process_imported_image_element(img, record_id, record_type) } }
-    doc.to_html
+    process_embedded_content(content, record_id, record_type, "import_zip.setting_footer_processing")
   end
 
   def fix_content_sgid_references(content)
@@ -1299,19 +1222,14 @@ class ImportZip
     casted.nil? ? default : casted
   end
 
+  # Export writes "[REDACTED]" in place of credentials; treat it as "keep existing"
+  def redacted_value?(value)
+    value == Export::REDACTED_VALUE
+  end
+
   def detect_content_type(file_path)
     mime_type = `file --brief --mime-type #{file_path.shellescape}`.strip rescue nil
     mime_type.present? && !mime_type.include?("error") ? mime_type : "application/octet-stream"
-  end
-
-  def extract_blob_from_url(url)
-    match = url.match(/\/rails\/active_storage\/(?:blobs|representations)\/redirect\/([^\/]+)/)
-    return nil unless match
-    signed_id = match[1]
-    ActiveStorage::Blob.find_signed(signed_id)
-  rescue => e
-    Rails.event.notify("import_zip.blob_extraction_failed", component: "ImportZip", signed_id: signed_id, error: e.message, level: "error")
-    nil
   end
 
   def safe_join_path(base_path, relative_path)
@@ -1324,7 +1242,7 @@ class ImportZip
   def safe_file_path?(file_path)
     expanded_path = File.expand_path(file_path)
     expanded_import_dir = File.expand_path(@import_dir)
-    expanded_path.start_with?(expanded_import_dir)
+    expanded_path.start_with?(expanded_import_dir + File::SEPARATOR)
   end
 
   def update_attachment_element_with_blob(attachment, blob)

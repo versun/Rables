@@ -123,7 +123,7 @@ class CrosspostTest < ActiveSupport::TestCase
   end
 
   test "accepts oauth1 twitter credentials when enabled" do
-    crosspost = Crosspost.twitter
+    crosspost = Crosspost.for("twitter")
     crosspost.assign_attributes(
       enabled: true,
       api_key: "api-key",
@@ -169,6 +169,33 @@ class CrosspostTest < ActiveSupport::TestCase
     assert_equal 4, Crosspost::PLATFORMS.length
   end
 
+  test "Crosspost.for returns the existing record or creates a new one" do
+    existing = crossposts(:mastodon)
+    assert_equal existing.id, Crosspost.for("mastodon").id
+
+    xiaohongshu = Crosspost.for("xiaohongshu")
+    assert xiaohongshu.persisted?
+    assert_equal "xiaohongshu", xiaohongshu.platform
+    assert_equal xiaohongshu.id, Crosspost.for("xiaohongshu").id
+  end
+
+  test "max_characters must be a positive integer when set" do
+    crosspost = crossposts(:mastodon)
+
+    crosspost.max_characters = 0
+    assert_not crosspost.valid?
+    assert_includes crosspost.errors[:max_characters], "must be greater than 0"
+
+    crosspost.max_characters = -5
+    assert_not crosspost.valid?
+
+    crosspost.max_characters = nil
+    assert crosspost.valid?
+
+    crosspost.max_characters = 100
+    assert crosspost.valid?
+  end
+
   test "PLATFORM_ICONS contains icons for all platforms" do
     assert_equal "fa-brands fa-mastodon", Crosspost::PLATFORM_ICONS["mastodon"]
     assert_equal "fa-brands fa-square-x-twitter", Crosspost::PLATFORM_ICONS["twitter"]
@@ -179,7 +206,7 @@ class CrosspostTest < ActiveSupport::TestCase
   private
 
   def build_crosspost(server_url)
-    crosspost = Crosspost.mastodon
+    crosspost = Crosspost.for("mastodon")
     crosspost.assign_attributes(server_url: server_url, enabled: false)
     crosspost
   end

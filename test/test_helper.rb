@@ -27,6 +27,19 @@ Minitest.after_run do
   end
 end
 
+# Shared fake event notifier for tests asserting on Rails.event notifications.
+class RecordingNotifier
+  attr_reader :events
+
+  def initialize
+    @events = []
+  end
+
+  def notify(name, **payload)
+    @events << [ name, payload ]
+  end
+end
+
 class ActiveSupport::TestCase
   include ActiveJob::TestHelper
 

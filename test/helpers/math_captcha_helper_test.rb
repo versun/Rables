@@ -31,6 +31,7 @@ class MathCaptchaHelperTest < ActionView::TestCase
     assert_includes captcha.keys, :b
     assert_includes captcha.keys, :op
     assert_includes captcha.keys, :question
+    assert_includes captcha.keys, :token
 
     assert_match(/\A\d+ [+-] \d+ =\z/, captcha[:question])
     refute_includes captcha[:question], "?"
@@ -54,5 +55,30 @@ class MathCaptchaHelperTest < ActionView::TestCase
     assert_equal "-", captcha[:op]
     assert_equal "0 - 0 =", captcha[:question]
     assert_equal [ 0..10, 0..0 ], rng.ranges
+  end
+
+  test "challenge token verifies back to the signed challenge" do
+    captcha = math_captcha_challenge(max: 10)
+
+    payload = MathCaptchaHelper.verify_math_captcha(captcha[:token])
+
+    assert_equal({ "a" => captcha[:a], "b" => captcha[:b], "op" => captcha[:op] }, payload)
+  end
+
+  test "verify_math_captcha rejects tampered tokens" do
+    captcha = math_captcha_challenge(max: 10)
+    tampered = "#{captcha[:token]}tampered"
+
+    assert_nil MathCaptchaHelper.verify_math_captcha(tampered)
+    assert_nil MathCaptchaHelper.verify_math_captcha("not-a-real-token")
+    assert_nil MathCaptchaHelper.verify_math_captcha(nil)
+  end
+
+  test "verify_math_captcha rejects expired tokens" do
+    captcha = math_captcha_challenge(max: 10)
+
+    travel(MathCaptchaHelper::MATH_CAPTCHA_TTL + 1.minute) do
+      assert_nil MathCaptchaHelper.verify_math_captcha(captcha[:token])
+    end
   end
 end

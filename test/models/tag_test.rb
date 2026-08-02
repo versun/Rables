@@ -100,6 +100,26 @@ class TagTest < ActiveSupport::TestCase
     assert_equal 2, tags.count
   end
 
+  test "find_or_create_by_names re-queries after a RecordNotUnique race" do
+    existing = Tag.create!(name: "Race Tag")
+
+    Tag.stub(:create!, ->(**) { raise ActiveRecord::RecordNotUnique }) do
+      assert_equal [ existing ], Tag.find_or_create_by_names("Race Tag")
+    end
+  end
+
+  test "renaming a tag touches associated articles" do
+    tag = tags(:ruby)
+    article = create_published_article
+    article.tags << tag
+    article.update_columns(updated_at: 2.days.ago)
+    old_updated_at = article.reload.updated_at
+
+    tag.update!(name: "Ruby Renamed")
+
+    assert article.reload.updated_at > old_updated_at
+  end
+
   test "articles_count should return count of articles" do
     tag = tags(:ruby)
     article1 = create_published_article

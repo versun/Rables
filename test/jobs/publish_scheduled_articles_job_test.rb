@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 
 class PublishScheduledArticlesJobTest < ActiveJob::TestCase
   test "publishes scheduled article when time has passed" do
@@ -82,7 +83,36 @@ class PublishScheduledArticlesJobTest < ActiveJob::TestCase
     end
   end
 
-  test "cancel_old_jobs discards matching scheduled jobs outside test env" do
+  test "skips publishing when scheduled_at is nil" do
+    article = Article.create!(
+      title: "Nil Schedule Time",
+      slug: "nil-schedule-time-#{Time.current.to_i}",
+      status: :draft,
+      content_type: :html,
+      html_content: "<p>Test content</p>"
+    )
+    # Force a stale state: scheduled status without a scheduled_at time
+    article.update_columns(status: Article.statuses[:schedule], scheduled_at: nil)
+
+    notifier = RecordingNotifier.new
+
+    assert_nothing_raised do
+      with_event_notifier(notifier) { PublishScheduledArticlesJob.perform_now(article.id) }
+    end
+
+    article.reload
+    assert article.schedule?
+    assert notifier.events.any? { |name, payload| name == "publish_scheduled_articles_job.skipped" && payload[:reason] == "scheduled_at_missing" }
+  end
+
+  test "cancel_old_jobs is a no-op when the adapter cannot list jobs" do
+    # The test adapter has no mission_control-jobs querying support
+    assert_nothing_raised do
+      PublishScheduledArticlesJob.cancel_old_jobs(123)
+    end
+  end
+
+  test "cancel_old_jobs discards scheduled jobs matching the article id" do
     article_id = 123
 
     fake_job_class = Struct.new(:arguments, :discarded) do
@@ -91,8 +121,9 @@ class PublishScheduledArticlesJobTest < ActiveJob::TestCase
       end
     end
 
-    matching_job = fake_job_class.new([ { "arguments" => [ article_id ] } ], false)
-    other_job = fake_job_class.new([ { "arguments" => [ 999 ] } ], false)
+    # Job proxies expose deserialized positional arguments, e.g. [ 123 ]
+    matching_job = fake_job_class.new([ article_id ], false)
+    other_job = fake_job_class.new([ 999 ], false)
 
     fake_job_set = Class.new do
       def initialize(jobs)
@@ -108,25 +139,28 @@ class PublishScheduledArticlesJobTest < ActiveJob::TestCase
       end
     end.new([ matching_job, other_job ])
 
-    original_env = Rails.env
+    fake_adapter = Object.new
+    def fake_adapter.fetch_jobs(*)
+      []
+    end
 
-    original_jobs_method = ActiveJob::Base.method(:jobs) if ActiveJob::Base.respond_to?(:jobs)
-
-    begin
-      Rails.define_singleton_method(:env) { ActiveSupport::StringInquirer.new("production") }
-      ActiveJob::Base.define_singleton_method(:jobs) { fake_job_set }
-
-      PublishScheduledArticlesJob.cancel_old_jobs(article_id)
-
-      assert_equal true, matching_job.discarded
-      assert_equal false, other_job.discarded
-    ensure
-      Rails.define_singleton_method(:env) { original_env }
-      if original_jobs_method
-        ActiveJob::Base.define_singleton_method(:jobs) { original_jobs_method.call }
-      else
-        ActiveJob::Base.singleton_class.send(:remove_method, :jobs)
+    ActiveJob::Base.stub(:queue_adapter, fake_adapter) do
+      ActiveJob::Base.stub(:jobs, fake_job_set) do
+        PublishScheduledArticlesJob.cancel_old_jobs(article_id)
       end
     end
+
+    assert_equal true, matching_job.discarded
+    assert_equal false, other_job.discarded
+  end
+
+  private
+
+  def with_event_notifier(notifier)
+    original_event = Rails.event
+    Rails.define_singleton_method(:event) { notifier }
+    yield
+  ensure
+    Rails.define_singleton_method(:event) { original_event }
   end
 end

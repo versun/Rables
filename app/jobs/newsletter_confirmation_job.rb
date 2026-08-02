@@ -3,15 +3,17 @@ class NewsletterConfirmationJob < ApplicationJob
   include SmtpConfigurable
   queue_as :default
 
+  RETRIED_ERRORS = [ *TransientNetworkErrors::TRANSIENT_ERRORS, Net::SMTPServerBusy ].freeze
+
+  # 瞬时错误重试耗尽后只在块中记录一次最终失败，避免每次重试都写失败日志
+  retry_on(*RETRIED_ERRORS, wait: :polynomially_longer, attempts: 3) do |job, error|
+    job.log_failure(error)
+  end
+
   def perform(subscriber_id)
     subscriber = Subscriber.find(subscriber_id)
     site_info = CacheableSettings.site_info
     newsletter_setting = NewsletterSetting.instance
-
-    # 配置 ActionMailer 和准备 SMTP 配置
-    if newsletter_setting.enabled? && newsletter_setting.native? && newsletter_setting.configured?
-      configure_action_mailer(newsletter_setting)
-    end
 
     mail = NewsletterMailer.confirmation_email(subscriber, site_info)
 
@@ -30,16 +32,28 @@ class NewsletterConfirmationJob < ApplicationJob
       subscriber_id: subscriber_id,
       error_message: e.message
   rescue => e
+    # retry_on 覆盖的瞬时错误由上面的块统一记录；未覆盖的错误在此记录一次
+    log_failure(e, subscriber: subscriber) unless retried_error?(e)
+    raise
+  end
+
+  def log_failure(error, subscriber: nil)
+    subscriber ||= Subscriber.find_by(id: arguments.first)
     Rails.event.notify "newsletter_confirmation_job.email_failed",
       level: "error",
       component: "NewsletterConfirmationJob",
       subscriber_email: subscriber&.email,
-      subscriber_id: subscriber_id,
-      error_message: e.message
+      subscriber_id: arguments.first,
+      error_message: error.message
     Rails.event.notify "newsletter_confirmation_job.error_backtrace",
       level: "error",
       component: "NewsletterConfirmationJob",
-      backtrace: e.backtrace.join("\n") if e.backtrace
-    raise
+      backtrace: error.backtrace.join("\n") if error.backtrace
+  end
+
+  private
+
+  def retried_error?(error)
+    RETRIED_ERRORS.any? { |klass| error.is_a?(klass) }
   end
 end

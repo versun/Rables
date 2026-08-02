@@ -15,7 +15,7 @@ class TwitterArchivesController < ApplicationController
 
   def show
     @tabs = TABS
-    @active_tab = archive_tab(params[:tab])
+    @active_tab = TABS.key?(params[:tab].to_s) ? params[:tab].to_s : "tweet"
     @last_archive_upload_at = TwitterArchiveImport.last_imported_at
 
     case @active_tab
@@ -32,11 +32,6 @@ class TwitterArchivesController < ApplicationController
 
   def paginate_archive_scope(scope)
     scope.paginate(page: params[:page], per_page: PER_PAGE)
-  end
-
-  def archive_tab(value)
-    normalized = value.to_s
-    TABS.key?(normalized) ? normalized : "tweet"
   end
 
   def safe_archive_url(value)

@@ -9,6 +9,10 @@ class Tag < ApplicationRecord
 
   before_validation :generate_slug
 
+  after_commit :refresh_has_tags_cache, on: %i[create destroy]
+  # Renaming a tag changes what article list fragments render; bust their caches
+  after_update_commit :touch_articles, if: :saved_change_to_name?
+
   scope :alphabetical, -> { order(:name) }
 
   # Find or create tags by comma-separated names
@@ -17,8 +21,12 @@ class Tag < ApplicationRecord
 
     names_string.split(",").map(&:strip).reject(&:blank?).uniq.map do |name|
       # Case-insensitive search to match validation behavior
-      existing = where("LOWER(name) = ?", name.downcase).first
-      existing || create(name: name)
+      begin
+        where("LOWER(name) = ?", name.downcase).first || create!(name: name)
+      rescue ActiveRecord::RecordNotUnique
+        # Lost an insert race; the other process created the tag
+        where("LOWER(name) = ?", name.downcase).first!
+      end
     end
   end
 
@@ -28,6 +36,14 @@ class Tag < ApplicationRecord
   end
 
   private
+
+  def refresh_has_tags_cache
+    CacheableSettings.refresh_has_tags
+  end
+
+  def touch_articles
+    articles.touch_all
+  end
 
   def generate_slug
     return if slug.present? || name.blank?

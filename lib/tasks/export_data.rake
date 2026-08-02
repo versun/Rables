@@ -83,6 +83,10 @@ namespace :export do
     puts "Exported #{Article.count} articles"
   end
 
+  def redact_secret(value)
+    value.present? ? Export::REDACTED_VALUE : value
+  end
+
   def process_article_content(content, article_id, attachments_dir)
     return content if content.blank?
 
@@ -107,8 +111,9 @@ namespace :export do
 
         begin
           if original_url.present?
-            # 如果是相对URL，添加主机前缀
-            full_url = original_url.start_with?("http") ? original_url : "#{Rails.application.config.action_controller.asset_host}#{original_url}"
+            # 如果是相对URL，使用站点 URL 作为前缀（asset_host 通常未配置）
+            base_url = Setting.first&.url.presence || ENV["BASE_URL"].presence || "http://localhost:3000"
+            full_url = original_url.start_with?("http") ? original_url : "#{base_url.chomp('/')}#{original_url}"
 
             # 下载文件
             uri = URI(full_url)
@@ -144,14 +149,14 @@ namespace :export do
         csv << [
           crosspost.id,
           crosspost.platform,
-          crosspost.client_key,
-          crosspost.client_secret,
-          crosspost.api_key,
-          crosspost.api_key_secret,
-          crosspost.access_token,
-          crosspost.access_token_secret,
+          redact_secret(crosspost.client_key),
+          redact_secret(crosspost.client_secret),
+          redact_secret(crosspost.api_key),
+          redact_secret(crosspost.api_key_secret),
+          redact_secret(crosspost.access_token),
+          redact_secret(crosspost.access_token_secret),
           crosspost.username,
-          crosspost.app_password,
+          redact_secret(crosspost.app_password),
           crosspost.enabled,
           crosspost.created_at,
           crosspost.updated_at
@@ -171,7 +176,7 @@ namespace :export do
           listmonk.id,
           listmonk.url,
           listmonk.username,
-          listmonk.api_key,
+          redact_secret(listmonk.api_key),
           listmonk.list_id,
           listmonk.enabled,
           listmonk.created_at,

@@ -6,6 +6,7 @@ module HttpRedirectHandler
   DEFAULT_OPEN_TIMEOUT = 10
   DEFAULT_READ_TIMEOUT = 10
   DEFAULT_WRITE_TIMEOUT = 10
+  MAX_DOWNLOAD_BYTES = 20.megabytes # Cap for downloaded response bodies
 
   # Follow HTTP redirects to fetch content
   # @param uri [URI] The URI to fetch
@@ -13,6 +14,7 @@ module HttpRedirectHandler
   # @return [Net::HTTPResponse] The final response
   def fetch_with_redirect(uri, limit = MAX_REDIRECTS)
     raise "Too many HTTP redirects" if limit == 0
+    validate_fetch_uri!(uri)
 
     http = Net::HTTP.new(uri.host, uri.port)
     http.use_ssl = (uri.scheme == "https")
@@ -32,6 +34,7 @@ module HttpRedirectHandler
       if redirect_uri.relative?
         redirect_uri = URI.join("#{uri.scheme}://#{uri.host}:#{uri.port}", response["location"])
       end
+      validate_redirect_uri!(uri, redirect_uri)
       log_redirect(redirect_uri) if respond_to?(:log_redirect, true)
       fetch_with_redirect(redirect_uri, limit - 1)
     else
@@ -55,10 +58,35 @@ module HttpRedirectHandler
     response = fetch_with_redirect(uri)
 
     return nil unless response.is_a?(Net::HTTPSuccess)
+    return nil if response_too_large?(response)
 
     [ response.body, response["content-type"] || "image/jpeg" ]
   rescue StandardError => e
     log_download_error(e, image_url) if respond_to?(:log_download_error, true)
     nil
+  end
+
+  private
+
+  # Only http(s) URLs may be fetched; redirects must not escape to other
+  # schemes (file://, ftp://, ...) and must not downgrade https to http.
+  def validate_fetch_uri!(uri)
+    scheme = uri.scheme.to_s.downcase
+    raise "Refusing to fetch non-http(s) URL: #{uri}" unless %w[http https].include?(scheme)
+  end
+
+  def validate_redirect_uri!(from_uri, redirect_uri)
+    validate_fetch_uri!(redirect_uri)
+    if from_uri.scheme.to_s.downcase == "https" && redirect_uri.scheme.to_s.downcase == "http"
+      raise "Refusing redirect that downgrades https to http: #{redirect_uri}"
+    end
+  end
+
+  def response_too_large?(response)
+    content_length = response["content-length"]&.to_i
+    return true if content_length.present? && content_length > MAX_DOWNLOAD_BYTES
+    return true if response.body.present? && response.body.bytesize > MAX_DOWNLOAD_BYTES
+
+    false
   end
 end

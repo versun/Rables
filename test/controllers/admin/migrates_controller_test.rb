@@ -37,7 +37,7 @@ class Admin::MigratesControllerTest < ActionDispatch::IntegrationTest
   test "should handle export operation" do
     sign_in(@user)
 
-    assert_enqueued_with(job: ExportDataJob) do
+    assert_enqueued_with(job: ExportDataJob, args: [ "default" ]) do
       post admin_migrates_path, params: { operation_type: "export", export_type: "default" }
     end
 
@@ -48,7 +48,7 @@ class Admin::MigratesControllerTest < ActionDispatch::IntegrationTest
   test "should handle markdown export operation" do
     sign_in(@user)
 
-    assert_enqueued_with(job: ExportMarkdownJob) do
+    assert_enqueued_with(job: ExportDataJob, args: [ "markdown" ]) do
       post admin_migrates_path, params: { operation_type: "export", export_type: "markdown" }
     end
 
@@ -91,6 +91,26 @@ class Admin::MigratesControllerTest < ActionDispatch::IntegrationTest
 
     assert_redirected_to admin_migrates_path(tab: "import")
     assert_match "ZIP Import in progress", flash[:notice]
+  end
+
+  test "cleans up uploaded zip when job enqueue fails" do
+    sign_in(@user)
+
+    file = fixture_file_upload(create_temp_zip_file, "application/zip")
+
+    original = ImportFromZipJob.method(:perform_later)
+    ImportFromZipJob.define_singleton_method(:perform_later) { |*_args| raise StandardError, "queue unavailable" }
+
+    post admin_migrates_path, params: {
+      operation_type: "import",
+      zip_file: file
+    }
+
+    assert_redirected_to admin_migrates_path(tab: "import")
+    assert_match "ZIP import failed", flash[:alert]
+    assert_empty Dir.glob(@uploads_dir.join("*.zip"))
+  ensure
+    ImportFromZipJob.define_singleton_method(:perform_later, original)
   end
 
   test "file basename sanitizes filename for import" do

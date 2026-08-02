@@ -5,18 +5,6 @@ require "stringio"
 require "uri"
 
 class MastodonServiceTest < ActiveSupport::TestCase
-  class RecordingNotifier
-    attr_reader :events
-
-    def initialize
-      @events = []
-    end
-
-    def notify(name, **payload)
-      @events << [ name, payload ]
-    end
-  end
-
   test "verify fails fast when access token is blank" do
     service = MastodonService.new
     result = service.verify({})
@@ -26,7 +14,7 @@ class MastodonServiceTest < ActiveSupport::TestCase
   end
 
   test "post returns nil when crosspost is disabled" do
-    Crosspost.mastodon.update!(enabled: false)
+    Crosspost.for("mastodon").update!(enabled: false)
     service = MastodonService.new
 
     assert_nil service.post(create_published_article)
@@ -54,7 +42,7 @@ class MastodonServiceTest < ActiveSupport::TestCase
   end
 
   test "post includes all mastodon media ids" do
-    Crosspost.mastodon.update!(enabled: true, access_token: "token", server_url: "https://mastodon.social")
+    Crosspost.for("mastodon").update!(enabled: true, access_token: "token", server_url: "https://mastodon.social")
     article = create_published_article
     service = MastodonService.new
 
@@ -76,6 +64,26 @@ class MastodonServiceTest < ActiveSupport::TestCase
       media_ids = pairs.select { |key, _| key == "media_ids[]" }.map(&:last)
       assert_equal %w[media-1 media-2], media_ids
     end
+  end
+
+  test "post re-raises transient network errors for job retry" do
+    Crosspost.for("mastodon").update!(enabled: true, access_token: "token", server_url: "https://mastodon.social")
+    service = MastodonService.new
+    article = create_published_article
+    article.define_singleton_method(:all_image_attachments) { |_limit| [] }
+
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| raise Net::OpenTimeout }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    assert_raises(Net::OpenTimeout) { service.post(article) }
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
 
   test "extracts status id from supported urls" do
@@ -101,6 +109,8 @@ class MastodonServiceTest < ActiveSupport::TestCase
 
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) { |_req| response }
 
     original_new = Net::HTTP.method(:new)
@@ -124,7 +134,7 @@ class MastodonServiceTest < ActiveSupport::TestCase
   end
 
   test "fetch_comments returns parsed replies" do
-    Crosspost.mastodon.update!(enabled: true)
+    Crosspost.for("mastodon").update!(enabled: true)
     service = MastodonService.new
 
     context_data = {
@@ -149,6 +159,8 @@ class MastodonServiceTest < ActiveSupport::TestCase
 
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) { |_req| response }
 
     original_new = Net::HTTP.method(:new)
@@ -164,7 +176,7 @@ class MastodonServiceTest < ActiveSupport::TestCase
   end
 
   test "fetch_comments returns rate limit info on 429" do
-    Crosspost.mastodon.update!(enabled: true)
+    Crosspost.for("mastodon").update!(enabled: true)
     service = MastodonService.new
 
     response = Net::HTTPTooManyRequests.new("1.1", "429", "Too Many Requests")
@@ -176,6 +188,8 @@ class MastodonServiceTest < ActiveSupport::TestCase
 
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) { |_req| response }
 
     original_new = Net::HTTP.method(:new)
@@ -190,7 +204,7 @@ class MastodonServiceTest < ActiveSupport::TestCase
   end
 
   test "post returns url on success" do
-    Crosspost.mastodon.update!(enabled: true)
+    Crosspost.for("mastodon").update!(enabled: true)
     service = MastodonService.new
     article = create_published_article
     article.define_singleton_method(:first_image_attachment) { nil }
@@ -201,6 +215,8 @@ class MastodonServiceTest < ActiveSupport::TestCase
 
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) { |_req| response }
 
     original_new = Net::HTTP.method(:new)
@@ -214,7 +230,7 @@ class MastodonServiceTest < ActiveSupport::TestCase
   end
 
   test "post logs failure on error response" do
-    Crosspost.mastodon.update!(enabled: true)
+    Crosspost.for("mastodon").update!(enabled: true)
     service = MastodonService.new
     article = create_published_article
     article.define_singleton_method(:first_image_attachment) { nil }
@@ -225,6 +241,8 @@ class MastodonServiceTest < ActiveSupport::TestCase
 
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) { |_req| response }
 
     original_new = Net::HTTP.method(:new)
@@ -238,7 +256,7 @@ class MastodonServiceTest < ActiveSupport::TestCase
   end
 
   test "upload_image uploads blob and returns media id" do
-    Crosspost.mastodon.update!(enabled: true)
+    Crosspost.for("mastodon").update!(enabled: true)
     service = MastodonService.new
 
     blob = ActiveStorage::Blob.create_and_upload!(
@@ -253,6 +271,8 @@ class MastodonServiceTest < ActiveSupport::TestCase
 
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) { |_req| response }
 
     original_new = Net::HTTP.method(:new)
@@ -294,19 +314,17 @@ class MastodonServiceTest < ActiveSupport::TestCase
   end
 
   test "upload_image returns nil for unknown attachable type" do
-    Crosspost.mastodon.update!(enabled: true)
+    Crosspost.for("mastodon").update!(enabled: true)
     service = MastodonService.new
 
     assert_nil service.send(:upload_image, Object.new)
   end
 
   test "upload_image handles remote images" do
-    Crosspost.mastodon.update!(enabled: true)
+    Crosspost.for("mastodon").update!(enabled: true)
     service = MastodonService.new
 
-    remote_image = Object.new
-    remote_image.define_singleton_method(:url) { "http://example.com/remote.png" }
-    remote_image.define_singleton_method(:class) { Struct.new(:name).new("ActionText::Attachables::RemoteImage") }
+    remote_image = RemoteImageWrapper.new("http://example.com/remote.png")
 
     response = Net::HTTPSuccess.new("1.1", "200", "OK")
     response.instance_variable_set(:@read, true)
@@ -314,6 +332,8 @@ class MastodonServiceTest < ActiveSupport::TestCase
 
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) { |_req| response }
 
     called = false
@@ -334,8 +354,56 @@ class MastodonServiceTest < ActiveSupport::TestCase
     Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
 
+  test "upload_image re-raises transient network errors for job retry" do
+    Crosspost.for("mastodon").update!(enabled: true, access_token: "token", server_url: "https://mastodon.social")
+    service = MastodonService.new
+
+    blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new("data"),
+      filename: "test.jpg",
+      content_type: "image/jpeg"
+    )
+
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| raise Net::OpenTimeout }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    assert_raises(Net::OpenTimeout) { service.send(:upload_image, blob) }
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
+  end
+
+  test "upload_image returns nil on permanent errors" do
+    Crosspost.for("mastodon").update!(enabled: true, access_token: "token", server_url: "https://mastodon.social")
+    service = MastodonService.new
+
+    blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new("data"),
+      filename: "test.jpg",
+      content_type: "image/jpeg"
+    )
+
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| raise "boom" }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    assert_nil service.send(:upload_image, blob)
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
+  end
+
   test "fetch_comments returns empty on error response" do
-    Crosspost.mastodon.update!(enabled: true, server_url: "https://mastodon.social", access_token: "token")
+    Crosspost.for("mastodon").update!(enabled: true, server_url: "https://mastodon.social", access_token: "token")
     service = MastodonService.new
 
     response = Net::HTTPInternalServerError.new("1.1", "500", "Error")
@@ -347,6 +415,8 @@ class MastodonServiceTest < ActiveSupport::TestCase
 
     fake_http = Object.new
     fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
     fake_http.define_singleton_method(:request) { |_req| response }
 
     original_new = Net::HTTP.method(:new)
@@ -366,6 +436,121 @@ class MastodonServiceTest < ActiveSupport::TestCase
     result = service.send(:log_rate_limit_status, { remaining: 20, limit: 300, reset_at: Time.current + 5.minutes })
 
     assert_nil result
+  end
+
+  test "post sets network timeouts on the http connection" do
+    Crosspost.for("mastodon").update!(enabled: true, access_token: "token", server_url: "https://mastodon.social")
+    service = MastodonService.new
+    article = create_published_article
+    article.define_singleton_method(:all_image_attachments) { |_limit| [] }
+
+    response = Net::HTTPSuccess.new("1.1", "200", "OK")
+    response.instance_variable_set(:@read, true)
+    response.instance_variable_set(:@body, { url: "https://mastodon.social/@user/1" }.to_json)
+
+    timeouts = {}
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |val| timeouts[:open] = val }
+    fake_http.define_singleton_method(:read_timeout=) { |val| timeouts[:read] = val }
+    fake_http.define_singleton_method(:request) { |_req| response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    service.post(article)
+
+    assert_equal MastodonService::HTTP_OPEN_TIMEOUT, timeouts[:open]
+    assert_equal MastodonService::HTTP_READ_TIMEOUT, timeouts[:read]
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
+  end
+
+  test "upload_image escapes quotes and newlines in multipart filename" do
+    Crosspost.for("mastodon").update!(enabled: true, access_token: "token", server_url: "https://mastodon.social")
+    service = MastodonService.new
+
+    blob = ActiveStorage::Blob.create_and_upload!(
+      io: StringIO.new("data"),
+      filename: "test.jpg",
+      content_type: "image/jpeg"
+    )
+    # ActiveStorage sanitizes blob filenames, so force a hostile raw name
+    blob.define_singleton_method(:filename) { "evil\"\r\nInjected: yes.jpg" }
+
+    response = Net::HTTPSuccess.new("1.1", "200", "OK")
+    response.instance_variable_set(:@read, true)
+    response.instance_variable_set(:@body, { id: "media123" }.to_json)
+
+    captured_request = nil
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |req| captured_request = req; response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    service.send(:upload_image, blob)
+
+    assert_includes captured_request.body, 'filename="evil\"Injected: yes.jpg"'
+    refute_includes captured_request.body, "\r\nInjected"
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
+  end
+
+  test "fetch_comments skips malformed replies and non-http urls" do
+    Crosspost.for("mastodon").update!(enabled: true, access_token: "token", server_url: "https://mastodon.social")
+    service = MastodonService.new
+
+    account = { "display_name" => "Alice", "username" => "alice", "acct" => "alice", "avatar" => "http://example.com/a.png" }
+    context_data = {
+      "descendants" => [
+        {
+          "id" => "ok",
+          "account" => account,
+          "content" => "<p>Hi</p>",
+          "created_at" => Time.current.iso8601,
+          "url" => "https://mastodon.social/@alice/1",
+          "in_reply_to_id" => "123"
+        },
+        {
+          "id" => "bad-url",
+          "account" => account,
+          "content" => "<p>xss</p>",
+          "created_at" => Time.current.iso8601,
+          "url" => "javascript:alert(1)"
+        },
+        {
+          "id" => "bad-time",
+          "account" => account,
+          "content" => "<p>no timestamp</p>",
+          "created_at" => nil,
+          "url" => "https://mastodon.social/@alice/2"
+        }
+      ]
+    }
+
+    response = Net::HTTPSuccess.new("1.1", "200", "OK")
+    response.instance_variable_set(:@read, true)
+    response.instance_variable_set(:@body, context_data.to_json)
+
+    fake_http = Object.new
+    fake_http.define_singleton_method(:use_ssl=) { |_val| }
+    fake_http.define_singleton_method(:open_timeout=) { |_val| }
+    fake_http.define_singleton_method(:read_timeout=) { |_val| }
+    fake_http.define_singleton_method(:request) { |_req| response }
+
+    original_new = Net::HTTP.method(:new)
+    Net::HTTP.define_singleton_method(:new) { |_host, *_args| fake_http }
+
+    result = service.fetch_comments("https://mastodon.social/@user/123")
+
+    assert_equal 1, result[:comments].length
+    assert_equal "ok", result[:comments].first[:external_id]
+  ensure
+    Net::HTTP.define_singleton_method(:new, original_new) if original_new
   end
 
   private

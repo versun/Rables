@@ -8,11 +8,15 @@ class PublishScheduledArticlesJob < ApplicationJob
       component: "PublishScheduledArticlesJob",
       article_id: article_id
 
-    # Skip job cancellation in test environment where ActiveJob::Base.jobs is not available
-    return if Rails.env.test?
+    # Only adapters with mission_control-jobs querying support (e.g. solid_queue)
+    # can list scheduled jobs; other adapters (like the test adapter) have
+    # nothing queryable to cancel.
+    return unless ActiveJob::Base.queue_adapter.respond_to?(:fetch_jobs)
 
     ActiveJob::Base.jobs.scheduled.where(job_class_name: "PublishScheduledArticlesJob").each do |job|
-      if job.arguments[0]["arguments"] == [ article_id ]
+      # ActiveJob::Base.jobs yields deserialized job proxies, so arguments is
+      # the plain positional arguments array, e.g. [ article_id ].
+      if job.arguments == [ article_id ]
         Rails.event.notify "publish_scheduled_articles_job.cancelling_old_job",
           level: "info",
           component: "PublishScheduledArticlesJob",
@@ -24,6 +28,18 @@ class PublishScheduledArticlesJob < ApplicationJob
 
   def perform(article_id)
     article = Article.find(article_id)
+
+    # Skip stale jobs whose article is no longer awaiting scheduled
+    # publication; publish_scheduled would otherwise compare nil <= Time.
+    if article.scheduled_at.nil?
+      Rails.event.notify "publish_scheduled_articles_job.skipped",
+        level: "info",
+        component: "PublishScheduledArticlesJob",
+        article_id: article_id,
+        reason: "scheduled_at_missing"
+      return
+    end
+
     Rails.event.notify "publish_scheduled_articles_job.publishing",
       level: "info",
       component: "PublishScheduledArticlesJob",
@@ -54,12 +70,4 @@ class PublishScheduledArticlesJob < ApplicationJob
       article_id: article.id,
       scheduled_time: scheduled_time
   end
-
-  # private
-
-  # def self.scheduled_job_for(article)
-  #   ActiveJob::Base.queue_adapter.enqueued_jobs.find do |job|
-  #     job[:job] == self && job[:args].first == article.id
-  #   end
-  # end
 end

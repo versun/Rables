@@ -1,16 +1,17 @@
 import { Controller } from "@hotwired/stimulus"
 
+// UX-only validator for the server-rendered math challenge. The authoritative
+// check happens server-side against the HMAC-signed captcha[token] field, so
+// this controller never generates a challenge itself.
 export default class extends Controller {
   static targets = ["container", "question", "a", "b", "op", "answer", "message"]
   static values = { max: { type: Number, default: 10 } }
 
   connect() {
-    this.generated = false
     this.hide()
   }
 
   show() {
-    if (!this.generated) this.generate()
     this.containerTarget.style.display = "block"
     this.answerTarget.required = true
     this.updateSubmitDisabled(!this.isValid())
@@ -20,32 +21,6 @@ export default class extends Controller {
     if (this.hasContainerTarget) this.containerTarget.style.display = "none"
     if (this.hasAnswerTarget) this.answerTarget.required = false
     this.clearMessage()
-  }
-
-  generate() {
-    const max = Number.isFinite(this.maxValue) ? this.maxValue : 10
-    const useAddition = Math.random() < 0.5
-
-    let a, b, op
-    if (useAddition) {
-      a = this.randomInt(0, max)
-      b = this.randomInt(0, Math.max(0, max - a))
-      op = "+"
-    } else {
-      a = this.randomInt(0, max)
-      b = this.randomInt(0, a)
-      op = "-"
-    }
-
-    this.aTarget.value = String(a)
-    this.bTarget.value = String(b)
-    this.opTarget.value = op
-    this.questionTarget.textContent = `${a} ${op} ${b} =`
-    this.answerTarget.value = ""
-    this.clearMessage()
-    this.updateSubmitDisabled(true)
-
-    this.generated = true
   }
 
   validate() {
@@ -112,11 +87,5 @@ export default class extends Controller {
     form.querySelectorAll("input[type='submit'], button[type='submit']").forEach((el) => {
       el.disabled = !!disabled
     })
-  }
-
-  randomInt(min, max) {
-    const lo = Math.ceil(min)
-    const hi = Math.floor(max)
-    return Math.floor(Math.random() * (hi - lo + 1)) + lo
   }
 }

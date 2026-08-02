@@ -128,32 +128,12 @@ class TwitterArchivesControllerTest < ActionDispatch::IntegrationTest
     assert_no_match(/Archive tweet 21 only/, response.body)
   end
 
-  test "show keeps likes public while hiding follower and following tabs" do
-    TwitterArchiveConnection.create!(
-      account_id: "900",
-      relationship_type: "follower",
-      user_link: "https://twitter.com/follower_one",
-      screen_name: "follower_handle"
-    )
-    TwitterArchiveConnection.create!(
-      account_id: "901",
-      relationship_type: "following",
-      user_link: "https://twitter.com/intent/user?user_id=901"
-    )
+  test "show keeps likes public" do
     TwitterArchiveLike.create!(
       tweet_id: "777",
       full_text: "Liked tweet text",
       expanded_url: "https://twitter.com/someone/status/777"
     )
-
-    get twitter_archive_path
-
-    assert_response :success
-    assert_select "a", text: "Followers", count: 0
-    assert_select "a", text: "Following", count: 0
-    assert_select "ul.twitter-archive-connection-list", false
-    assert_no_match(/@follower_handle\b/, response.body)
-    assert_no_match(/Account ID: 901/, response.body)
 
     get twitter_archive_path(tab: "like")
 

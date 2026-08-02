@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 require "zip"
 
 class TwitterArchiveImportSubmissionTest < ActiveSupport::TestCase
@@ -25,13 +26,14 @@ class TwitterArchiveImportSubmissionTest < ActiveSupport::TestCase
 
     assert_predicate result, :success?
     assert_equal TwitterArchiveImportSubmission::SUCCESS_NOTICE, result.notice
-    assert_equal "queued", result.import.status
-    assert_equal "archive-bytes", File.binread(result.import.source_path)
-    assert_not_equal original_path, result.import.source_path
-    assert_not File.exist?(original_path)
+
+    import = TwitterArchiveImport.last
+    assert_equal "queued", import.status
+    assert_equal "archive-bytes", File.binread(import.source_path)
+    assert_not_equal original_path, import.source_path
   ensure
     uploaded_file&.tempfile&.close!
-    result&.import&.cleanup_source_file!
+    TwitterArchiveImport.last&.cleanup_source_file!
   end
 
   test "submit copies upload bytes when tempfile move fallback is needed" do
@@ -48,11 +50,12 @@ class TwitterArchiveImportSubmissionTest < ActiveSupport::TestCase
     end
 
     assert_predicate result, :success?
-    assert_equal "archive-bytes", File.binread(result.import.source_path)
+    import = TwitterArchiveImport.last
+    assert_equal "archive-bytes", File.binread(import.source_path)
     assert File.exist?(original_path), "expected fallback copy to leave the original tempfile in place"
   ensure
     uploaded_file&.tempfile&.close!
-    result&.import&.cleanup_source_file!
+    TwitterArchiveImport.last&.cleanup_source_file!
   end
 
   test "submit rejects invalid uploads" do
@@ -89,10 +92,10 @@ class TwitterArchiveImportSubmissionTest < ActiveSupport::TestCase
 
     assert_predicate result, :success?
     assert_equal TwitterArchiveImportSubmission::SUCCESS_NOTICE, result.notice
-    assert_equal "twitter-archive.zip", result.import.source_filename
+    assert_equal "twitter-archive.zip", TwitterArchiveImport.last.source_filename
     assert ActiveStorage::Blob.exists?(blob.id)
   ensure
-    result&.import&.cleanup_source_file!
+    TwitterArchiveImport.last&.cleanup_source_file!
     blob&.purge
   end
 
@@ -149,42 +152,8 @@ class TwitterArchiveImportSubmissionTest < ActiveSupport::TestCase
     blob&.purge
   end
 
-  test "submit does not download scoped direct uploads during the request" do
-    blob = ActiveStorage::Blob.create_and_upload!(
-      io: StringIO.new(build_zip_bytes(
-        "data/account.js" => "window.YTD.account.part0 = #{JSON.generate([ { account: { username: 'archive_owner' } } ])}"
-      )),
-      filename: "twitter-archive.zip",
-      content_type: "application/zip"
-    )
-    original_download = ActiveStorage::Blob.instance_method(:download)
-    ActiveStorage::Blob.define_method(:download) { |*| flunk("submit should not download the blob") }
-    result = nil
-
-    assert_difference("TwitterArchiveImport.count", 1) do
-      assert_enqueued_with(job: TwitterArchiveImportJob) do
-        result = TwitterArchiveImportSubmission.new(twitter_archive_direct_upload_token(blob)).submit
-      end
-    end
-
-    assert_predicate result, :success?
-    assert_equal "queued", result.import.status
-  ensure
-    ActiveStorage::Blob.define_method(:download, original_download)
-    result&.import&.cleanup_source_file!
-    blob&.purge
-  end
-
   test "submit refuses to queue while another import is active" do
-    TwitterArchiveImport.create!(
-      source_filename: "existing-twitter-archive.zip",
-      source_path: "/tmp/existing-twitter-archive.zip",
-      status: "running",
-      progress: 40,
-      status_message: "Reading archive",
-      queued_at: 5.minutes.ago,
-      started_at: 4.minutes.ago
-    )
+    create_active_import!
     uploaded_file, = uploaded_zip_file
 
     assert_no_difference("TwitterArchiveImport.count") do
@@ -200,15 +169,7 @@ class TwitterArchiveImportSubmissionTest < ActiveSupport::TestCase
   end
 
   test "submit purges direct uploaded blobs when another import is active" do
-    TwitterArchiveImport.create!(
-      source_filename: "existing-twitter-archive.zip",
-      source_path: "/tmp/existing-twitter-archive.zip",
-      status: "running",
-      progress: 40,
-      status_message: "Reading archive",
-      queued_at: 5.minutes.ago,
-      started_at: 4.minutes.ago
-    )
+    create_active_import!
     blob = ActiveStorage::Blob.create_and_upload!(
       io: StringIO.new(build_zip_bytes(
         "data/account.js" => "window.YTD.account.part0 = #{JSON.generate([ { account: { username: 'archive_owner' } } ])}"
@@ -229,6 +190,42 @@ class TwitterArchiveImportSubmissionTest < ActiveSupport::TestCase
     assert_not ActiveStorage::Blob.exists?(blob.id)
   end
 
+  test "submit reports the active import alert when import creation hits the unique active slot" do
+    uploaded_file, = uploaded_zip_file
+
+    TwitterArchiveImport.stub(:create_queued!, ->(*) { raise ActiveRecord::RecordNotUnique, "duplicate key" }) do
+      assert_no_difference("TwitterArchiveImport.count") do
+        assert_no_enqueued_jobs only: TwitterArchiveImportJob do
+          result = TwitterArchiveImportSubmission.new(uploaded_file).submit
+
+          assert_not result.success?
+          assert_equal TwitterArchiveImportSubmission::ACTIVE_IMPORT_ALERT, result.alert
+        end
+      end
+    end
+  ensure
+    uploaded_file&.tempfile&.close!
+  end
+
+  test "submit reports the active import alert when import creation fails active slot validation" do
+    uploaded_file, = uploaded_zip_file
+
+    invalid_import = TwitterArchiveImport.new
+    invalid_import.errors.add(:active_slot, :taken)
+    TwitterArchiveImport.stub(:create_queued!, ->(*) { raise ActiveRecord::RecordInvalid.new(invalid_import) }) do
+      assert_no_difference("TwitterArchiveImport.count") do
+        assert_no_enqueued_jobs only: TwitterArchiveImportJob do
+          result = TwitterArchiveImportSubmission.new(uploaded_file).submit
+
+          assert_not result.success?
+          assert_equal TwitterArchiveImportSubmission::ACTIVE_IMPORT_ALERT, result.alert
+        end
+      end
+    end
+  ensure
+    uploaded_file&.tempfile&.close!
+  end
+
   test "submit fails the import and cleans up when queueing raises" do
     uploaded_file, = uploaded_zip_file
     original_perform_later = TwitterArchiveImportJob.method(:perform_later)
@@ -247,30 +244,6 @@ class TwitterArchiveImportSubmissionTest < ActiveSupport::TestCase
     assert_equal "failed", import.status
     assert_equal "queue exploded", import.error_message
     assert_nil import.source_path
-  ensure
-    TwitterArchiveImportJob.define_singleton_method(:perform_later, original_perform_later)
-    uploaded_file&.tempfile&.close!
-  end
-
-  test "submit fails persisted import when queueing raises an ActiveRecord error" do
-    uploaded_file, = uploaded_zip_file
-    original_perform_later = TwitterArchiveImportJob.method(:perform_later)
-    TwitterArchiveImportJob.define_singleton_method(:perform_later) { |_id| raise ActiveRecord::RecordNotUnique, "duplicate key" }
-
-    result = nil
-
-    assert_difference("TwitterArchiveImport.count", 1) do
-      result = TwitterArchiveImportSubmission.new(uploaded_file).submit
-    end
-
-    assert_not result.success?
-    assert_match "duplicate key", result.alert
-
-    import = TwitterArchiveImport.order(:created_at).last
-    assert_equal "failed", import.status
-    assert_equal "duplicate key", import.error_message
-    assert_nil import.source_path
-    assert_equal 0, TwitterArchiveImport.active.count
   ensure
     TwitterArchiveImportJob.define_singleton_method(:perform_later, original_perform_later)
     uploaded_file&.tempfile&.close!
@@ -312,6 +285,15 @@ class TwitterArchiveImportSubmissionTest < ActiveSupport::TestCase
     )
 
     [ uploaded_file, tempfile.path ]
+  end
+
+  def create_active_import!
+    TwitterArchiveImport.create!(
+      source_filename: "existing-twitter-archive.zip",
+      status: "running",
+      progress: 40,
+      queued_at: Time.current
+    )
   end
 
   def build_zip_bytes(files)

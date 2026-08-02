@@ -12,6 +12,13 @@ class SetupController < ApplicationController
 
   def create
     ActiveRecord::Base.transaction do
+      # Re-check inside the transaction to shrink the TOCTOU window
+      # (fresh query: the cached setup_incomplete? may hold a stale value)
+      unless Setting.setup_incomplete_fresh?
+        redirect_to admin_root_path, notice: "Setup has already been completed."
+        raise ActiveRecord::Rollback
+      end
+
       # Create admin user
       @user = User.new(user_params)
       unless @user.save

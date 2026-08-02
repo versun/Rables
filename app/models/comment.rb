@@ -18,6 +18,7 @@ class Comment < ApplicationRecord
 
   # Optional URL validation for native comments
   validates :author_url, format: { with: URI::DEFAULT_PARSER.make_regexp(%w[http https]), message: "must be a valid URL" }, allow_blank: true
+  validates :url, format: { with: URI::DEFAULT_PARSER.make_regexp(%w[http https]), message: "must be a valid URL" }, allow_blank: true
   validates :author_email, format: { with: URI::MailTo::EMAIL_REGEXP, message: "must be a valid email" }, allow_blank: true
 
   # Validate that parent comment belongs to the same commentable
@@ -37,11 +38,42 @@ class Comment < ApplicationRecord
 
   after_commit :enqueue_reply_notification, on: [ :create, :update ]
 
+  # Creates or updates an external platform comment for the given commentable.
+  # Returns [ comment, result ] where result is :created, :updated or :unchanged.
+  def self.upsert_from_external(commentable, platform, comment_data, status: nil)
+    comment = commentable.comments.find_or_initialize_by(
+      platform: platform,
+      external_id: comment_data[:external_id]
+    )
+
+    attributes = {
+      author_name: comment_data[:author_name],
+      author_username: comment_data[:author_username],
+      author_avatar_url: comment_data[:author_avatar_url],
+      content: comment_data[:content],
+      published_at: comment_data[:published_at],
+      url: comment_data[:url]
+    }
+    # Only apply the requested status to new comments so re-fetching does not
+    # overwrite a moderation decision already made in the admin.
+    attributes[:status] = status if status && comment.new_record?
+    comment.assign_attributes(attributes)
+
+    result = :unchanged
+    if comment.new_record?
+      comment.save!
+      result = :created
+    elsif comment.changed?
+      comment.save!
+      result = :updated
+    end
+
+    [ comment, result ]
+  end
+
   def display_commentable
     commentable || parent&.commentable || article
   end
-
-  # Trigger static generation when comment is created, updated, or status changes
 
   private
 

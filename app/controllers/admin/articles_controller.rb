@@ -1,5 +1,7 @@
 class Admin::ArticlesController < Admin::BaseController
   before_action :set_article, only: [ :show, :edit, :update, :destroy, :publish, :unpublish, :fetch_comments ]
+  # Also runs for create/update so the form re-rendered after a validation failure has the same data
+  before_action :set_form_options, only: [ :new, :edit, :create, :update ]
 
   def index
     @scope = Article.all
@@ -34,7 +36,6 @@ class Admin::ArticlesController < Admin::BaseController
         else
           format.html { redirect_to admin_articles_path, notice: "Article was successfully created." }
         end
-        format.json { render :show, status: :created, location: @article }
       else
         ActivityLog.log!(
           action: :failed,
@@ -44,7 +45,7 @@ class Admin::ArticlesController < Admin::BaseController
           slug: @article.slug,
           errors: @article.errors.full_messages.join(", ")
         )
-        format.html { render :new }
+        format.html { render :new, status: :unprocessable_entity }
         format.json { render json: @article.errors, status: :unprocessable_entity }
       end
     end
@@ -61,7 +62,6 @@ class Admin::ArticlesController < Admin::BaseController
           slug: @article.slug
         )
         format.html { redirect_to admin_articles_path, notice: "Article was successfully updated." }
-        format.json { render :show, status: :ok, location: @article }
       else
         ActivityLog.log!(
           action: :failed,
@@ -71,7 +71,7 @@ class Admin::ArticlesController < Admin::BaseController
           slug: @article.slug,
           errors: @article.errors.full_messages.join(", ")
         )
-        format.html { render :edit }
+        format.html { render :edit, status: :unprocessable_entity }
         format.json { render json: @article.errors, status: :unprocessable_entity }
       end
     end
@@ -80,15 +80,32 @@ class Admin::ArticlesController < Admin::BaseController
   def destroy
     article_title = @article.title
     if @article.status != "trash"
-      @article.update(status: "trash")
-      ActivityLog.log!(
-        action: :trashed,
-        target: :article,
-        level: :info,
-        title: article_title,
-        slug: @article.slug
-      )
-      notice_message = "Article was successfully moved to trash."
+      if @article.update(status: "trash")
+        ActivityLog.log!(
+          action: :trashed,
+          target: :article,
+          level: :info,
+          title: article_title,
+          slug: @article.slug
+        )
+        respond_to do |format|
+          format.html { redirect_to admin_articles_path, status: :see_other, notice: "Article was successfully moved to trash." }
+          format.json { head :no_content }
+        end
+      else
+        ActivityLog.log!(
+          action: :failed,
+          target: :article,
+          level: :error,
+          title: article_title,
+          slug: @article.slug,
+          errors: @article.errors.full_messages.join(", ")
+        )
+        respond_to do |format|
+          format.html { redirect_to admin_articles_path, status: :see_other, alert: "Failed to move article to trash." }
+          format.json { head :unprocessable_entity }
+        end
+      end
     else
       @article.destroy!
       ActivityLog.log!(
@@ -98,12 +115,10 @@ class Admin::ArticlesController < Admin::BaseController
         title: article_title,
         slug: @article.slug
       )
-      notice_message = "Article was successfully deleted."
-    end
-
-    respond_to do |format|
-      format.html { redirect_to admin_articles_path, status: :see_other, notice: notice_message }
-      format.json { head :no_content }
+      respond_to do |format|
+        format.html { redirect_to admin_articles_path, status: :see_other, notice: "Article was successfully deleted." }
+        format.json { head :no_content }
+      end
     end
   end
 
@@ -184,19 +199,19 @@ class Admin::ArticlesController < Admin::BaseController
     count = 0
     errors = []
 
+    # Create or find the tags once instead of per article
+    new_tags = Tag.find_or_create_by_names(tag_names).compact
+
+    if new_tags.empty?
+      redirect_to admin_articles_path, alert: "无法创建标签，请检查标签名称。"
+      return
+    end
+
     ids.each do |id|
       article = Article.find_by(slug: id)
       next unless article
 
       begin
-        # 创建或查找新标签
-        new_tags = Tag.find_or_create_by_names(tag_names).compact
-
-        if new_tags.empty?
-          errors << "#{article.title || article.slug || 'Unknown'}: 无法创建标签"
-          next
-        end
-
         # 获取现有标签的ID
         existing_tag_ids = article.tags.pluck(:id)
 
@@ -254,6 +269,11 @@ class Admin::ArticlesController < Admin::BaseController
     count = 0
     errors = []
 
+    # Look up platform configs once instead of per article
+    enabled_platforms = platforms.select do |platform|
+      Crosspost.find_by(platform: platform)&.enabled?
+    end
+
     ids.each do |id|
       article = Article.find_by(slug: id)
       next unless article
@@ -264,12 +284,8 @@ class Admin::ArticlesController < Admin::BaseController
 
       begin
         jobs_queued = false
-        platforms.each do |platform|
-          # 检查平台是否启用
-          crosspost = Crosspost.find_by(platform: platform)
-          next unless crosspost&.enabled?
-
-          CrosspostArticleJob.perform_later(article.id, platform)
+        enabled_platforms.each do |platform|
+          CrosspostArticleJob.perform_later(article.id, platform, Time.current)
           jobs_queued = true
         end
         count += 1 if jobs_queued
@@ -312,6 +328,10 @@ class Admin::ArticlesController < Admin::BaseController
     count = 0
     errors = []
 
+    # Load newsletter config once instead of per article
+    newsletter_setting = NewsletterSetting.instance
+    newsletter_ready = newsletter_setting.enabled? && newsletter_setting.configured?
+
     ids.each do |id|
       article = Article.find_by(slug: id)
       next unless article
@@ -321,9 +341,7 @@ class Admin::ArticlesController < Admin::BaseController
       end
 
       begin
-        # 检查newsletter配置
-        newsletter_setting = NewsletterSetting.instance
-        if newsletter_setting.enabled? && newsletter_setting.configured?
+        if newsletter_ready
           if newsletter_setting.native?
             NativeNewsletterSenderJob.perform_later(article.id)
           elsif newsletter_setting.listmonk?
@@ -377,8 +395,11 @@ class Admin::ArticlesController < Admin::BaseController
 
       begin
         if article.status != "trash"
-          article.update(status: "trash")
-          trashed_count += 1
+          if article.update(status: "trash")
+            trashed_count += 1
+          else
+            errors << "#{article.title || article.slug || 'Unknown'}: #{article.errors.full_messages.join(', ')}"
+          end
         else
           article.destroy!
           deleted_count += 1
@@ -457,27 +478,8 @@ class Admin::ArticlesController < Admin::BaseController
           # Skip comments without content (required field)
           next if comment_data[:content].blank?
 
-          comment = @article.comments.find_or_initialize_by(
-            platform: post.platform,
-            external_id: comment_data[:external_id]
-          )
-
-          comment.assign_attributes(
-            author_name: comment_data[:author_name],
-            author_username: comment_data[:author_username],
-            author_avatar_url: comment_data[:author_avatar_url],
-            content: comment_data[:content],
-            published_at: comment_data[:published_at],
-            url: comment_data[:url],
-            status: :approved  # Auto-approve external comments
-          )
-
-          if comment.new_record?
-            comment.save!
-            platform_count += 1
-          elsif comment.changed?
-            comment.save!
-          end
+          comment, result = Comment.upsert_from_external(@article, post.platform, comment_data, status: :approved)
+          platform_count += 1 if result == :created
 
           # Store mapping for parent lookup
           external_id_to_comment[comment_data[:external_id]] = comment
@@ -490,7 +492,9 @@ class Admin::ArticlesController < Admin::BaseController
           next unless comment_data[:parent_external_id]
 
           comment = external_id_to_comment[comment_data[:external_id]]
-          parent_comment = external_id_to_comment[comment_data[:parent_external_id]]
+          # Fall back to the database so replies can attach to parents imported in earlier batches
+          parent_comment = external_id_to_comment[comment_data[:parent_external_id]] ||
+            @article.comments.find_by(platform: post.platform, external_id: comment_data[:parent_external_id])
 
           # Only set parent if both comment and parent exist and are from the same platform
           if comment && parent_comment && comment.platform == parent_comment.platform
@@ -559,8 +563,16 @@ class Admin::ArticlesController < Admin::BaseController
     @article = Article.find_by!(slug: params[:id])
   end
 
+  def set_form_options
+    @newsletter_enabled = NewsletterSetting.instance.enabled?
+    @mastodon_enabled = Crosspost.find_by(platform: "mastodon")&.enabled?
+    @twitter_enabled = Crosspost.find_by(platform: "twitter")&.enabled?
+    @bluesky_enabled = Crosspost.find_by(platform: "bluesky")&.enabled?
+    @xiaohongshu_enabled = Crosspost.find_by(platform: "xiaohongshu")&.enabled?
+  end
+
   def article_params
-    permitted = params.require(:article).permit(:title, :content, :excerpt, :slug, :status, :published_at, :meta_title, :meta_description, :meta_image, :tags, :description, :created_at, :scheduled_at, :send_newsletter, :crosspost_mastodon, :crosspost_twitter, :crosspost_bluesky, :crosspost_xiaohongshu, :tag_list, :comment, :content_type, :html_content, :source_url, :source_author, :source_content, social_media_posts_attributes: [ :id, :platform, :url, :_destroy ])
+    permitted = params.require(:article).permit(:title, :content, :excerpt, :slug, :status, :published_at, :meta_title, :meta_description, :meta_image, :description, :created_at, :scheduled_at, :send_newsletter, :crosspost_mastodon, :crosspost_twitter, :crosspost_bluesky, :crosspost_xiaohongshu, :tag_list, :comment, :content_type, :html_content, :source_url, :source_author, :source_content, social_media_posts_attributes: [ :id, :platform, :url, :_destroy ])
     permitted[:created_at] = Time.current if permitted[:created_at].blank?
     permitted
   end

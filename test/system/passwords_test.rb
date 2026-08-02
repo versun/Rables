@@ -17,9 +17,8 @@ class PasswordsTest < ApplicationSystemTestCase
     assert_text "Password reset instructions sent"
   end
 
-  test "updating password when signed in" do
-    sign_in(@user)
-    visit edit_password_path(@user.id)
+  test "updating password with valid reset token" do
+    visit edit_password_path(@user.password_reset_token)
 
     fill_in "password", with: "newpassword123"
     fill_in "password_confirmation", with: "newpassword123"
@@ -30,8 +29,7 @@ class PasswordsTest < ApplicationSystemTestCase
   end
 
   test "password mismatch shows error" do
-    sign_in(@user)
-    visit edit_password_path(@user.id)
+    visit edit_password_path(@user.password_reset_token)
 
     fill_in "password", with: "newpassword123"
     fill_in "password_confirmation", with: "mismatch"

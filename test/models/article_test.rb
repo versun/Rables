@@ -37,6 +37,45 @@ class ArticleTest < ActiveSupport::TestCase
     assert_not @article.slug.include?(".")
   end
 
+  test "should generate slug from Chinese title" do
+    @article.title = "你好世界"
+    @article.valid?
+    assert_equal "你好世界", @article.slug
+    assert @article.save
+  end
+
+  test "should generate unique slug for duplicate Chinese titles" do
+    Article.create!(title: "你好世界", status: :draft, content_type: :html, html_content: "<p>Content</p>")
+    @article.title = "你好世界"
+    @article.valid?
+    assert_equal "你好世界-1", @article.slug
+  end
+
+  test "should reject reserved slugs that collide with top-level routes" do
+    %w[admin tags pages users session setup confirm unsubscribe static up rails twitter subscriptions].each do |reserved|
+      @article.slug = reserved
+      assert_not @article.valid?, "expected slug #{reserved.inspect} to be rejected"
+      assert_includes @article.errors[:slug], "is reserved"
+    end
+  end
+
+  test "search_content escapes LIKE wildcards" do
+    percent_article = Article.create!(
+      title: "100% Coverage",
+      status: :draft,
+      content_type: :html,
+      html_content: "<p>Content</p>"
+    )
+
+    results = Article.search_content("100%")
+    assert_includes results, percent_article
+
+    # A bare "%" searches for a literal percent sign instead of matching everything
+    literal_results = Article.search_content("%")
+    assert_includes literal_results, percent_article
+    assert_not_includes literal_results, articles(:draft_article)
+  end
+
   test "should require slug to be unique" do
     existing_article = articles(:published_article)
     @article.slug = existing_article.slug
@@ -358,7 +397,7 @@ class ArticleTest < ActiveSupport::TestCase
     result = remote_article.first_image_attachment
     assert result.is_a?(RemoteImageWrapper), "Expected RemoteImageWrapper but got #{result.class}"
     assert_equal "https://example.com/external-image.jpg", result.url
-    assert_equal "ActionText::Attachables::RemoteImage", result.class.name
+    assert_equal "RemoteImageWrapper", result.class.name
 
     # SEO meta image should return the remote URL
     assert_equal "https://example.com/external-image.jpg", remote_article.seo_meta_image
@@ -403,12 +442,7 @@ class ArticleTest < ActiveSupport::TestCase
     assert_nil no_image_article.seo_meta_image
   end
 
-  test "handles scheduling helpers, crosspost checks, and post cleanup" do
-    setting = settings(:default)
-    original_zone = setting.time_zone
-    setting.update!(time_zone: "Pacific Time (US & Canada)")
-    CacheableSettings.refresh_site_info
-
+  test "handles crosspost checks and post cleanup" do
     article = Article.new(
       title: "Scheduled",
       slug: "scheduled-helper",
@@ -417,10 +451,8 @@ class ArticleTest < ActiveSupport::TestCase
       content_type: :html,
       html_content: "<p>Content</p>"
     )
-    article.send(:handle_time_zone)
-    assert article.scheduled_at.utc?
 
-    crosspost = Crosspost.mastodon
+    crosspost = Crosspost.for("mastodon")
     crosspost.update!(
       enabled: true,
       server_url: "https://mastodon.social",
@@ -435,9 +467,6 @@ class ArticleTest < ActiveSupport::TestCase
     article.social_media_posts.build(url: "https://example.com/post")
     article.send(:cleanup_empty_social_media_posts)
     assert article.social_media_posts.first.marked_for_destruction?
-  ensure
-    setting.update!(time_zone: original_zone) if setting&.persisted?
-    CacheableSettings.refresh_site_info
   end
 
   test "newsletter helpers respect publish status and enqueue jobs" do
@@ -751,8 +780,10 @@ class ArticleTest < ActiveSupport::TestCase
 
     # When publish_scheduled is called from a freshly loaded record, it should
     # still know which platforms were selected while scheduling.
-    assert_enqueued_with(job: CrosspostArticleJob, args: [ article.id, "mastodon" ]) do
-      Article.find(article.id).publish_scheduled
+    freeze_time do
+      assert_enqueued_with(job: CrosspostArticleJob, args: [ article.id, "mastodon", Time.current ]) do
+        Article.find(article.id).publish_scheduled
+      end
     end
   end
 
@@ -805,8 +836,10 @@ class ArticleTest < ActiveSupport::TestCase
 
     clear_enqueued_jobs
 
-    assert_enqueued_with(job: CrosspostArticleJob, args: [ article.id, "mastodon" ]) do
-      Article.find(article.id).update!(status: :publish)
+    freeze_time do
+      assert_enqueued_with(job: CrosspostArticleJob, args: [ article.id, "mastodon", Time.current ]) do
+        Article.find(article.id).update!(status: :publish)
+      end
     end
   end
 

@@ -50,7 +50,7 @@ class Admin::SubscribersControllerTest < ActionDispatch::IntegrationTest
     assert_select "td", text: @confirmed.email, count: 0
   end
 
-  test "batch_confirm confirms and reactivates subscribers" do
+  test "batch_confirm confirms pending subscribers but never reactivates unsubscribed ones" do
     assert_not @unconfirmed.confirmed?
     assert_not @unsubscribed.active?
 
@@ -64,7 +64,10 @@ class Admin::SubscribersControllerTest < ActionDispatch::IntegrationTest
     assert @unconfirmed.confirmed?
     assert_nil @unconfirmed.unsubscribed_at
 
-    assert @unsubscribed.active?
+    # Unsubscribed subscribers must stay unsubscribed
+    assert @unsubscribed.unsubscribed?
+    assert_not @unsubscribed.active?
+    assert_match "已确认 1 个订阅者", flash[:notice]
   end
 
   test "batch_destroy deletes selected subscribers" do
@@ -100,5 +103,25 @@ class Admin::SubscribersControllerTest < ActionDispatch::IntegrationTest
     delete admin_subscriber_path(subscriber)
     assert_redirected_to admin_subscribers_path
     assert_nil Subscriber.find_by(id: subscriber.id)
+  end
+
+  test "batch_create keeps existing tags when line has no tags" do
+    assert_equal [ @rails.id ], @unsubscribed.tags.map(&:id)
+
+    post batch_create_admin_subscribers_path, params: { emails_text: @unsubscribed.email }
+
+    assert_redirected_to admin_subscribers_path
+    assert_equal [ @rails.id ], @unsubscribed.reload.tags.map(&:id)
+    assert_match "1 个已存在跳过", flash[:notice]
+  end
+
+  test "batch_create updates tags only when line explicitly provides them" do
+    post batch_create_admin_subscribers_path, params: {
+      emails_text: "#{@confirmed.email},newtag,fresh"
+    }
+
+    assert_redirected_to admin_subscribers_path
+    assert_equal [ "fresh", "newtag" ], @confirmed.reload.tags.map(&:name).sort
+    assert_match "1 个已存在并更新 tags", flash[:notice]
   end
 end

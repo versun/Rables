@@ -5,9 +5,9 @@ require "application_system_test_case"
 class AdminCrosspostsTest < ApplicationSystemTestCase
   def setup
     @user = users(:admin)
-    @mastodon = Crosspost.mastodon
-    @twitter = Crosspost.twitter
-    @bluesky = Crosspost.bluesky
+    @mastodon = Crosspost.for("mastodon")
+    @twitter = Crosspost.for("twitter")
+    @bluesky = Crosspost.for("bluesky")
   end
 
   test "viewing crosspost tabs" do
@@ -66,7 +66,7 @@ class AdminCrosspostsTest < ApplicationSystemTestCase
 
     within("nav.sidebar-nav .nav-section:last-child") do
       links = all("a.nav-link").map(&:text)
-      assert_equal [ "Migrate", "Crosspost", "Git", "Newsletter", "Jobs", "Twitter Archive", "Twitter Sync" ], links
+      assert_equal [ "Migrate", "Crosspost", "Newsletter", "Jobs", "Twitter Archive", "Twitter Sync" ], links
       assert_link "Twitter Archive", href: admin_twitter_archives_path
       assert_link "Twitter Sync", href: admin_twitter_sync_path
     end

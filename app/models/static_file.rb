@@ -3,6 +3,8 @@ class StaticFile < ApplicationRecord
 
   validates :file, presence: true
   validate :file_must_be_attached
+  validates :filename, presence: true, uniqueness: true
+  validates :filename, format: { without: %r{[/\x00-\x1f\x7f]}, message: "must not contain slashes or control characters" }, allow_blank: true
 
   # 获取文件的公开访问路径
   def public_path

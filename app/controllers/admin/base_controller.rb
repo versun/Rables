@@ -2,8 +2,6 @@ class Admin::BaseController < ApplicationController
   # 统一的Admin基类控制器
   # 所有后台管理控制器都应该继承此类
 
-  # before_action :authenticate_user!
-  # before_action :require_admin_privileges
   layout "admin"
 
   def batch_destroy
@@ -19,11 +17,6 @@ class Admin::BaseController < ApplicationController
   end
 
   private
-
-  def require_admin_privileges
-    # 这里可以添加权限检查逻辑
-    # 例如：redirect_to root_path unless Current.user&.admin?
-  end
 
   def fetch_articles(scope, sort_by: :created_at)
     @page = params[:page].present? ? params[:page].to_i : 1
@@ -41,6 +34,8 @@ class Admin::BaseController < ApplicationController
     includes = [ :comments ]
     includes << :tags if model_class.reflect_on_association(:tags)
     includes << :social_media_posts if model_class.reflect_on_association(:social_media_posts)
+    # Preload rich text so list rows calling plain_text_content don't trigger N+1 queries
+    includes << :rich_text_content if model_class.reflect_on_association(:rich_text_content)
     scope.includes(includes)
   end
 

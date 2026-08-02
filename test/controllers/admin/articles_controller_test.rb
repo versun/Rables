@@ -251,11 +251,13 @@ class Admin::ArticlesControllerTest < ActionDispatch::IntegrationTest
 
     article = articles(:published_article)
 
-    assert_enqueued_with(job: CrosspostArticleJob, args: [ article.id, "mastodon" ]) do
-      post batch_crosspost_admin_articles_path, params: {
-        ids: [ article.slug ],
-        platforms: [ "mastodon" ]
-      }
+    freeze_time do
+      assert_enqueued_with(job: CrosspostArticleJob, args: [ article.id, "mastodon", Time.current ]) do
+        post batch_crosspost_admin_articles_path, params: {
+          ids: [ article.slug ],
+          platforms: [ "mastodon" ]
+        }
+      end
     end
 
     assert_redirected_to admin_articles_path
@@ -338,6 +340,154 @@ class Admin::ArticlesControllerTest < ActionDispatch::IntegrationTest
     draft = articles(:draft_article)
     post batch_newsletter_admin_articles_path, params: { ids: [ draft.slug ] }
     assert_redirected_to admin_articles_path
+  end
+
+  test "create with invalid params renders unprocessable entity" do
+    assert_no_difference "Article.count" do
+      post admin_articles_path, params: {
+        article: {
+          title: "Invalid Article",
+          status: "draft",
+          content_type: "html",
+          html_content: ""
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+  end
+
+  test "update with invalid params renders unprocessable entity" do
+    patch admin_article_path(@article.slug), params: {
+      article: {
+        content_type: "html",
+        html_content: ""
+      }
+    }
+
+    assert_response :unprocessable_entity
+  end
+
+  test "new article form checks enable comments by default" do
+    get new_admin_article_path
+    assert_response :success
+    assert_select "input#article_comment[checked]"
+  end
+
+  test "create validation failure keeps comment checkbox unchecked" do
+    post admin_articles_path, params: {
+      article: {
+        title: "Invalid Article",
+        status: "draft",
+        content_type: "html",
+        html_content: "",
+        comment: "0"
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_select "input#article_comment[checked]", 0
+  end
+
+  test "destroy reports failure when moving to trash fails" do
+    article = Article.create!(
+      title: "Cannot Trash",
+      slug: "cannot-trash-#{Time.current.to_i}",
+      status: :publish,
+      content_type: :html,
+      html_content: "<p>Content</p>"
+    )
+    article.update_column(:html_content, nil)
+
+    delete admin_article_path(article.slug)
+
+    assert_redirected_to admin_articles_path
+    assert_equal "Failed to move article to trash.", flash[:alert]
+    assert_equal "publish", article.reload.status
+  end
+
+  test "batch destroy does not count articles that fail to move to trash" do
+    article = Article.create!(
+      title: "Batch Cannot Trash",
+      slug: "batch-cannot-trash-#{Time.current.to_i}",
+      status: :publish,
+      content_type: :html,
+      html_content: "<p>Content</p>"
+    )
+    article.update_column(:html_content, nil)
+
+    post batch_destroy_admin_articles_path, params: { ids: [ article.slug ] }
+
+    assert_redirected_to admin_articles_path
+    assert flash[:alert].present?
+    assert_equal "publish", article.reload.status
+  end
+
+  test "fetch comments keeps moderation status of existing comments" do
+    article = articles(:published_article)
+    SocialMediaPost.create!(article: article, platform: "mastodon", url: "https://mastodon.example/post/3")
+    existing = article.comments.create!(
+      platform: "mastodon",
+      external_id: "mod-1",
+      author_name: "Alice",
+      content: "Original",
+      status: :rejected,
+      published_at: 1.day.ago
+    )
+
+    payload = {
+      comments: [
+        {
+          external_id: "mod-1",
+          author_name: "Alice",
+          content: "Edited remotely",
+          published_at: Time.current,
+          url: "https://mastodon.example/post/3#mod-1"
+        }
+      ]
+    }
+
+    with_stubbed_fetch_comments(MastodonService, payload) do
+      post fetch_comments_admin_article_path(article.slug), as: :json
+      assert_response :success
+    end
+
+    existing.reload
+    assert_equal "rejected", existing.status
+    assert_equal "Edited remotely", existing.content
+  end
+
+  test "fetch comments links replies to parents imported in earlier batches" do
+    article = articles(:published_article)
+    SocialMediaPost.create!(article: article, platform: "mastodon", url: "https://mastodon.example/post/4")
+    parent = article.comments.create!(
+      platform: "mastodon",
+      external_id: "old-parent",
+      author_name: "Alice",
+      content: "Earlier parent",
+      published_at: 1.day.ago
+    )
+
+    payload = {
+      comments: [
+        {
+          external_id: "new-child",
+          parent_external_id: "old-parent",
+          author_name: "Bob",
+          content: "Late reply",
+          published_at: Time.current,
+          url: "https://mastodon.example/post/4#new-child"
+        }
+      ]
+    }
+
+    with_stubbed_fetch_comments(MastodonService, payload) do
+      post fetch_comments_admin_article_path(article.slug), as: :json
+      assert_response :success
+    end
+
+    child = article.comments.find_by!(platform: "mastodon", external_id: "new-child")
+    assert_equal parent.id, child.parent_id
   end
 
   private

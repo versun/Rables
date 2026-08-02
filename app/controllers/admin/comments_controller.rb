@@ -1,4 +1,4 @@
-class Admin::CommentsController < AdminController
+class Admin::CommentsController < Admin::BaseController
   before_action :set_comment, only: [ :show, :edit, :update, :destroy, :approve, :reject, :reply ]
 
   def index
@@ -21,6 +21,13 @@ class Admin::CommentsController < AdminController
   end
 
   def update
+    new_status = comment_params[:status]
+    if new_status.present? && !Comment.statuses.key?(new_status)
+      flash.now[:alert] = "Invalid status."
+      render :edit, status: :unprocessable_entity
+      return
+    end
+
     if @comment.update(comment_params)
       ActivityLog.log!(
         action: :updated,
@@ -45,15 +52,25 @@ class Admin::CommentsController < AdminController
 
   def destroy
     commentable_info = "#{@comment.commentable_type}##{@comment.commentable_id}"
-    @comment.destroy
-    ActivityLog.log!(
-      action: :deleted,
-      target: :comment,
-      level: :info,
-      id: @comment.id,
-      commentable: commentable_info
-    )
-    redirect_to admin_comments_path, notice: "Comment deleted successfully."
+    if @comment.destroy
+      ActivityLog.log!(
+        action: :deleted,
+        target: :comment,
+        level: :info,
+        id: @comment.id,
+        commentable: commentable_info
+      )
+      redirect_to admin_comments_path, notice: "Comment deleted successfully."
+    else
+      ActivityLog.log!(
+        action: :failed,
+        target: :comment,
+        level: :error,
+        id: @comment.id,
+        commentable: commentable_info
+      )
+      redirect_to admin_comments_path, alert: "Failed to delete comment."
+    end
   end
 
   def approve

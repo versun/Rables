@@ -2,7 +2,10 @@ class Admin::TagsController < Admin::BaseController
   before_action :set_tag, only: [ :edit, :update, :destroy ]
 
   def index
-    @tags = Tag.alphabetical.all
+    @tags = Tag.alphabetical
+      .left_joins(:articles)
+      .select("tags.*, COUNT(articles.id) AS articles_total")
+      .group("tags.id")
   end
 
   def new
@@ -29,7 +32,7 @@ class Admin::TagsController < Admin::BaseController
         name: @tag.name,
         errors: @tag.errors.full_messages.join(", ")
       )
-      render :new
+      render :new, status: :unprocessable_entity
     end
   end
 
@@ -54,17 +57,13 @@ class Admin::TagsController < Admin::BaseController
         name: @tag.name,
         errors: @tag.errors.full_messages.join(", ")
       )
-      render :edit
+      render :edit, status: :unprocessable_entity
     end
   end
 
   def destroy
     tag_name = @tag.name
-    # Remove tag from all associated articles before deleting
-    @tag.articles.each do |article|
-      article.tags.delete(@tag)
-    end
-
+    # article_tags join rows are cleaned up by has_many :article_tags, dependent: :destroy
     @tag.destroy
     ActivityLog.log!(
       action: :deleted,
@@ -80,15 +79,6 @@ class Admin::TagsController < Admin::BaseController
 
   def find_record_for_batch(id)
     Tag.find_by(id: id)
-  end
-
-  def perform_destroy(tag)
-    # Remove tag from all associated articles before deleting
-    tag.articles.each do |article|
-      article.tags.delete(tag)
-    end
-
-    tag.destroy
   end
 
   private

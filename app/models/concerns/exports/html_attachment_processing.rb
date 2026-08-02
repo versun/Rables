@@ -96,7 +96,7 @@ module Exports
       # 处理 ActiveStorage URL
       if original_url.include?("/rails/active_storage/blobs/") ||
          original_url.include?("/rails/active_storage/representations/")
-        blob = extract_blob_from_url(original_url)
+        blob = ActiveStorageBlobFinder.find_blob_from_url(original_url)
         return unless blob
 
         filename = blob.filename.to_s
@@ -157,7 +157,7 @@ module Exports
       new_filename = "#{SecureRandom.hex(8)}_#{filename}"
       local_path = File.join(record_attachments_dir, new_filename)
 
-      blob = extract_blob_from_url(original_url)
+      blob = ActiveStorageBlobFinder.find_blob_from_url(original_url)
       if blob
         File.open(local_path, "wb") { |f| f.write(blob.download) }
       else
@@ -186,17 +186,6 @@ module Exports
       base_url = base_url.chomp("/")
 
       original_url.start_with?("/") ? "#{base_url}#{original_url}" : "#{base_url}/#{original_url}"
-    end
-
-    def extract_blob_from_url(url)
-      match = url.match(/\/rails\/active_storage\/(?:blobs|representations)\/redirect\/([^\/]+)/)
-      return nil unless match
-
-      signed_id = match[1]
-      ActiveStorage::Blob.find_signed(signed_id)
-    rescue => e
-      Rails.event.notify("exports.blob_not_found", component: self.class.name, signed_id: signed_id, error: e.message, level: "error")
-      nil
     end
   end
 end

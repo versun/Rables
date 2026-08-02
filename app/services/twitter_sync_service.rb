@@ -6,17 +6,18 @@ require "open-uri"
 # Archives original tweets (and quote tweets) from a configured Twitter/X
 # account as published Articles. Replies and pure retweets are excluded.
 #
-# Media (photos, videos, GIFs) is downloaded and uploaded to ActiveStorage,
-# then embedded in the article content. Uses the API credentials from
-# Crosspost.twitter and the shared TwitterApi::RateLimiter.
+# Media (photos, videos, GIFs) from the tweets and their quoted tweets is
+# downloaded and uploaded to ActiveStorage, then embedded in the article
+# content. Uses the API credentials from
+# Crosspost.for("twitter") and the shared TwitterApi::RateLimiter.
 class TwitterSyncService
   FIRST_RUN_LIMIT = 10 # On the first run only backfill the latest 10 tweets
-  MAX_BACKFILL_PAGES = 10 # Safety cap for the initial backfill when start_date is set
+  MAX_PAGES_PER_SYNC = 10 # Safety cap for timeline pagination in a single run
   QUOTED_CONTENT_LIMIT = 250 # Max length of a quoted tweet stored as source_content
 
   def initialize(sync = TwitterSync.instance)
     @sync = sync
-    @settings = Crosspost.twitter
+    @settings = Crosspost.for("twitter")
     @rate_limiter = TwitterApi::RateLimiter.new
   end
 
@@ -35,7 +36,15 @@ class TwitterSyncService
     tweets = tweets.uniq { |tweet| tweet["id"] }.sort_by { |tweet| tweet["id"].to_i }
     tweets = tweets.last(FIRST_RUN_LIMIT) if @sync.since_id.blank? && @sync.start_date.blank?
 
-    tweets.each { |tweet| archive_tweet(tweet, includes) }
+    # Archive tweet by tweet: a single broken ("poison") tweet is logged and
+    # skipped instead of aborting the whole run. since_id below is computed
+    # from every fetched tweet, so it advances regardless of per-tweet
+    # failures and the poison tweet is never retried.
+    tweets.each do |tweet|
+      archive_tweet(tweet, includes)
+    rescue => e
+      log_tweet_failure(tweet, e)
+    end
 
     latest_id = tweets.map { |tweet| tweet["id"].to_i }.max
     @sync.update!(
@@ -63,6 +72,21 @@ class TwitterSyncService
     )
   end
 
+  def log_tweet_failure(tweet, error)
+    message = "tweet #{tweet['id']}: #{error.message}"
+    Rails.event.notify "twitter_sync_service.tweet_archive_failed",
+      level: "error",
+      component: "TwitterSyncService",
+      tweet_id: tweet["id"],
+      error_message: error.message
+    ActivityLog.log!(
+      action: :failed,
+      target: :twitter_sync,
+      level: :error,
+      error: message
+    )
+  end
+
   def create_client
     X::Client.new(
       api_key: @settings.api_key,
@@ -75,33 +99,56 @@ class TwitterSyncService
   def resolve_user_id(client)
     return @sync.user_id if @sync.user_id.present?
 
-    response = @rate_limiter.make_request(client, "users/by/username/#{@sync.username}")
+    response = @rate_limiter.make_request(client, "users/by/username/#{CGI.escape(@sync.username)}")
     user_id = response&.dig("data", "id")
     @sync.update!(user_id: user_id) if user_id.present?
     user_id
   end
 
-  # Fetches the timeline, paginating backwards when doing an initial backfill
-  # bounded by start_date. Returns [tweets, includes] where includes holds
-  # lookup hashes for media, referenced (quoted) tweets, and their authors.
+  # Fetches the timeline, following pagination whenever the API returns a
+  # next_token (both for the initial backfill and for incremental syncs, so
+  # a burst of >100 tweets between runs leaves no permanent gap). Returns
+  # [tweets, includes] where includes holds lookup hashes for media,
+  # referenced (quoted) tweets, and their authors.
   def fetch_new_tweets(client, user_id)
     tweets = []
     includes = { media: {}, tweets: {}, users: {} }
-    backfill = @sync.since_id.blank? && @sync.start_date.present?
     pagination_token = nil
     pages = 0
 
     loop do
       response = fetch_timeline(client, user_id, pagination_token)
+      raise api_error_message(response) if api_error_response?(response)
+
       tweets.concat(Array(response&.dig("data")))
       merge_includes!(includes, response)
 
       pagination_token = response&.dig("meta", "next_token")
       pages += 1
-      break unless backfill && pagination_token.present? && pages < MAX_BACKFILL_PAGES
+      break unless pagination_token.present? && pages < MAX_PAGES_PER_SYNC
     end
 
     [ tweets, includes ]
+  end
+
+  # A successful timeline page always carries "data" (possibly empty) or a
+  # meta result_count (when there are no new tweets the API omits "data").
+  # Anything else is an error payload and must fail the sync instead of
+  # being recorded as a successful run.
+  def api_error_response?(response)
+    return true if response.nil?
+    return false if response.key?("data")
+
+    response.dig("meta", "result_count").nil?
+  end
+
+  def api_error_message(response)
+    return "Twitter API returned no response" if response.nil?
+
+    messages = Array(response["errors"]).filter_map do |error|
+      error["message"] || error["detail"] || error["title"]
+    end
+    messages.presence&.join(", ") || response["title"].presence || "Twitter API returned an unexpected response"
   end
 
   def fetch_timeline(client, user_id, pagination_token = nil)
@@ -109,7 +156,7 @@ class TwitterSyncService
       "?exclude=retweets,replies" \
       "&max_results=100" \
       "&tweet.fields=created_at,attachments,referenced_tweets,note_tweet,entities,author_id" \
-      "&expansions=attachments.media_keys,referenced_tweets.id,referenced_tweets.id.author_id" \
+      "&expansions=attachments.media_keys,referenced_tweets.id,referenced_tweets.id.author_id,referenced_tweets.id.attachments.media_keys" \
       "&media.fields=url,preview_image_url,type,variants,alt_text" \
       "&user.fields=name,username"
     endpoint += "&since_id=#{@sync.since_id}" if @sync.since_id.present?
@@ -144,6 +191,8 @@ class TwitterSyncService
     source_url = quoted_id.present? ? "https://x.com/i/web/status/#{quoted_id}" : nil
     source_author, source_content = quoted_source_reference(quoted_id, includes)
     blobs = build_media_attachments(tweet, includes[:media])
+    quoted_tweet = includes[:tweets][quoted_id] if quoted_id.present?
+    blobs += build_media_attachments(quoted_tweet, includes[:media]) if quoted_tweet
 
     article = Article.create!(
       title: nil,
@@ -165,7 +214,6 @@ class TwitterSyncService
       action: :posted,
       target: :twitter_sync,
       level: :info,
-      title: article.title,
       slug: article.slug,
       url: article.source_url
     )

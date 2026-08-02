@@ -34,6 +34,10 @@ class ActivityLog < ApplicationRecord
       level: normalize_level(level),
       description: format_description(context)
     )
+  rescue StandardError => e
+    # Activity logging must never break the main flow
+    Rails.logger.warn("ActivityLog.log! failed: #{e.class}: #{e.message}")
+    nil
   end
 
   def self.normalize_token(value)

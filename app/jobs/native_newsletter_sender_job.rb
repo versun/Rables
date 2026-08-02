@@ -10,10 +10,7 @@ class NativeNewsletterSenderJob < ApplicationJob
 
     return unless newsletter_setting.enabled? && newsletter_setting.native? && newsletter_setting.configured?
 
-    # 在发送邮件前动态配置 ActionMailer，确保使用最新的 SMTP 配置
-    configure_action_mailer(newsletter_setting)
-
-    subscribers = Subscriber.active
+    subscribers = Subscriber.active.includes(:tags)
     return if subscribers.empty?
 
     # 获取文章的所有tag IDs
@@ -26,7 +23,7 @@ class NativeNewsletterSenderJob < ApplicationJob
         true
       # 如果订阅者订阅了某些tags，检查文章是否包含这些tags中的至少一个
       elsif subscriber.has_subscriptions?
-        subscriber_tag_ids = subscriber.tags.pluck(:id)
+        subscriber_tag_ids = subscriber.tags.map(&:id)
         # 文章至少包含一个订阅者订阅的tag
         (article_tag_ids & subscriber_tag_ids).any?
       else
@@ -73,9 +70,6 @@ class NativeNewsletterSenderJob < ApplicationJob
 
     relevant_subscribers.each do |subscriber|
       begin
-        # 在每次发送前重新配置 ActionMailer，确保使用最新的 SMTP 配置
-        configure_action_mailer(newsletter_setting)
-
         mail = NewsletterMailer.article_email(article, subscriber, site_info)
         Rails.event.notify "native_newsletter_sender_job.sending_email",
           level: "info",

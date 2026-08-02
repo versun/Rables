@@ -1,4 +1,4 @@
-<%= form_with(model: [:admin, @article]) do |form| %>
+<%= form_with(model: [:admin, @article], data: { controller: "content-form", action: "submit->content-form#submit", content_form_param_value: "article" }) do |form| %>
   <% if @article.errors.any? %>
     <div class="form-errors">
       <strong><%= pluralize(@article.errors.count, "error") %> prohibited this article from being saved:</strong>
@@ -23,16 +23,16 @@
                 ['HTML Code', 'html']
               ], form.object.content_type || 'rich_text'),
               {},
-              { id: 'content_type_select', required: true } %>
+              { id: 'content_type_select', required: true, data: { content_form_target: "contentTypeSelect", action: "change->content-form#toggleContentType" } } %>
         </div>
 
-        <div class="field" id="rich_text_field" style="display: <%= form.object.html? ? 'none' : 'block' %>">
+        <div class="field" id="rich_text_field" data-content-form-target="richTextField" style="display: <%= form.object.html? ? 'none' : 'block' %>">
           <%= form.text_area :content,
               class: "tinymce-editor",
               value: form.object.content.to_s %>
         </div>
 
-        <div class="field" id="html_content_field" style="display: <%= form.object.html? ? 'block' : 'none' %>">
+        <div class="field" id="html_content_field" data-content-form-target="htmlContentField" style="display: <%= form.object.html? ? 'block' : 'none' %>">
           <%= form.text_area :html_content,
               rows: 10,
               placeholder: "Enter your HTML code here...",
@@ -112,16 +112,16 @@
         <div class="field">
           <%= form.select :status, Article.statuses.keys,
               { prompt: 'Status', selected: @article.status.presence || 'draft' },
-              { id: 'status_select', required: true } %>
+              { id: 'status_select', required: true, data: { action: "change->content-form#toggleScheduledAt" } } %>
         </div>
-        <div class="field" id="scheduled_at" style="display: <%= form.object.schedule? ? 'block' : 'none' %>">
+        <div class="field" id="scheduled_at" data-content-form-target="scheduledAt" style="display: <%= form.object.schedule? ? 'block' : 'none' %>">
           <%= form.datetime_field :scheduled_at, value: @article.scheduled_at&.in_time_zone, placeholder: "Schedule For" %>
         </div>
-        <small id="scheduled_at_hint" style="display: <%= form.object.schedule? ? 'block' : 'none' %>">Current: <%= Time.current.strftime("%Y/%m/%d %I:%M %p %Z") %></small>
+        <small id="scheduled_at_hint" data-content-form-target="scheduledAtHint" style="display: <%= form.object.schedule? ? 'block' : 'none' %>">Current: <%= Time.current.strftime("%Y/%m/%d %I:%M %p %Z") %></small>
 
         <div class="field">
           <%= form.label :comment, style: "display: inline-block; font-weight: bold;" do %>
-            <%= form.check_box :comment, { checked: (@article.new_record? ? true : @article.comment) }, style: "margin-right: 0.5rem;" %>
+            <%= form.check_box :comment, style: "margin-right: 0.5rem;" %>
             Enable Comments
           <% end %>
         </div>
@@ -129,21 +129,18 @@
 
       <div class="form-section compact">
         <div class="checkbox-group">
-          <% newsletter_setting = NewsletterSetting.instance %>
-          <% newsletter_enabled = newsletter_setting.enabled? %>
           <div class="field checkbox">
-            <%= form.check_box :send_newsletter, disabled: !newsletter_enabled %>
+            <%= form.check_box :send_newsletter, disabled: !@newsletter_enabled %>
             Send Newsletter
-            <% unless newsletter_enabled %>
+            <% unless @newsletter_enabled %>
               <span class="info-text">(not enabled)</span>
             <% end %>
           </div>
 
-          <% mastodon_enabled = Crosspost.find_by(platform: 'mastodon')&.enabled? %>
           <div class="field checkbox crosspost-field">
-            <%= form.check_box :crosspost_mastodon, disabled: !mastodon_enabled %>
+            <%= form.check_box :crosspost_mastodon, disabled: !@mastodon_enabled %>
             Mastodon
-            <% unless mastodon_enabled %>
+            <% unless @mastodon_enabled %>
               <span class="info-text">(off)</span>
             <% end %>
             <%= form.fields_for :social_media_posts, @article.social_media_posts.find_or_initialize_by(platform: 'mastodon') do |post_form| %>
@@ -154,11 +151,10 @@
             <% end %>
           </div>
 
-          <% twitter_enabled = Crosspost.find_by(platform: 'twitter')&.enabled? %>
           <div class="field checkbox crosspost-field">
-            <%= form.check_box :crosspost_twitter, disabled: !twitter_enabled %>
+            <%= form.check_box :crosspost_twitter, disabled: !@twitter_enabled %>
             Twitter
-            <% unless twitter_enabled %>
+            <% unless @twitter_enabled %>
               <span class="info-text">(off)</span>
             <% end %>
             <%= form.fields_for :social_media_posts, @article.social_media_posts.find_or_initialize_by(platform: 'twitter') do |post_form| %>
@@ -169,11 +165,10 @@
             <% end %>
           </div>
 
-          <% bluesky_enabled = Crosspost.find_by(platform: 'bluesky')&.enabled? %>
           <div class="field checkbox crosspost-field">
-            <%= form.check_box :crosspost_bluesky, disabled: !bluesky_enabled %>
+            <%= form.check_box :crosspost_bluesky, disabled: !@bluesky_enabled %>
             Bluesky
-            <% unless bluesky_enabled %>
+            <% unless @bluesky_enabled %>
               <span class="info-text">(off)</span>
             <% end %>
             <%= form.fields_for :social_media_posts, @article.social_media_posts.find_or_initialize_by(platform: 'bluesky') do |post_form| %>
@@ -184,11 +179,10 @@
             <% end %>
           </div>
 
-          <% xiaohongshu_enabled = Crosspost.find_by(platform: 'xiaohongshu')&.enabled? %>
           <div class="field checkbox crosspost-field">
-            <%= form.check_box :crosspost_xiaohongshu, disabled: !xiaohongshu_enabled %>
+            <%= form.check_box :crosspost_xiaohongshu, disabled: !@xiaohongshu_enabled %>
             Xiaohongshu
-            <% unless xiaohongshu_enabled %>
+            <% unless @xiaohongshu_enabled %>
               <span class="info-text">(off)</span>
             <% end %>
             <%= form.fields_for :social_media_posts, @article.social_media_posts.find_or_initialize_by(platform: 'xiaohongshu') do |post_form| %>
@@ -207,131 +201,9 @@
   <div class="form-actions">
     <%= form.submit "Save" %>
     <% if @article.persisted? %>
-      <%= link_to "Delete", article_path(@article.slug), 
+      <%= link_to "Delete", admin_article_path(@article), 
           class: "btn btn-danger",
           data: { turbo_method: :delete, turbo_confirm: "Are you sure?" } %>
     <% end %>
   </div>
-<% end %>
-
-<%= javascript_tag do %>
-  function initializeScheduledAt() {
-    const statusSelect = document.getElementById('status_select');
-    const scheduledAtContainer = document.getElementById('scheduled_at');
-    const scheduledAtHint = document.getElementById('scheduled_at_hint');
-    
-    if (statusSelect && scheduledAtContainer) {
-      statusSelect.addEventListener('change', function() {
-        const isSchedule = this.value === 'schedule';
-        scheduledAtContainer.style.display = isSchedule ? 'block' : 'none';
-        if (scheduledAtHint) {
-          scheduledAtHint.style.display = isSchedule ? 'block' : 'none';
-        }
-      });
-    }
-  }
-
-  function initializeContentType() {
-    const contentTypeSelect = document.getElementById('content_type_select');
-    const richTextField = document.getElementById('rich_text_field');
-    const htmlContentField = document.getElementById('html_content_field');
-    const form = contentTypeSelect?.closest('form');
-    
-    if (contentTypeSelect && richTextField && htmlContentField && form) {
-      function toggleFields() {
-        const isHtml = contentTypeSelect.value === 'html';
-        richTextField.style.display = isHtml ? 'none' : 'block';
-        htmlContentField.style.display = isHtml ? 'block' : 'none';
-        
-        // 更新HTML textarea的required属性
-        const htmlTextArea = htmlContentField.querySelector('textarea');
-        if (htmlTextArea) {
-          if (isHtml) {
-            htmlTextArea.setAttribute('required', 'required');
-          } else {
-            htmlTextArea.removeAttribute('required');
-          }
-        }
-        
-        // 更新富文本字段的required属性（包括Action Text生成的隐藏input）
-        // 注意：TinyMCE textarea 不应该有 required 属性，因为它会被隐藏
-        const richTextInputs = richTextField.querySelectorAll('input[name*="[content]"]');
-        richTextInputs.forEach(function(input) {
-          if (isHtml) {
-            input.removeAttribute('required');
-          } else {
-            input.setAttribute('required', 'required');
-          }
-        });
-
-        // 关键修复：TinyMCE textarea 永远不应该有 required 属性
-        // 因为它被 TinyMCE 隐藏（display: none），浏览器无法 focus 隐藏的 required 元素
-        const tinymceTextarea = richTextField.querySelector('textarea.tinymce-editor');
-        if (tinymceTextarea) {
-          tinymceTextarea.removeAttribute('required');
-        }
-      }
-      
-      // 表单提交前处理
-      form.addEventListener('submit', function(e) {
-        const isHtml = contentTypeSelect.value === 'html';
-
-        // 同步 TinyMCE 内容到 textarea（如果不是 HTML 模式）
-        if (!isHtml && typeof tinymce !== 'undefined') {
-          tinymce.triggerSave();
-        }
-
-        // 关键修复：移除所有 textarea 的 required 属性
-        // TinyMCE 隐藏的 textarea 会导致浏览器验证错误 "An invalid form control is not focusable"
-        const allTextareas = form.querySelectorAll('textarea[name*="[content]"]');
-        allTextareas.forEach(function(textarea) {
-          textarea.removeAttribute('required');
-        });
-
-        // 自定义验证：检查内容是否为空
-        if (!isHtml) {
-          // Rich Text 模式：检查 TinyMCE 内容
-          let content = '';
-          if (typeof tinymce !== 'undefined') {
-            const editor = tinymce.get('article_content');
-            if (editor) {
-              content = editor.getContent().trim();
-            }
-          }
-          // 如果 TinyMCE 未加载，检查 textarea 的值
-          if (!content) {
-            const textarea = form.querySelector('textarea[name="article[content]"]');
-            if (textarea && textarea.value.trim()) {
-              content = textarea.value.trim();
-            }
-          }
-          if (!content) {
-            e.preventDefault();
-            alert('Content cannot be blank');
-            return false;
-          }
-        } else {
-          // HTML 模式：检查 html_content
-          const htmlTextarea = form.querySelector('textarea[name="article[html_content]"]');
-          if (!htmlTextarea || !htmlTextarea.value.trim()) {
-            e.preventDefault();
-            alert('HTML content cannot be blank');
-            return false;
-          }
-        }
-      });
-      
-      contentTypeSelect.addEventListener('change', toggleFields);
-      toggleFields(); // 初始化时执行一次
-    }
-  }
-  
-  document.addEventListener("DOMContentLoaded", function() {
-    initializeScheduledAt();
-    initializeContentType();
-  });
-  document.addEventListener("turbo:load", function() {
-    initializeScheduledAt();
-    initializeContentType();
-  });
 <% end %>

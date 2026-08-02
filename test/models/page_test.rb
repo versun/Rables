@@ -98,4 +98,73 @@ class PageTest < ActiveSupport::TestCase
 
     assert_includes page.rendered_content.to_s, "Rich content"
   end
+
+  test "should require scheduled_at when status is schedule" do
+    @page.status = :schedule
+    @page.scheduled_at = nil
+    assert_not @page.valid?
+    assert_includes @page.errors[:scheduled_at], "can't be blank"
+  end
+
+  test "should not require scheduled_at when status is not schedule" do
+    @page.status = :draft
+    @page.scheduled_at = nil
+    assert @page.valid?
+  end
+
+  test "publishable scope should return scheduled pages ready to publish" do
+    page = Page.create!(
+      title: "Scheduled Page",
+      slug: "publishable-page",
+      status: :schedule,
+      scheduled_at: 1.hour.ago,
+      content_type: :html,
+      html_content: "<p>Content</p>"
+    )
+
+    assert_includes Page.publishable, page
+  end
+
+  test "publishable scope should not return future scheduled pages" do
+    page = Page.create!(
+      title: "Future Scheduled Page",
+      slug: "future-publishable-page",
+      status: :schedule,
+      scheduled_at: 1.hour.from_now,
+      content_type: :html,
+      html_content: "<p>Content</p>"
+    )
+
+    assert_not_includes Page.publishable, page
+  end
+
+  test "publish_scheduled should update status to publish and clear scheduled_at" do
+    page = Page.create!(
+      title: "To Publish",
+      slug: "to-publish-page",
+      status: :schedule,
+      scheduled_at: 1.hour.ago,
+      content_type: :html,
+      html_content: "<p>Content</p>"
+    )
+
+    page.publish_scheduled
+    assert page.publish?
+    assert_nil page.scheduled_at
+  end
+
+  test "publish_scheduled should not publish before scheduled time" do
+    page = Page.create!(
+      title: "Not Yet",
+      slug: "not-yet-page",
+      status: :schedule,
+      scheduled_at: 1.hour.from_now,
+      content_type: :html,
+      html_content: "<p>Content</p>"
+    )
+
+    page.publish_scheduled
+    assert page.schedule?
+    assert_not_nil page.scheduled_at
+  end
 end
