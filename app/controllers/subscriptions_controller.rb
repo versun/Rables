@@ -23,9 +23,10 @@ class SubscriptionsController < ApplicationController
     end
 
     unless math_captcha_valid?(max: 10)
+      message = math_captcha_error_message(max: 10)
       respond_to do |format|
-        format.html { redirect_to root_path, alert: "验证失败：请回答数学题。" }
-        format.json { render json: { success: false, message: "验证失败：请回答数学题。" }, status: :unprocessable_entity }
+        format.html { redirect_to root_path, alert: message }
+        format.json { render json: { success: false, message: message }, status: :unprocessable_entity }
       end
       return
     end

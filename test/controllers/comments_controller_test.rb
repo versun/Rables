@@ -119,7 +119,7 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
         author_name: "Alice",
         content: "Nice post!"
       },
-      captcha: { a: "1", b: "1", op: "+", answer: "" }
+      captcha: captcha_params(a: 1, b: 1, op: "+", answer: "")[:captcha]
     }, as: :turbo_stream
 
     assert_response :unprocessable_entity
@@ -153,7 +153,7 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
           author_name: "Alice",
           content: "Nice post!"
         },
-        captcha: { a: "1", b: "1", op: "+", answer: "" }
+        captcha: captcha_params(a: 1, b: 1, op: "+", answer: "")[:captcha]
       }
     end
 
@@ -242,11 +242,31 @@ class CommentsControllerTest < ActionDispatch::IntegrationTest
         author_name: "XHR User",
         content: "XHR comment"
       },
-      captcha: { a: "1", b: "1", op: "+", answer: "" }
+      captcha: captcha_params(a: 1, b: 1, op: "+", answer: "")[:captcha]
     }, headers: { "X-Requested-With" => "XMLHttpRequest" }
 
     assert_response :unprocessable_entity
     assert_includes response.body, "验证失败"
+  end
+
+  test "captcha without token asks to refresh the page" do
+    # Old cached pages (pre-token forms) submit a/b/op/answer with no token;
+    # the remedy is reloading for a fresh challenge, not re-answering.
+    article = articles(:published_article)
+
+    assert_no_difference "Comment.count" do
+      post comments_path(article_id: article.slug), params: {
+        comment: {
+          author_name: "Stale Page User",
+          content: "Comment from a stale page"
+        },
+        captcha: { a: "1", b: "1", op: "+", answer: "2" }
+      }, as: :json
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal false, response.parsed_body["success"]
+    assert_match "刷新", response.parsed_body["message"]
   end
 
   test "html invalid comment redirects with alert" do

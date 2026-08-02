@@ -164,6 +164,32 @@ class SubscriptionsControllerTest < ActionDispatch::IntegrationTest
     assert_equal false, response.parsed_body["success"]
   end
 
+  test "captcha without token asks to refresh the page" do
+    # Old cached pages (pre-token forms) submit a/b/op/answer with no token;
+    # the remedy is reloading for a fresh challenge, not re-answering.
+    post subscriptions_path, params: {
+      subscription: { email: "captcha@example.com" },
+      captcha: { a: "1", b: "2", op: "+", answer: "3" }
+    }, as: :json
+
+    assert_response :unprocessable_entity
+    assert_equal false, response.parsed_body["success"]
+    assert_match "刷新", response.parsed_body["message"]
+  end
+
+  test "captcha with wrong answer asks to answer again" do
+    assert_no_difference "Subscriber.count" do
+      post subscriptions_path, params: {
+        subscription: { email: "captcha@example.com" }
+      }.merge(captcha_params(a: 3, b: 4, op: "+", answer: "0")), as: :json
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal false, response.parsed_body["success"]
+    assert_match "请回答数学题", response.parsed_body["message"]
+    assert_no_match "刷新", response.parsed_body["message"]
+  end
+
   test "captcha with tampered token returns json error" do
     tampered = captcha_params
     tampered[:captcha][:token] = "#{tampered[:captcha][:token]}tampered"
@@ -191,6 +217,7 @@ class SubscriptionsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :unprocessable_entity
     assert_equal false, response.parsed_body["success"]
+    assert_match "刷新", response.parsed_body["message"]
   end
 
   test "rate limits subscription creation per ip" do

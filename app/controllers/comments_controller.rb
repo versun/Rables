@@ -16,23 +16,24 @@ class CommentsController < ApplicationController
         reason: "captcha_invalid"
       )
 
+      message = math_captcha_error_message(max: 10)
       respond_to do |format|
         format.turbo_stream do
           @form_dom_id = comment_form_dom_id
           @form_parent_id = comment_parent_id
           @form_comment = build_comment_from_params
-          @form_error_message = "验证失败：请回答数学题。"
+          @form_error_message = message
           render :create, status: :unprocessable_entity
         end
         format.html do
           if request.xhr? || request.headers["X-Requested-With"] == "XMLHttpRequest"
-            render json: { success: false, message: "验证失败：请回答数学题。" }, status: :unprocessable_entity
+            render json: { success: false, message: message }, status: :unprocessable_entity
           else
             redirect_path = determine_redirect_path
-            redirect_to redirect_path, alert: "验证失败：请回答数学题。"
+            redirect_to redirect_path, alert: message
           end
         end
-        format.json { render json: { success: false, message: "验证失败：请回答数学题。" }, status: :unprocessable_entity }
+        format.json { render json: { success: false, message: message }, status: :unprocessable_entity }
       end
       return
     end

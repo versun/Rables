@@ -39,4 +39,16 @@ module MathCaptchaVerification
   rescue ArgumentError, TypeError
     false
   end
+
+  # Message for a failed captcha check. A missing, tampered, or expired
+  # challenge token means the page is stale (e.g. cached before the token
+  # existed, or open past the token TTL), so the remedy is reloading for a
+  # fresh challenge; anything else means the answer itself was wrong.
+  def math_captcha_error_message(max: 10)
+    if math_captcha_expected(max:).nil?
+      "验证已过期：请刷新页面后重新回答数学题。"
+    else
+      "验证失败：请回答数学题。"
+    end
+  end
 end
