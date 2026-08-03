@@ -4,7 +4,7 @@ class Admin::ArticlesController < Admin::BaseController
   before_action :set_form_options, only: [ :new, :edit, :create, :update ]
 
   def index
-    @scope = Article.all
+    @scope = Article.search_content(params[:q])
     @articles = fetch_articles(@scope)
     @path = admin_articles_path
   end
@@ -123,14 +123,14 @@ class Admin::ArticlesController < Admin::BaseController
   end
 
   def drafts
-    @scope = Article.draft
+    @scope = Article.draft.search_content(params[:q])
     @articles = fetch_articles(@scope)
     @path = drafts_admin_articles_path
     render :index
   end
 
   def scheduled
-    @scope = Article.scheduled
+    @scope = Article.scheduled.search_content(params[:q])
     @articles = fetch_articles(@scope)
     @path = scheduled_admin_articles_path
     render :index

@@ -839,6 +839,11 @@ code {
     max-width: 400px;
 }
 
+.admin-search-form {
+    margin: 0;
+    margin-left: auto;
+}
+
 .search-input {
     border: none;
     outline: none;

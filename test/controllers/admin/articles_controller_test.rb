@@ -16,6 +16,43 @@ class Admin::ArticlesControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  test "should filter articles by search query" do
+    get admin_articles_path, params: { q: "Published" }
+    assert_response :success
+    assert_match "Published Article", response.body
+    assert_no_match "Draft Article", response.body
+  end
+
+  test "should filter articles by search query and status" do
+    get admin_articles_path, params: { q: "Article", status: "draft" }
+    assert_response :success
+    assert_match "Draft Article", response.body
+    assert_no_match "Published Article", response.body
+  end
+
+  test "should find articles by html content" do
+    article = Article.create!(
+      title: "HTML Body Post",
+      status: :publish,
+      content_type: :html,
+      html_content: "<p>unique-html-needle</p>"
+    )
+
+    get admin_articles_path, params: { q: "unique-html-needle" }
+    assert_response :success
+    assert_match "HTML Body Post", response.body
+    assert_no_match "Published Article", response.body
+  ensure
+    article&.destroy
+  end
+
+  test "should filter drafts by search query" do
+    get drafts_admin_articles_path, params: { q: "Draft" }
+    assert_response :success
+    assert_match "Draft Article", response.body
+    assert_no_match "Published Article", response.body
+  end
+
   test "should get new" do
     get new_admin_article_path
     assert_response :success

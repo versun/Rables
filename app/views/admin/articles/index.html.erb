@@ -3,15 +3,25 @@
 <div class="admin-articles">
   <div class="admin-toolbar">
     <%= link_to "New Post", new_admin_article_path, class: "btn btn-primary" %>
-    
+
     <div class="status-tabs">
-      <%= link_to "All", admin_articles_path, class: "status-tab #{params[:status].blank? ? 'active' : ''}" %>
-      <%= link_to "Published", admin_articles_path(status: 'publish'), class: "status-tab #{params[:status] == 'publish' ? 'active' : ''}" %>
-      <%= link_to "Draft", admin_articles_path(status: 'draft'), class: "status-tab #{params[:status] == 'draft' ? 'active' : ''}" %>
-      <%= link_to "Scheduled", admin_articles_path(status: 'schedule'), class: "status-tab #{params[:status] == 'schedule' ? 'active' : ''}" %>
-      <%= link_to "Shared", admin_articles_path(status: 'shared'), class: "status-tab #{params[:status] == 'shared' ? 'active' : ''}" %>
-      <%= link_to "Trash", admin_articles_path(status: 'trash'), class: "status-tab #{params[:status] == 'trash' ? 'active' : ''}" %>
+      <%= link_to "All", admin_articles_path(q: params[:q]), class: "status-tab #{params[:status].blank? ? 'active' : ''}" %>
+      <%= link_to "Published", admin_articles_path(status: 'publish', q: params[:q]), class: "status-tab #{params[:status] == 'publish' ? 'active' : ''}" %>
+      <%= link_to "Draft", admin_articles_path(status: 'draft', q: params[:q]), class: "status-tab #{params[:status] == 'draft' ? 'active' : ''}" %>
+      <%= link_to "Scheduled", admin_articles_path(status: 'schedule', q: params[:q]), class: "status-tab #{params[:status] == 'schedule' ? 'active' : ''}" %>
+      <%= link_to "Shared", admin_articles_path(status: 'shared', q: params[:q]), class: "status-tab #{params[:status] == 'shared' ? 'active' : ''}" %>
+      <%= link_to "Trash", admin_articles_path(status: 'trash', q: params[:q]), class: "status-tab #{params[:status] == 'trash' ? 'active' : ''}" %>
     </div>
+
+    <%= form_with url: @path, method: :get, local: true, class: "admin-search-form" do |form| %>
+      <div class="search-box">
+        <%= form.text_field :q,
+            value: params[:q],
+            placeholder: "搜索标题、内容...",
+            class: "search-input" %>
+      </div>
+      <%= hidden_field_tag :status, params[:status] if params[:status].present? %>
+    <% end %>
   </div>
 
   <div data-controller="batch-selection">

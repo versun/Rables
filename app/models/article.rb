@@ -53,11 +53,12 @@ class Article < ApplicationRecord
     # 简单的LIKE搜索，适用于SQLite；转义通配符并用 ESCAPE 使其生效
     search_term = "%#{ActiveRecord::Base.sanitize_sql_like(query)}%"
 
-    # 搜索标题、slug、描述和内容
+    # 搜索标题、slug、描述、HTML内容和富文本内容
     where(
       "articles.title LIKE :term ESCAPE '\\' OR
        articles.slug LIKE :term ESCAPE '\\' OR
        articles.description LIKE :term ESCAPE '\\' OR
+       articles.html_content LIKE :term ESCAPE '\\' OR
        articles.id IN (SELECT record_id FROM action_text_rich_texts
               WHERE record_type = 'Article' AND name = 'content' AND body LIKE :term ESCAPE '\\')",
       term: search_term
