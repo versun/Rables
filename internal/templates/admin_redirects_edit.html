@@ -1,0 +1,54 @@
+{{define "title"}}Edit Redirect|Admin{{end}}
+{{define "content"}}
+<div class="admin-form">
+  <h2>Edit Redirect</h2>
+  {{if .Errors}}
+  <div class="form-errors">
+    <strong>{{len .Errors}} error(s) prohibited this redirect from being saved:</strong>
+    <ul>
+      {{range .Errors}}<li>{{.}}</li>{{end}}
+    </ul>
+  </div>
+  {{end}}
+  <form method="post" action="/admin/redirects/{{.Redirect.ID}}">
+    <div class="form-section">
+      <h3>Redirect Configuration</h3>
+      <div class="field">
+        <label for="regex">Regex Pattern</label>
+        <input type="text" id="regex" name="regex" placeholder="^/old-path$" value="{{.Redirect.Regex}}">
+        <small class="help-text">
+          Regular expression to match the URL path. Examples:
+          <code>^/old-page$</code> (exact match), <code>^/posts/(.+)$</code> (with capture groups)
+        </small>
+      </div>
+      <div class="field">
+        <label for="replacement">Replacement URL</label>
+        <input type="text" id="replacement" name="replacement" placeholder="/new-path" value="{{.Redirect.Replacement}}">
+        <small class="help-text">
+          Target URL or replacement pattern. Use <code>\1</code>, <code>\2</code> etc. to reference capture groups.
+          Examples: <code>/new-page</code>, <code>/articles/\1</code>
+        </small>
+      </div>
+      <div class="field checkbox">
+        <input type="hidden" name="permanent" value="0">
+        <input type="checkbox" id="permanent" name="permanent" value="1"{{if .Redirect.Permanent}} checked{{end}}>
+        <label for="permanent">Permanent Redirect (301)</label>
+      </div>
+      <small class="help-text">
+        Permanent redirects (301) tell search engines to update their index.
+        Temporary redirects (302) are used for short-term changes.
+      </small>
+      <div class="field checkbox">
+        <input type="hidden" name="enabled" value="0">
+        <input type="checkbox" id="enabled" name="enabled" value="1"{{if .Redirect.Enabled}} checked{{end}}>
+        <label for="enabled">Enabled</label>
+      </div>
+      <small class="help-text">Only enabled redirects will be active.</small>
+    </div>
+    <div class="form-actions">
+      <input type="submit" value="Save">
+      <a href="/admin/redirects" class="btn btn-secondary">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

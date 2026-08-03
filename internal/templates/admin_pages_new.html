@@ -1,0 +1,90 @@
+{{define "title"}}New Pages - Admin{{end}}
+{{define "content"}}
+<div class="admin-form">
+  <h3>New Pages</h3>
+  {{if .Errors}}
+  <div class="form-errors">
+    <strong>{{len .Errors}} {{if eq (len .Errors) 1}}error{{else}}errors{{end}} prohibited this page from being saved:</strong>
+    <ul>
+      {{range .Errors}}<li>{{.}}</li>{{end}}
+    </ul>
+  </div>
+  {{end}}
+  <form method="post" action="/admin/pages" data-controller="content-form" data-action="submit->content-form#submit">
+    <div class="article-form-layout">
+      <div class="article-form-content-column">
+        <div class="form-section compact">
+          <h3>Content</h3>
+          <div class="field">
+            <label for="content_type">Content type</label>
+            <select id="content_type" name="content_type" required data-content-form-target="contentTypeSelect" data-action="change->content-form#toggleContentType">
+              <option value="rich_text" {{if ne .Page.ContentType "html"}}selected{{end}}>Rich Text</option>
+              <option value="html" {{if eq .Page.ContentType "html"}}selected{{end}}>HTML Code</option>
+            </select>
+          </div>
+          <div class="field" data-content-form-target="richTextField"{{if eq .Page.ContentType "html"}} style="display: none;"{{end}}>
+            <label for="content">Rich text content</label>
+            <textarea id="content" name="content" rows="15">{{.RichContent}}</textarea>
+          </div>
+          <div class="field" data-content-form-target="htmlContentField"{{if ne .Page.ContentType "html"}} style="display: none;"{{end}}>
+            <label for="html_content">HTML content</label>
+            <textarea id="html_content" name="html_content" rows="15" class="code-editor" placeholder="Enter your HTML code here...">{{.HTMLContent}}</textarea>
+            <small>Raw HTML code will be rendered directly. The server saves the field matching the selected content type.</small>
+          </div>
+        </div>
+      </div>
+      <div class="article-form-sidebar-column">
+        <div class="form-section compact">
+          <h3>Basic Information</h3>
+          <div class="field">
+            <label for="title">Title</label>
+            <input type="text" id="title" name="title" required value="{{.Page.Title.String}}">
+          </div>
+          <div class="field">
+            <label for="slug">Slug</label>
+            <input type="text" id="slug" name="slug" required value="{{.Page.Slug.String}}">
+          </div>
+          <div class="field">
+            <label for="page_order">Page Order</label>
+            <input type="number" id="page_order" name="page_order" required value="{{.Page.PageOrder}}">
+          </div>
+          <div class="field">
+            <label for="redirect_url">Redirect To (Optional)</label>
+            <input type="url" id="redirect_url" name="redirect_url" placeholder="https://example.com" value="{{.Page.RedirectUrl.String}}">
+          </div>
+          <small>Leave redirect URL empty to use page content</small>
+        </div>
+        <div class="form-section compact">
+          <h3>Publishing</h3>
+          <div class="field">
+            <label for="status">Status</label>
+            <select id="status" name="status" required>
+              <option value="" disabled {{if eq .StatusName ""}}selected{{end}}>Choose a status</option>
+              <option value="draft" {{if eq .StatusName "draft"}}selected{{end}}>draft</option>
+              <option value="publish" {{if eq .StatusName "publish"}}selected{{end}}>publish</option>
+              <option value="schedule" {{if eq .StatusName "schedule"}}selected{{end}}>schedule</option>
+              <option value="trash" {{if eq .StatusName "trash"}}selected{{end}}>trash</option>
+              <option value="shared" {{if eq .StatusName "shared"}}selected{{end}}>shared</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="scheduled_at">Schedule For</label>
+            <input type="datetime-local" id="scheduled_at" name="scheduled_at" value="{{.ScheduledAtValue}}">
+            <small>Required when the status is schedule.</small>
+          </div>
+          <div class="field">
+            <label for="comment" style="display: inline-block; font-weight: bold;">
+              <input type="checkbox" id="comment" name="comment" value="1" {{if eq .Page.Comment 1}}checked{{end}} style="margin-right: 0.5rem;">
+              Enable Comments
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="form-actions">
+      <input type="submit" value="Save">
+      <a href="/admin/pages" class="btn btn-secondary">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

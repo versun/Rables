@@ -1,0 +1,60 @@
+{{define "title"}}Static Files|Admin{{end}}
+{{define "content"}}
+<div class="admin-container">
+  <h1>Static Files Management</h1>
+  <p class="subtitle">Manage static files for your website, such as icons, logos, etc.</p>
+
+  <div class="upload-section">
+    <h2>Upload New File</h2>
+    <form method="post" action="/admin/static_files" enctype="multipart/form-data" class="upload-form">
+      <div class="form-group">
+        <label for="file">Choose File</label>
+        <input type="file" id="file" name="file" required>
+        <small class="help-text">File will use the original filename from upload</small>
+      </div>
+      <div class="form-group">
+        <label for="description">Description (Optional)</label>
+        <textarea id="description" name="description" rows="2" placeholder="Description of file usage"></textarea>
+      </div>
+      <input type="submit" value="Upload File" class="btn btn-primary">
+    </form>
+  </div>
+
+  <div class="files-section">
+    <h2>Uploaded Files</h2>
+    {{if .Files}}
+    <table class="files-table">
+      <thead>
+        <tr>
+          <th>Filename</th>
+          <th>Description</th>
+          <th>Size</th>
+          <th>Upload Time</th>
+          <th>Access Link</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Files}}
+        <tr>
+          <td><code>{{.Filename}}</code></td>
+          <td>{{.Description}}</td>
+          <td>{{.SizeHuman}}</td>
+          <td>{{.UploadedAt}}</td>
+          <td><a href="{{.PublicPath}}" target="_blank" class="btn-link">{{.PublicPath}}</a></td>
+          <td>
+            <form method="post" action="/admin/static_files/{{.ID}}/destroy"
+                  onsubmit="return confirm('Are you sure you want to delete {{.Filename}}?')">
+              <button type="submit" class="btn-danger btn-small">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <p class="no-files">No files uploaded yet</p>
+    {{end}}
+  </div>
+</div>
+{{end}}

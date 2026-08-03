@@ -1,0 +1,73 @@
+{{define "title"}}Jobs|Admin{{end}}
+{{define "content"}}
+<div class="admin-container admin-jobs">
+  <h1>Jobs</h1>
+
+  <div class="form-section" style="margin-bottom: 20px;">
+    <form method="get" action="/admin/jobs" style="display: flex; gap: 10px; align-items: end;">
+      <div>
+        <label for="job-status-filter" style="display: block; font-size: 12px; color: #666; margin-bottom: 6px;">Status</label>
+        <select name="status" id="job-status-filter" style="padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px;">
+          <option value="all" {{if eq .Status "all"}}selected{{end}}>All</option>
+          <option value="queued" {{if eq .Status "queued"}}selected{{end}}>queued</option>
+          <option value="running" {{if eq .Status "running"}}selected{{end}}>running</option>
+          <option value="done" {{if eq .Status "done"}}selected{{end}}>done</option>
+          <option value="failed" {{if eq .Status "failed"}}selected{{end}}>failed</option>
+        </select>
+      </div>
+      <input type="submit" value="Filter" class="btn btn-primary btn-sm">
+    </form>
+  </div>
+
+  <div class="form-section">
+    <div class="table-container">
+      <table class="admin-table compact-table">
+        <thead>
+          <tr>
+            <th class="col-compact">ID</th>
+            <th>Kind</th>
+            <th class="col-compact">Status</th>
+            <th class="col-date-compact">Run At</th>
+            <th class="col-compact">Attempts</th>
+            <th class="col-title">Last Error</th>
+            <th class="col-date-compact">Created At</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Jobs}}
+          <tr>
+            <td class="col-compact">{{.ID}}</td>
+            <td><code>{{.Kind}}</code></td>
+            <td class="col-compact">{{.Status}}</td>
+            <td class="col-date-compact"><small>{{.RunAt}}</small></td>
+            <td class="col-compact">{{.Attempts}}</td>
+            <td class="col-title"><span class="truncate" title="{{.LastError}}">{{.LastError}}</span></td>
+            <td class="col-date-compact"><small>{{.CreatedAt}}</small></td>
+          </tr>
+          {{else}}
+          <tr>
+            <td colspan="7" class="no-content-row">
+              <p>No job runs found.</p>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {{if .Jobs}}
+    <div class="pagination-wrapper">
+      {{range paginationWindow .Page .Pages}}
+        {{if .Gap}}
+          <span class="pagination-gap">…</span>
+        {{else if eq .Page $.Page}}
+          <span class="pagination-current">{{.Page}}</span>
+        {{else}}
+          <a href="/admin/jobs?page={{.Page}}{{if ne $.Status "all"}}&amp;status={{$.Status}}{{end}}" class="pagination-link">{{.Page}}</a>
+        {{end}}
+      {{end}}
+    </div>
+  {{end}}
+</div>
+{{end}}

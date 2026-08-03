@@ -1,0 +1,31 @@
+{{define "title"}}{{.Title}} | {{.Chrome.Title}}{{end}}
+{{define "head"}}{{template "public_head" .Chrome}}{{end}}
+{{define "content"}}
+<div class="site-container">
+  {{template "public_sidebar" .Chrome}}
+  <main class="main-content">
+    <div class="limiter">
+      <article>
+        <div class="article-content">
+          {{.ContentHTML}}
+        </div>
+      </article>
+      {{if .Comments.Enabled}}
+      <hr>
+      <div id="comments-section">
+        {{if .Comments.Tree}}
+        <div style="margin-top: 2rem; margin-bottom: 1.5rem;">
+          <h3 style="margin-bottom: 1rem; color: #333; font-size: 1.125rem;">Comments ({{.Comments.Count}})</h3>
+        </div>
+        {{template "comments_tree" .Comments.Tree}}
+        {{end}}
+        {{template "comment_form" .Comments.Form}}
+        <div class="giscus"></div>
+        {{.Comments.Giscus}}
+      </div>
+      {{end}}
+    </div>
+  </main>
+</div>
+{{end}}
+{{define "bodyEnd"}}{{.Chrome.ToolCode}}{{end}}

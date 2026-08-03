@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html data-controller="theme-toggle">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>{{block "title" .}}{{end}}</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script src="/assets/app.js" defer></script>
+    {{block "head" .}}{{end}}
+  </head>
+  <body>
+    {{flashHTML .Flash}}
+    {{block "content" .}}{{end}}
+    {{block "bodyEnd" .}}{{end}}
+  </body>
+</html>

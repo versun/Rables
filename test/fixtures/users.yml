@@ -1,8 +1,0 @@
-admin:
-  user_name: admin
-  password_digest: <%= BCrypt::Password.create('password123') %>
-
-editor:
-  user_name: editor
-  password_digest: <%= BCrypt::Password.create('password123') %>
-

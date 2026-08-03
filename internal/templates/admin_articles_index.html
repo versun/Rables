@@ -1,0 +1,148 @@
+{{define "title"}}Posts|Admin{{end}}
+{{define "content"}}
+<form id="batch-posts" method="post"></form>
+<div class="admin-articles" data-controller="batch-selection">
+  <div class="admin-toolbar">
+    <a href="/admin/posts/new" class="btn btn-primary">New Post</a>
+
+    <div class="status-tabs">
+      <a href="{{.Path}}{{if .Q}}?q={{.Q}}{{end}}" class="status-tab {{if eq .Status "all"}}active{{end}}">All</a>
+      <a href="{{.Path}}?status=publish{{if .Q}}&q={{.Q}}{{end}}" class="status-tab {{if eq .Status "publish"}}active{{end}}">Published</a>
+      <a href="{{.Path}}?status=draft{{if .Q}}&q={{.Q}}{{end}}" class="status-tab {{if eq .Status "draft"}}active{{end}}">Draft</a>
+      <a href="{{.Path}}?status=schedule{{if .Q}}&q={{.Q}}{{end}}" class="status-tab {{if eq .Status "schedule"}}active{{end}}">Scheduled</a>
+      <a href="{{.Path}}?status=shared{{if .Q}}&q={{.Q}}{{end}}" class="status-tab {{if eq .Status "shared"}}active{{end}}">Shared</a>
+      <a href="{{.Path}}?status=trash{{if .Q}}&q={{.Q}}{{end}}" class="status-tab {{if eq .Status "trash"}}active{{end}}">Trash</a>
+    </div>
+
+    <form method="get" action="{{.Path}}" class="admin-search-form">
+      <div class="search-box">
+        <input type="text" name="q" value="{{.Q}}" placeholder="搜索标题、内容..." class="search-input">
+      </div>
+      {{if ne .Status "all"}}<input type="hidden" name="status" value="{{.Status}}">{{end}}
+    </form>
+  </div>
+
+  <div class="batch-actions" data-batch-selection-target="actions" style="display: none; padding: 10px; background: #f5f5f5; border-radius: 4px; margin-bottom: 10px; gap: 10px;">
+    <span style="margin-right: 10px;"><strong><span data-batch-selection-target="count">0</span></strong> selected</span>
+    <button type="submit" form="batch-posts" formaction="/admin/posts/batch_publish" class="btn btn-sm" style="background: #28a745; color: white;">Publish</button>
+    <button type="submit" form="batch-posts" formaction="/admin/posts/batch_unpublish" class="btn btn-sm" style="background: #ffc107; color: black;">Unpublish</button>
+    <button type="submit" form="batch-posts" formaction="/admin/posts/batch_destroy" class="btn btn-sm" style="background: #dc3545; color: white;"
+            onclick="return confirm('Are you sure?');">Delete</button>
+
+    <span style="display: inline-flex; gap: 4px; align-items: center; margin-left: 10px;">
+      <input type="text" name="tag_names" form="batch-posts" placeholder="例如: tag1, tag2" style="padding: 4px; border: 1px solid #ddd; border-radius: 4px;">
+      <button type="submit" form="batch-posts" formaction="/admin/posts/batch_add_tags" class="btn btn-sm" style="background: #17a2b8; color: white;">Add Tags</button>
+    </span>
+
+    <span style="display: inline-flex; gap: 4px; align-items: center; margin-left: 10px;">
+      <label><input type="checkbox" name="platforms" value="mastodon" form="batch-posts"> Mastodon</label>
+      <label><input type="checkbox" name="platforms" value="twitter" form="batch-posts"> Twitter</label>
+      <label><input type="checkbox" name="platforms" value="bluesky" form="batch-posts"> Bluesky</label>
+      <button type="submit" form="batch-posts" formaction="/admin/posts/batch_crosspost" class="btn btn-sm" style="background: #6f42c1; color: white;">Crosspost</button>
+    </span>
+
+    <button type="submit" form="batch-posts" formaction="/admin/posts/batch_newsletter" class="btn btn-sm" style="background: #fd7e14; color: white; margin-left: 10px;">Newsletter</button>
+  </div>
+
+  <div class="table-container">
+    <table class="admin-table compact-table">
+      <thead>
+        <tr>
+          <th style="width: 40px;">
+            <input type="checkbox" data-batch-selection-target="selectAll" data-action="change->batch-selection#toggleAll" aria-label="Select all">
+          </th>
+          <th class="col-actions-compact">Actions</th>
+          <th class="col-title">Title</th>
+          <th class="col-status">Status</th>
+          <th class="col-tags">Tags</th>
+          <th class="col-comments">Comments</th>
+          <th class="col-date-compact">Created</th>
+          <th class="col-date-compact">Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{if .Rows}}
+          {{range .Rows}}
+            {{$slug := .Article.Slug.String}}
+            <tr>
+              <td>
+                <input type="checkbox" name="ids" value="{{$slug}}" form="batch-posts"
+                       data-batch-selection-target="checkbox" data-action="change->batch-selection#toggle">
+              </td>
+              <td class="col-actions-compact">
+                <div class="action-buttons">
+                  <a href="/admin/posts/{{$slug}}/edit" class="action-btn" title="Edit">Edit</a>
+                  {{if .IsTrash}}
+                    <form method="post" action="/admin/posts/{{$slug}}/destroy" style="display: inline;"
+                          onsubmit="return confirm('Delete permanently?');">
+                      <button type="submit" class="action-btn" title="Delete">Delete</button>
+                    </form>
+                  {{else}}
+                    <form method="post" action="/admin/posts/{{$slug}}/destroy" style="display: inline;">
+                      <button type="submit" class="action-btn" title="Trash">Trash</button>
+                    </form>
+                  {{end}}
+                </div>
+              </td>
+              <td class="col-title">
+                <a href="/admin/posts/{{$slug}}/edit" class="title-link">{{.DisplayTitle}}</a>
+              </td>
+              <td class="col-status">
+                <span class="status-badge status-{{.StatusName}}">{{.StatusName}}</span>
+              </td>
+              <td class="col-tags">
+                {{if .Tags}}
+                  <small>{{.Tags}}</small>
+                {{else}}
+                  <small class="text-muted">—</small>
+                {{end}}
+              </td>
+              <td class="col-comments">
+                <div class="comments-info" style="display: flex; align-items: center; gap: 8px;">
+                  <span class="comment-count">{{.CommentCount}}</span>
+                  {{range .FetchPlatforms}}
+                    <form method="post" action="/admin/posts/{{$slug}}/fetch_comments" style="display: inline-block; margin: 0;"
+                          data-controller="fetch-comments" data-fetch-comments-platform-value="{{.}}"
+                          data-action="submit->fetch-comments#submit">
+                      <input type="hidden" name="platform" value="{{.}}">
+                      <button type="submit" class="action-btn" title="Fetch comments from {{.}}"
+                              data-fetch-comments-target="button"
+                              style="padding: 2px 6px; font-size: 0.8em; border: 1px solid #ddd; background: #f5f5f5; cursor: pointer; color: #666;">{{.}}</button>
+                    </form>
+                  {{end}}
+                </div>
+              </td>
+              <td class="col-date-compact">
+                <small>{{formatTime .Article.CreatedAt $.TimeZone "01/02 15:04"}}</small>
+              </td>
+              <td class="col-date-compact">
+                <small>{{formatTime .Article.UpdatedAt $.TimeZone "01/02 15:04"}}</small>
+              </td>
+            </tr>
+          {{end}}
+        {{else}}
+          <tr>
+            <td colspan="8" class="no-content-row">
+              <p>No posts found.</p>
+            </td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{if .Rows}}
+    <div class="pagination-wrapper">
+      {{range paginationWindow .Page .Pages}}
+        {{if .Gap}}
+          <span class="pagination-gap">…</span>
+        {{else if eq .Page $.Page}}
+          <span class="pagination-current">{{.Page}}</span>
+        {{else}}
+          <a href="{{$.Path}}?page={{.Page}}{{if ne $.Status "all"}}&status={{$.Status}}{{end}}{{if $.Q}}&q={{$.Q}}{{end}}" class="pagination-link">{{.Page}}</a>
+        {{end}}
+      {{end}}
+    </div>
+  {{end}}
+</div>
+{{end}}

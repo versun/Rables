@@ -1,0 +1,34 @@
+[Unit]
+Description=Rables blog server (Go)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rables
+Group=rables
+WorkingDirectory=/var/lib/rables
+Environment=ADDR=:8080
+Environment=DATA_DIR=/var/lib/rables
+Environment=HMAC_SECRET=CHANGE_ME
+# Environment=LOG_LEVEL=info
+# Environment=ARTICLE_ROUTE_PREFIX=
+ExecStart=/usr/local/bin/rables-server
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+# Hardening: the service only ever writes under DATA_DIR.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/rables
+
+[Install]
+WantedBy=multi-user.target

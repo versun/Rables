@@ -1,0 +1,40 @@
+{{define "title"}}Activity|Admin{{end}}
+{{define "content"}}
+<div class="admin-container admin-activity">
+  <h1>Activity</h1>
+  <div class="form-section">
+    <table class="admin-activity-table">
+      <thead>
+        <tr>
+          <th class="col-time">Time</th>
+          <th class="col-level">Level</th>
+          <th class="col-action">Action</th>
+          <th class="col-target">Target</th>
+          <th class="col-description">Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Logs}}
+        <tr>
+          <td class="col-time"><code>{{.Time}}</code></td>
+          <td class="col-level"><span class="level level-{{.Level}}" title="{{.Level}}">{{.Level}}</span></td>
+          <td class="col-action"><span class="truncate" title="{{.Action}}">{{.Action}}</span></td>
+          <td class="col-target"><code class="truncate" title="{{.Target}}">{{.Target}}</code></td>
+          <td class="col-description">
+            <div class="description-content">
+              <span class="truncate" title="{{.Description}}">{{.Description}}</span>
+            </div>
+          </td>
+        </tr>
+        {{else}}
+        <tr>
+          <td colspan="5" class="no-content-row">
+            <p>No activity recorded yet.</p>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}

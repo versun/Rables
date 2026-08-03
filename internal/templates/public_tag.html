@@ -1,0 +1,31 @@
+{{define "title"}}{{.Tag.Name}} | {{.Chrome.Title}}{{end}}
+{{define "head"}}{{template "public_head" .Chrome}}
+<link rel="alternate" type="application/rss+xml" title="RSS Feed for {{.Tag.Name}}" href="/tags/{{.Tag.Slug}}.rss">
+{{end}}
+{{define "content"}}
+<div class="site-container">
+  {{template "public_sidebar" .Chrome}}
+  <main class="main-content">
+    <div class="limiter">
+      <div style="max-width: 800px; margin: 0 auto; padding: 2rem 1rem;">
+        <div style="margin-bottom: 1rem;">
+          <a href="/tags" style="color: #666; text-decoration: none; font-size: 0.9rem;">← All Tags</a>
+        </div>
+        <h2>Articles tagged with "{{.Tag.Name}}"</h2>
+        <div style="color: #666; margin-bottom: 2rem;">
+          <span>{{.Total}} article{{if ne .Total 1}}s{{end}} found</span>
+          <span style="margin: 0 0.5rem;">·</span>
+          <a href="/tags/{{.Tag.Slug}}.rss" style="color: #666; text-decoration: underline;">RSS</a>
+          {{template "subscribe_form" .Subscribe}}
+        </div>
+        {{if .List.Items}}
+        {{template "article_list" .List}}
+        {{else}}
+        <p style="color: #999;">No published articles with this tag.</p>
+        {{end}}
+      </div>
+    </div>
+  </main>
+</div>
+{{end}}
+{{define "bodyEnd"}}{{.Chrome.ToolCode}}{{end}}

@@ -1,0 +1,101 @@
+{{define "title"}}Site Settings{{end}}
+{{define "content"}}
+<h1>Site Settings</h1>
+<form method="post" action="/admin/setting">
+  <div class="form-section">
+    <h3>Site Information</h3>
+
+    <div class="field">
+      <label for="title">Site Title</label>
+      <input type="text" id="title" name="title" value="{{.Setting.Title.String}}">
+    </div>
+
+    <div class="field">
+      <label for="description">Site Description</label>
+      <input type="text" id="description" name="description" value="{{.Setting.Description.String}}">
+    </div>
+
+    <div class="field">
+      <label for="author">Author</label>
+      <input type="text" id="author" name="author" value="{{.Setting.Author.String}}">
+    </div>
+
+    <div class="field">
+      <label for="url">Site URL</label>
+      <input type="text" id="url" name="url" value="{{.Setting.Url.String}}">
+    </div>
+
+    <div class="field">
+      <label for="time_zone">Timezone</label>
+      <input type="text" id="time_zone" name="time_zone" value="{{.Setting.TimeZone}}" list="timezone-options">
+      <datalist id="timezone-options">
+        <option value="UTC"></option>
+        <option value="Europe/London"></option>
+        <option value="Europe/Paris"></option>
+        <option value="Europe/Berlin"></option>
+        <option value="America/New_York"></option>
+        <option value="America/Chicago"></option>
+        <option value="America/Denver"></option>
+        <option value="America/Los_Angeles"></option>
+        <option value="America/Sao_Paulo"></option>
+        <option value="Asia/Shanghai"></option>
+        <option value="Asia/Hong_Kong"></option>
+        <option value="Asia/Singapore"></option>
+        <option value="Asia/Tokyo"></option>
+        <option value="Asia/Dubai"></option>
+        <option value="Asia/Kolkata"></option>
+        <option value="Australia/Sydney"></option>
+        <option value="Pacific/Auckland"></option>
+      </datalist>
+      <small>IANA time zone name; unknown names display as UTC</small>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Custom Code</h3>
+
+    <div class="field">
+      <label for="head_code">Head Code</label>
+      <textarea id="head_code" name="head_code">{{.Setting.HeadCode.String}}</textarea>
+      <small>HTML code to insert in the &lt;head&gt; section</small>
+    </div>
+
+    <div class="field">
+      <label for="giscus">Giscus Code</label>
+      <textarea id="giscus" name="giscus">{{.Setting.Giscus.String}}</textarea>
+      <small>Giscus comment system configuration</small>
+    </div>
+
+    <div class="field">
+      <label for="tool_code">Tool Code</label>
+      <textarea id="tool_code" name="tool_code">{{.Setting.ToolCode.String}}</textarea>
+      <small>Additional tool scripts or tracking codes</small>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Styling</h3>
+
+    <div class="field">
+      <label for="custom_css">Custom CSS</label>
+      <textarea id="custom_css" name="custom_css">{{.Setting.CustomCss.String}}</textarea>
+      <small>Custom CSS styles for your site</small>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Social Links</h3>
+
+    <div class="field">
+      <label for="social_links_json">Social Links (JSON)</label>
+      <textarea id="social_links_json" name="social_links_json" rows="15" style="font-family: monospace;"
+                placeholder='{"github": {"url": "https://github.com/you", "icon": "fa-brands fa-github"}}'>{{.SocialLinksJSON}}</textarea>
+      <small>Configure social platform links in JSON format. Each platform needs name, url, and FontAwesome icon class. Leave unchanged to keep the current value.</small>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit">Save</button>
+  </div>
+</form>
+{{end}}

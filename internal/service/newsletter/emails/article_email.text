@@ -1,0 +1,16 @@
+{{.Title}}
+
+{{if .Description}}{{.Description}}
+
+{{end}}{{if .HasSource}}参考:
+{{if .SourceAuthor}}来源: {{.SourceAuthor}}
+{{end}}{{if .SourceContent}}{{.SourceContent}}
+{{end}}原文: {{.SourceURL}}
+
+{{end}}{{.ContentText}}
+
+阅读全文: {{.ArticleURL}}
+{{if .FooterText}}
+{{.FooterText}}
+{{end}}
+不想再收到这些邮件？取消订阅: {{.UnsubscribeURL}}

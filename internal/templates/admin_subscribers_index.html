@@ -1,0 +1,132 @@
+{{define "title"}}Subscribers|Admin{{end}}
+{{define "content"}}
+<div class="admin-subscribers">
+  <h3>订阅者管理</h3>
+
+  <div style="margin-bottom: 30px; padding: 20px; background: #f5f5f5; border-radius: 4px;">
+    <h4 style="margin-top: 0;">批量添加订阅者</h4>
+    <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
+      每行输入一个邮箱地址，可以在邮箱后加逗号，再输入tag名称来订阅特定内容。格式示例：<br>
+      <code>a@example.com,tag1</code><br>
+      <code>b@example.com</code><br>
+      <code>c@example.com,tag2,tag3,tag4</code>
+    </p>
+    <form method="post" action="/admin/subscribers/batch_create">
+      <div style="margin-bottom: 10px;">
+        <textarea name="emails_text" rows="8" placeholder="a@example.com,tag1&#10;b@example.com&#10;c@example.com,tag2,tag3" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; font-size: 14px;"></textarea>
+      </div>
+      <input type="submit" value="批量添加" class="btn btn-primary">
+    </form>
+  </div>
+
+  <div style="margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 4px;">
+    <h4 style="margin-top: 0;">筛选</h4>
+    <form method="get" action="/admin/subscribers">
+      <div style="display: flex; flex-wrap: wrap; gap: 15px; align-items: end;">
+        <div>
+          <label style="display: block; font-size: 12px; color: #666; margin-bottom: 6px;">状态</label>
+          <select name="status" style="padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px;">
+            <option value="all" {{if eq .Status "all"}}selected{{end}}>全部</option>
+            <option value="active" {{if eq .Status "active"}}selected{{end}}>已确认</option>
+            <option value="unconfirmed" {{if eq .Status "unconfirmed"}}selected{{end}}>待确认</option>
+            <option value="unsubscribed" {{if eq .Status "unsubscribed"}}selected{{end}}>已取消</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="display: block; font-size: 12px; color: #666; margin-bottom: 6px;">订阅内容（可多选 Tag）</label>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <label style="display: flex; gap: 6px; align-items: center; margin: 0;">
+              <input type="checkbox" name="include_all" value="1" {{if .IncludeAll}}checked{{end}}>
+              <span>所有内容</span>
+            </label>
+            <select name="tag_ids[]" multiple size="4" style="min-width: 200px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px;">
+              {{range .Tags}}<option value="{{.ID}}" {{if $.TagSelected .ID}}selected{{end}}>{{.Name}}</option>{{end}}
+            </select>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+          <input type="submit" value="筛选" class="btn btn-primary btn-sm">
+          <a href="/admin/subscribers" class="btn btn-secondary btn-sm">重置</a>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <form id="batch-subscribers" method="post"></form>
+  <div data-controller="batch-selection">
+  <div class="batch-actions" data-batch-selection-target="actions" style="display: none; padding: 10px; background: #f5f5f5; border-radius: 4px; margin-bottom: 10px; gap: 10px;">
+    <span style="margin-right: 10px;"><strong><span data-batch-selection-target="count">0</span></strong> selected</span>
+    <button type="submit" form="batch-subscribers" formaction="/admin/subscribers/batch_confirm" class="btn btn-sm" style="background: #28a745; color: white;">改为已确认</button>
+    <button type="submit" form="batch-subscribers" formaction="/admin/subscribers/batch_destroy" class="btn btn-sm" style="background: #dc3545; color: white;">删除</button>
+  </div>
+
+  <div class="table-container">
+    <table class="admin-table compact-table">
+      <thead>
+        <tr>
+          <th style="width: 40px;">
+            <input type="checkbox" data-batch-selection-target="selectAll" data-action="change->batch-selection#toggleAll" aria-label="Select all">
+          </th>
+          <th class="col-title">Email</th>
+          <th class="col-compact">状态</th>
+          <th class="col-title">订阅内容</th>
+          <th class="col-date-compact">订阅时间</th>
+          <th class="col-actions-compact">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Subscribers}}
+        <tr>
+          <td><input type="checkbox" name="ids[]" value="{{.ID}}" form="batch-subscribers"
+                     data-batch-selection-target="checkbox" data-action="change->batch-selection#toggle"></td>
+          <td class="col-title">{{.Email}}</td>
+          <td class="col-compact"><span class="badge {{.StatusBadgeClass}}">{{.StatusLabel}}</span></td>
+          <td class="col-title">
+            {{if .Tags}}
+              <span style="color: #666;">{{.TagNames}}</span>
+            {{else}}
+              <span style="color: #28a745; font-weight: 500;">所有内容</span>
+            {{end}}
+          </td>
+          <td class="col-date-compact"><small>{{formatTime .CreatedAt $.TimeZone "2006-01-02 15:04"}}</small></td>
+          <td class="col-actions-compact">
+            <div class="action-buttons">
+              <form method="post" action="/admin/subscribers/{{.ID}}/destroy" style="display: inline;" onsubmit="return confirm('确定要删除这个订阅者吗？');">
+                <button type="submit" class="action-btn" title="Delete">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{else}}
+        <tr>
+          <td colspan="6" class="no-content-row">
+            <p>No subscribers found.</p>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  </div>
+
+  {{if .Subscribers}}
+    <div class="pagination-wrapper">
+      {{range paginationWindow .Page .Pages}}
+        {{if .Gap}}
+          <span class="pagination-gap">…</span>
+        {{else if eq .Page $.Page}}
+          <span class="pagination-current">{{.Page}}</span>
+        {{else}}
+          <a href="/admin/subscribers?page={{.Page}}&{{$.FilterQuery}}" class="pagination-link">{{.Page}}</a>
+        {{end}}
+      {{end}}
+    </div>
+  {{end}}
+
+  <p style="margin-top: 20px;">
+    <a href="/admin/newsletter" class="btn btn-secondary">返回 Newsletter 设置</a>
+  </p>
+</div>
+{{end}}

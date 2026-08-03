@@ -1,0 +1,117 @@
+{{define "title"}}Twitter Archive | {{.Chrome.Title}}{{end}}
+{{define "head"}}{{template "public_head" .Chrome}}{{end}}
+{{define "content"}}
+<div class="site-container">
+  {{template "public_sidebar" .Chrome}}
+  <main class="main-content">
+    <div class="limiter">
+      <div class="container twitter-archive-page">
+        <header class="twitter-archive-header">
+          <h1>Twitter Archive</h1>
+          <p class="twitter-archive-header__subtitle">Tweets, replies, retweets, and likes from the imported archive.</p>
+          {{if .LastUploadLong}}
+          <p class="twitter-archive-header__meta">
+            Last archive upload: {{.LastUploadLong}}
+          </p>
+          {{end}}
+        </header>
+
+        <nav class="twitter-archive-tabs" aria-label="Twitter archive tabs">
+          {{range .Tabs}}
+          <a href="{{.URL}}" class="twitter-archive-tab{{if .Active}} active{{end}}">{{.Label}}</a>
+          {{end}}
+        </nav>
+
+        {{if .IsLikeTab}}
+          {{if .Likes}}
+          <div class="twitter-archive-list">
+            {{range .Likes}}
+            <article class="twitter-archive-card twitter-archive-card--like">
+              <div class="twitter-archive-card__meta">
+                <span>Liked Tweet</span>
+                <span>ID {{.TweetID}}</span>
+              </div>
+
+              <div class="twitter-archive-card__body">
+                {{if .HasText}}
+                {{.BodyHTML}}
+                {{else}}
+                <p class="twitter-archive-card__note">No tweet text is available in this archive entry.</p>
+                {{end}}
+              </div>
+
+              {{if .ExpandedURL}}
+              <div class="twitter-archive-card__actions">
+                <a href="{{.ExpandedURL}}" target="_blank" rel="noopener">View on X</a>
+              </div>
+              {{end}}
+            </article>
+            {{end}}
+          </div>
+          {{else}}
+          <div class="twitter-archive-empty">
+            No archive items are available in this tab yet.
+          </div>
+          {{end}}
+        {{else}}
+          {{if .Tweets}}
+          <div class="twitter-archive-list">
+            {{range .Tweets}}
+            <article class="twitter-archive-card">
+              <div class="twitter-archive-card__meta">
+                <time datetime="{{.DateISO}}">{{.DateLong}}</time>
+                {{if .HasScreenName}}
+                <span>@{{.ScreenName}}</span>
+                {{end}}
+              </div>
+
+              <div class="twitter-archive-card__body">
+                {{.BodyHTML}}
+              </div>
+
+              {{if .Media}}
+              <div class="twitter-archive-card__media">
+                {{range .Media}}
+                  {{if eq .Kind "image"}}
+                  <div class="twitter-archive-card__media-item twitter-archive-card__media-item--image">
+                    <img src="{{.URL}}" alt="" loading="lazy">
+                  </div>
+                  {{else if eq .Kind "video"}}
+                  <div class="twitter-archive-card__media-item twitter-archive-card__media-item--video">
+                    <video src="{{.URL}}" controls preload="metadata"></video>
+                  </div>
+                  {{else}}
+                  <div class="twitter-archive-card__media-item twitter-archive-card__media-item--file">
+                    <a href="{{.URL}}" target="_blank" rel="noopener">{{.Filename}}</a>
+                  </div>
+                  {{end}}
+                {{end}}
+              </div>
+              {{end}}
+
+              {{if .TweetURL}}
+              <div class="twitter-archive-card__actions">
+                <a href="{{.TweetURL}}" target="_blank" rel="noopener">View on X</a>
+              </div>
+              {{end}}
+            </article>
+            {{end}}
+          </div>
+          {{else}}
+          <div class="twitter-archive-empty">
+            No archive items are available in this tab yet.
+          </div>
+          {{end}}
+        {{end}}
+
+        {{if .Page.Links}}
+        <div class="twitter-archive-pagination">
+          {{template "pagination" .Page}}
+        </div>
+        {{end}}
+      </div>
+    </div>
+  </main>
+</div>
+{{end}}
+{{define "bodyEnd"}}{{.Chrome.ToolCode}}{{end}}

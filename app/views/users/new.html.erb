@@ -1,9 +1,0 @@
-<%= tag.div(flash[:alert], style: "color:red") if flash[:alert] %>
-<%= tag.div(flash[:notice], style: "color:green") if flash[:notice] %>
-<h1>Sign Up</h1>
-<%= form_with(model:User) do |form| %>
-  <%= form.text_field :user_name, required: true, autofocus: true, autocomplete: "username", placeholder: "Enter your username", value: params[:user_name] %><br>
-  <%= form.password_field :password, required: true, placeholder: "Enter your password", maxlength: 72 %><br>
-  <%= form.password_field :password_confirmation, required: true, placeholder: "Confirm your password", maxlength: 72 %><br>
-  <%= form.submit "Sign up" %>
-<% end %>

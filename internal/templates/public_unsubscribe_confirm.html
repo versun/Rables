@@ -1,0 +1,29 @@
+{{define "title"}}{{.Chrome.Title}}{{end}}
+{{define "head"}}{{template "public_head" .Chrome}}{{end}}
+{{define "content"}}
+<div class="site-container">
+  {{template "public_sidebar" .Chrome}}
+  <main class="main-content">
+    <div class="limiter">
+      <div class="container">
+        {{if .Found}}
+          <h1>确认取消订阅</h1>
+          <p class="message">您确定要取消订阅 {{.Chrome.Title}} 的邮件列表吗？</p>
+          <p class="sub-message">取消后，{{.Email}} 将不再收到我们的邮件通知。</p>
+          <form method="post" action="/unsubscribe">
+            <input type="hidden" name="token" value="{{.Token}}">
+            <input type="submit" value="确认取消订阅" class="button">
+          </form>
+          <p class="sub-message"><a href="/">返回首页</a></p>
+        {{else}}
+          <h1 style="color: #dc3545;">取消订阅失败</h1>
+          <p class="message">无效的取消订阅链接。</p>
+          <p class="sub-message">请检查您收到的邮件中的链接是否正确，或联系管理员获取帮助。</p>
+          <a href="/" class="button">返回首页</a>
+        {{end}}
+      </div>
+    </div>
+  </main>
+</div>
+{{end}}
+{{define "bodyEnd"}}{{.Chrome.ToolCode}}{{end}}

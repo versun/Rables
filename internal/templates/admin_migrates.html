@@ -1,0 +1,111 @@
+{{define "title"}}Migrate|Admin{{end}}
+{{define "content"}}
+<div class="admin-container">
+  <h1>Migrate</h1>
+
+  <div class="admin-toolbar">
+    <div class="status-tabs">
+      <a href="/admin/migrates?tab=export" class="status-tab {{if eq .ActiveTab "export"}}active{{end}}">Export</a>
+      <a href="/admin/migrates?tab=import" class="status-tab {{if eq .ActiveTab "import"}}active{{end}}">Import</a>
+    </div>
+  </div>
+
+  {{if eq .ActiveTab "export"}}
+  <div class="form-section compact">
+    <h3>Export Data</h3>
+
+    <div class="form-grid form-grid-2">
+      <div>
+        <h4>CSV Format Export</h4>
+        <p>Export data in CSV format, including all articles, pages, settings, etc.</p>
+        <form method="post" action="/admin/migrates/export">
+          <input type="hidden" name="export_type" value="default">
+          <div class="field checkbox">
+            <input type="checkbox" name="keep_credentials" id="keep_credentials_csv" value="1">
+            <label for="keep_credentials_csv">Keep credentials (otherwise sensitive fields are exported as [REDACTED])</label>
+          </div>
+          <button type="submit" class="btn btn-primary">Export Default Format</button>
+        </form>
+      </div>
+
+      <div>
+        <h4>Markdown Export</h4>
+        <p>Export articles and pages in Markdown format (YAML front matter + body), including local attachments.</p>
+        <form method="post" action="/admin/migrates/export">
+          <input type="hidden" name="export_type" value="markdown">
+          <button type="submit" class="btn btn-primary">Export Markdown Format</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-section compact">
+    <h3>Export Files</h3>
+    {{if .Exports}}
+    <table class="admin-activity-table">
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Size</th>
+          <th class="col-time">Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Exports}}
+        <tr>
+          <td><span class="truncate" title="{{.Name}}">{{.Name}}</span></td>
+          <td>{{.Size}} bytes</td>
+          <td class="col-time">{{formatTime .ModTime $.TimeZone "2006-01-02 15:04:05"}}</td>
+          <td><a href="/admin/downloads/{{.Name}}" class="btn btn-small" download="{{.Name}}">Download</a></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <p>No export files yet.</p>
+    {{end}}
+  </div>
+  {{end}}
+
+  {{if eq .ActiveTab "import"}}
+  <div class="form-section compact">
+    <h3>Import Data</h3>
+
+    <div class="form-grid form-grid-2">
+      <div>
+        <h4>Import from RSS</h4>
+        <p>Import articles from an RSS feed URL</p>
+        <form method="post" action="/admin/migrates/import_rss">
+          <div class="field">
+            <label for="url">RSS URL</label>
+            <input type="text" name="url" id="url" placeholder="https://example.com/feed.xml">
+          </div>
+
+          <div class="field checkbox">
+            <input type="checkbox" name="import_images" id="import_images" value="1">
+            <label for="import_images">Import Images</label>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Import From RSS</button>
+        </form>
+      </div>
+
+      <div>
+        <h4>Import from ZIP File</h4>
+        <p>Upload a ZIP file containing exported data</p>
+        <form method="post" action="/admin/migrates/import" enctype="multipart/form-data">
+          <div class="field">
+            <label for="zip_file">ZIP File</label>
+            <input type="file" name="zip_file" id="zip_file" accept=".zip">
+            <small>Upload a ZIP file containing exported data (CSV files and attachments)</small>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Import From ZIP</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}

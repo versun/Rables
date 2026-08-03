@@ -1,0 +1,17 @@
+{{define "title"}}{{.Chrome.Title}}{{end}}
+{{define "head"}}{{template "public_head" .Chrome}}{{end}}
+{{define "content"}}
+<div class="site-container">
+  {{template "public_sidebar" .Chrome}}
+  <main class="main-content">
+    <div class="limiter">
+      <div class="container">
+        <h1>订阅</h1>
+        <p>通过邮件订阅更新。提交后请在邮箱里点击确认链接完成订阅。</p>
+        {{template "subscribe_form" .Form}}
+      </div>
+    </div>
+  </main>
+</div>
+{{end}}
+{{define "bodyEnd"}}{{.Chrome.ToolCode}}{{end}}

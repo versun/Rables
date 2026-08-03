@@ -1,0 +1,57 @@
+{{define "title"}}Setup{{end}}
+{{define "content"}}
+<h1>Welcome to Rables Setup</h1>
+<p>Let's get your blog up and running! Complete the following steps to finish the installation.</p>
+<form method="post" action="/setup">
+  <h2>1. Create Admin User</h2>
+  <div class="field">
+    <label for="user_name">Username</label>
+    <input type="text" id="user_name" name="user_name" required autofocus
+           autocomplete="username" placeholder="admin" value="{{.UserName}}">
+  </div>
+  <div class="field">
+    <label for="password">Password</label>
+    <div class="password-toggle-wrapper" data-controller="password-toggle">
+      <input type="password" id="password" name="password" required
+             placeholder="Enter a secure password" maxlength="72" autocomplete="new-password"
+             data-password-toggle-target="input">
+      <button type="button" class="password-toggle-btn" data-password-toggle-target="toggleButton"
+              data-action="click->password-toggle#toggle">Show</button>
+    </div>
+  </div>
+  <div class="field">
+    <label for="password_confirmation">Confirm Password</label>
+    <div class="password-toggle-wrapper" data-controller="password-toggle">
+      <input type="password" id="password_confirmation" name="password_confirmation" required
+             placeholder="Re-enter your password" maxlength="72" autocomplete="new-password"
+             data-password-toggle-target="input">
+      <button type="button" class="password-toggle-btn" data-password-toggle-target="toggleButton"
+              data-action="click->password-toggle#toggle">Show</button>
+    </div>
+  </div>
+
+  <h2>2. Configure Site Information</h2>
+  <div class="field">
+    <label for="title">Site Title</label>
+    <input type="text" id="title" name="title" required placeholder="My Awesome Blog" value="{{.Title}}">
+  </div>
+  <div class="field">
+    <label for="description">Site Description</label>
+    <input type="text" id="description" name="description"
+           placeholder="A blog about technology, life, and everything in between">
+  </div>
+  <div class="field">
+    <label for="author">Author</label>
+    <input type="text" id="author" name="author" placeholder="Your Name">
+  </div>
+  <div class="field">
+    <label for="url">Site URL</label>
+    <input type="url" id="url" name="url" required placeholder="https://yourblog.com">
+  </div>
+  <div class="field">
+    <label for="time_zone">Timezone</label>
+    <input type="text" id="time_zone" name="time_zone" placeholder="UTC">
+  </div>
+  <button type="submit">Complete Setup</button>
+</form>
+{{end}}

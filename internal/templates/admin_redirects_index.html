@@ -1,0 +1,50 @@
+{{define "title"}}Redirects|Admin{{end}}
+{{define "content"}}
+<div class="admin-redirects">
+  <div class="admin-toolbar">
+    <a href="/admin/redirects/new" class="btn btn-primary">New Redirect</a>
+  </div>
+
+  <div class="table-container">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th class="col-regex">Regex Pattern</th>
+          <th class="col-replacement">Replacement</th>
+          <th class="col-type">Type</th>
+          <th class="col-status">Status</th>
+          <th class="col-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Redirects}}
+        <tr>
+          <td class="col-regex"><code class="regex-code">{{.Regex}}</code></td>
+          <td class="col-replacement"><code class="replacement-code">{{.Replacement}}</code></td>
+          <td class="col-type">
+            {{if .Permanent}}<span class="type-badge type-permanent">301 Permanent</span>{{else}}<span class="type-badge type-temporary">302 Temporary</span>{{end}}
+          </td>
+          <td class="col-status">
+            {{if .Enabled}}<span class="status-badge status-enabled">Enabled</span>{{else}}<span class="status-badge status-disabled">Disabled</span>{{end}}
+          </td>
+          <td class="col-actions">
+            <div class="action-buttons">
+              <a href="/admin/redirects/{{.ID}}/edit" class="action-btn" title="Edit">Edit</a>
+              <form method="post" action="/admin/redirects/{{.ID}}/destroy" onsubmit="return confirm('Are you sure?')">
+                <button type="submit" class="action-btn" title="Delete">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{else}}
+        <tr>
+          <td colspan="5" class="no-content-row">
+            <p>No redirects found.</p>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}

@@ -1,0 +1,8 @@
+{{define "title"}}Dummy{{end}}
+{{define "content"}}
+<article class="dummy-page">
+  <h1>Dummy page</h1>
+  <p>{{.Message}}</p>
+  <p>Rendered at {{formatTime .Now "UTC" "2006-01-02 15:04"}}</p>
+</article>
+{{end}}

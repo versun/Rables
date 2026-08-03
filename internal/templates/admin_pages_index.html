@@ -1,0 +1,107 @@
+{{define "title"}}Pages|Admin{{end}}
+{{define "content"}}
+<form id="batch-pages" method="post"></form>
+<div class="admin-pages" data-controller="batch-selection">
+  <div class="admin-toolbar">
+    <a href="/admin/pages/new" class="btn btn-primary">New Page</a>
+    <div class="status-tabs">
+      <a href="/admin/pages" class="status-tab {{if eq .Status ""}}active{{end}}">All</a>
+      <a href="/admin/pages?status=publish" class="status-tab {{if eq .Status "publish"}}active{{end}}">Published</a>
+      <a href="/admin/pages?status=draft" class="status-tab {{if eq .Status "draft"}}active{{end}}">Draft</a>
+      <a href="/admin/pages?status=schedule" class="status-tab {{if eq .Status "schedule"}}active{{end}}">Scheduled</a>
+      <a href="/admin/pages?status=shared" class="status-tab {{if eq .Status "shared"}}active{{end}}">Shared</a>
+      <a href="/admin/pages?status=trash" class="status-tab {{if eq .Status "trash"}}active{{end}}">Trash</a>
+    </div>
+    <div class="batch-actions" data-batch-selection-target="actions" style="display: none; padding: 10px; background: #f5f5f5; border-radius: 4px; margin-bottom: 10px; gap: 10px;">
+      <span style="margin-right: 10px;"><strong><span data-batch-selection-target="count">0</span></strong> selected</span>
+      <button type="submit" form="batch-pages" formaction="/admin/pages/batch_publish" class="btn btn-sm" style="background: #28a745; color: white;">Publish</button>
+      <button type="submit" form="batch-pages" formaction="/admin/pages/batch_unpublish" class="btn btn-sm" style="background: #ffc107; color: black;">Unpublish</button>
+      <button type="submit" form="batch-pages" formaction="/admin/pages/batch_destroy" class="btn btn-sm" style="background: #dc3545; color: white;">Delete</button>
+    </div>
+  </div>
+
+  <div class="table-container">
+    <table class="admin-table compact-table">
+      <thead>
+        <tr>
+          <th style="width: 40px;">
+            <input type="checkbox" data-batch-selection-target="selectAll" data-action="change->batch-selection#toggleAll" aria-label="Select all">
+          </th>
+          <th class="col-actions-compact">Actions</th>
+          <th class="col-order">Order</th>
+          <th class="col-title">Title</th>
+          <th class="col-redirect">Redirect</th>
+          <th class="col-date-compact">Created</th>
+          <th class="col-date-compact">Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{if .Pages}}
+          {{range .Pages}}
+            <tr>
+              <td>
+                <input type="checkbox" name="ids" value="{{.Page.Slug.String}}" form="batch-pages"
+                       data-batch-selection-target="checkbox" data-action="change->batch-selection#toggle">
+              </td>
+              <td class="col-actions-compact">
+                <div class="action-buttons">
+                  <a href="/pages/{{.Page.Slug.String}}" class="action-btn" title="View">View</a>
+                  <a href="/admin/pages/{{.Page.Slug.String}}/edit" class="action-btn" title="Edit">Edit</a>
+                  {{if ne .Page.Status 3}}
+                    <form method="post" action="/admin/pages/{{.Page.Slug.String}}/destroy" style="display: inline;">
+                      <button type="submit" class="action-btn" title="Trash">Trash</button>
+                    </form>
+                  {{else}}
+                    <form method="post" action="/admin/pages/{{.Page.Slug.String}}/destroy" style="display: inline;" onsubmit="return confirm('Delete permanently?');">
+                      <button type="submit" class="action-btn" title="Delete">Delete</button>
+                    </form>
+                  {{end}}
+                </div>
+              </td>
+              <td class="col-order">
+                <small>{{.Page.PageOrder}}</small>
+              </td>
+              <td class="col-title">
+                <a href="/admin/pages/{{.Page.Slug.String}}/edit" class="title-link">{{.Page.Title.String}}</a>
+              </td>
+              <td class="col-redirect">
+                {{if .Page.RedirectUrl.String}}
+                  <small class="text-muted" title="{{.Page.RedirectUrl.String}}">{{.TruncatedRedirect}}</small>
+                {{else}}
+                  <small class="text-muted">—</small>
+                {{end}}
+              </td>
+              <td class="col-date-compact">
+                <small>{{formatTime .Page.CreatedAt $.TimeZone "01/02 15:04"}}</small>
+              </td>
+              <td class="col-date-compact">
+                <small>{{formatTime .Page.UpdatedAt $.TimeZone "01/02 15:04"}}</small>
+              </td>
+            </tr>
+          {{end}}
+        {{else}}
+          <tr>
+            <td colspan="7" class="no-content-row">
+              <p>No pages found.</p>
+            </td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{if .Pages}}
+    <div class="pagination-wrapper">
+      {{range paginationWindow .Page .TotalPages}}
+        {{if .Gap}}
+          <span class="pagination-gap">…</span>
+        {{else if eq .Page $.Page}}
+          <span class="pagination-current">{{.Page}}</span>
+        {{else}}
+          <a href="/admin/pages?page={{.Page}}{{if $.Status}}&status={{$.Status}}{{end}}" class="pagination-link">{{.Page}}</a>
+        {{end}}
+      {{end}}
+    </div>
+  {{end}}
+</div>
+{{end}}

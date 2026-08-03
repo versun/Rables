@@ -1,0 +1,68 @@
+{{/* Comment display tree. Data: []comments.Threaded (see BuildTree). */}}
+{{define "comments_tree"}}
+{{range .}}{{template "comment_node" .}}{{end}}
+{{end}}
+
+{{/* One comment node, recursing into its replies. Data: comments.Threaded. */}}
+{{define "comment_node"}}
+<div class="comment" data-comment-id="{{.Comment.ID}}" style="margin-bottom: {{if gt .Depth 0}}0.5rem; padding-left: {{.IndentRem}}rem; border-left: 2px solid #e0e0e0; margin-left: 0.25rem;{{else}}0.75rem;{{end}}">
+  <div style="display: flex; align-items: start; gap: {{if gt .Depth 0}}0.375rem{{else}}0.5rem{{end}};">
+    {{if .Comment.AuthorAvatarUrl.Valid}}
+      <img src="{{.Comment.AuthorAvatarUrl.String}}" alt="{{.Comment.AuthorName}}" style="width: {{if gt .Depth 0}}24px{{else}}32px{{end}}; height: {{if gt .Depth 0}}24px{{else}}32px{{end}}; border-radius: 50%; flex-shrink: 0;">
+    {{else}}
+      <div style="width: {{if gt .Depth 0}}24px{{else}}32px{{end}}; height: {{if gt .Depth 0}}24px{{else}}32px{{end}}; border-radius: 50%; background-color: {{.BorderColor}}; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: {{if gt .Depth 0}}0.65rem{{else}}0.75rem{{end}}; flex-shrink: 0;">
+        {{.Initial}}
+      </div>
+    {{end}}
+
+    <div style="flex: 1; min-width: 0;">
+      <div style="margin-bottom: {{if gt .Depth 0}}0.125rem{{else}}0.25rem{{end}};">
+        {{if .Comment.AuthorUrl.Valid}}
+          <strong style="font-size: {{if gt .Depth 0}}0.8rem{{else}}0.875rem{{end}}; color: #111;"><a href="{{.Comment.AuthorUrl.String}}" target="_blank" style="text-decoration: none; color: inherit;">{{.Comment.AuthorName}}</a></strong>
+        {{else}}
+          <strong style="font-size: {{if gt .Depth 0}}0.8rem{{else}}0.875rem{{end}}; color: #111;">{{.Comment.AuthorName}}</strong>
+        {{end}}
+
+        {{if and (ne .Type "local") .Comment.AuthorUsername.Valid}}
+          <span style="color: #666; font-size: {{if gt .Depth 0}}0.7rem{{else}}0.8rem{{end}}; margin-left: 0.25rem;">@{{.Comment.AuthorUsername.String}}</span>
+        {{end}}
+
+        <small style="color: #999; margin-left: 0.5rem; font-size: {{if gt .Depth 0}}0.7rem{{else}}0.75rem{{end}};">
+          {{formatTime .PublishedUnix .TimeZone "2006-01-02 15:04"}}
+          {{if and (ne .Type "local") .Comment.Url.Valid}}
+            · <a href="{{.Comment.Url.String}}" target="_blank" style="color: {{.BorderColor}}; text-decoration: none;">{{.PlatformTitle}}</a>
+          {{end}}
+        </small>
+      </div>
+
+      <div style="color: #333; line-height: {{if gt .Depth 0}}1.4{{else}}1.5{{end}}; font-size: {{if gt .Depth 0}}0.8rem{{else}}0.875rem{{end}}; margin-bottom: {{if gt .Depth 0}}0.25rem{{else}}0.5rem{{end}};">
+        {{.ContentHTML}}
+      </div>
+
+      {{if .CanReply}}
+        <button
+          type="button"
+          class="reply-button"
+          data-controller="reply-form"
+          data-reply-form-comment-id-value="{{.Comment.ID}}"
+          data-action="click->reply-form#show"
+          style="background: none; border: none; color: #666; font-size: {{if gt .Depth 0}}0.7rem{{else}}0.75rem{{end}}; cursor: pointer; padding: 0.125rem 0; text-decoration: underline;">
+          回复
+        </button>
+      {{end}}
+    </div>
+  </div>
+
+  {{if .Replies}}
+    <div class="replies" style="margin-top: {{if gt .Depth 0}}0.5rem{{else}}0.75rem{{end}}">
+      {{range .Replies}}{{template "comment_node" .}}{{end}}
+    </div>
+  {{end}}
+
+  {{if .Form}}
+    <div id="reply-form-{{.Comment.ID}}" class="reply-form-container" style="display: none; margin-top: 0.5rem; margin-left: {{.FormIndentRem}}rem;">
+      {{template "comment_form" .Form}}
+    </div>
+  {{end}}
+</div>
+{{end}}

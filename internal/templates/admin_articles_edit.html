@@ -1,0 +1,8 @@
+{{define "title"}}Edit Article|Admin{{end}}
+{{define "content"}}
+<h3>Edit Post</h3>
+{{template "article_form" .}}
+<form method="post" action="{{.FormAction}}/destroy" onsubmit="return confirm('Are you sure?');" style="margin-top: 0.5rem;">
+  <button type="submit" class="btn btn-danger">Delete</button>
+</form>
+{{end}}

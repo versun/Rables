@@ -1,0 +1,256 @@
+{{define "title"}}Crosspost Settings{{end}}
+{{define "content"}}
+<h1>Crosspost Settings</h1>
+
+<div class="admin-toolbar">
+  <div class="status-tabs">
+    <a href="/admin/crossposts?platform=mastodon" class="status-tab {{if eq .ActivePlatform "mastodon"}}active{{end}}">Mastodon</a>
+    <a href="/admin/crossposts?platform=twitter" class="status-tab {{if eq .ActivePlatform "twitter"}}active{{end}}">X (Twitter)</a>
+    <a href="/admin/crossposts?platform=bluesky" class="status-tab {{if eq .ActivePlatform "bluesky"}}active{{end}}">Bluesky</a>
+    <a href="/admin/crossposts?platform=xiaohongshu" class="status-tab {{if eq .ActivePlatform "xiaohongshu"}}active{{end}}">Xiaohongshu</a>
+  </div>
+</div>
+
+{{if eq .ActivePlatform "mastodon"}}{{$p := index .Platforms "mastodon"}}
+<div class="form-section compact" data-controller="crosspost-form">
+  <h3>Mastodon</h3>
+  <small>Get credentials: Open Mastodon → Preferences → Development → New application | Scope: profile,write:statuses</small>
+
+  <form method="post" action="/admin/crossposts/mastodon" data-crosspost-form-target="main" data-action="input->crosspost-form#sync change->crosspost-form#sync">
+    <input type="hidden" name="crosspost[platform]" value="mastodon">
+
+    <div class="field checkbox">
+      <input type="hidden" name="crosspost[enabled]" value="0">
+      <input type="checkbox" id="crosspost_enabled_mastodon" name="crosspost[enabled]" value="1" {{if ne $p.Config.Enabled 0}}checked{{end}}>
+      <label for="crosspost_enabled_mastodon">Enable Mastodon CrossPost</label>
+    </div>
+
+    <div class="form-grid form-grid-2">
+      <div class="field">
+        <label for="crosspost_server_url_mastodon">Mastodon Server URL</label>
+        <input type="text" id="crosspost_server_url_mastodon" name="crosspost[server_url]" value="{{$p.Config.ServerUrl.String}}" placeholder="https://mastodon.social">
+      </div>
+      <div class="field">
+        <label for="crosspost_client_key_mastodon">Client Key</label>
+        <input type="text" id="crosspost_client_key_mastodon" name="crosspost[client_key]" value="{{$p.Config.ClientKey.String}}">
+      </div>
+    </div>
+    <div class="form-grid form-grid-2">
+      <div class="field">
+        <label for="crosspost_client_secret_mastodon">Client Secret</label>
+        <input type="text" id="crosspost_client_secret_mastodon" name="crosspost[client_secret]" value="{{$p.Config.ClientSecret.String}}">
+      </div>
+      <div class="field">
+        <label for="crosspost_access_token_mastodon">Access Token</label>
+        <input type="text" id="crosspost_access_token_mastodon" name="crosspost[access_token]" value="{{$p.Config.AccessToken.String}}">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="crosspost_max_characters_mastodon">Max Characters</label>
+      <input type="number" min="1" id="crosspost_max_characters_mastodon" name="crosspost[max_characters]" placeholder="{{$p.DefaultMaxChars}}" value="{{if $p.Config.MaxCharacters.Valid}}{{$p.Config.MaxCharacters.Int64}}{{else}}{{$p.DefaultMaxChars}}{{end}}">
+      <small>Maximum characters for posts. If content exceeds this limit, a "Read more" link will be added. Default: {{$p.DefaultMaxChars}}</small>
+    </div>
+
+    <div class="field checkbox">
+      <input type="hidden" name="crosspost[auto_fetch_comments]" value="0">
+      <input type="checkbox" id="crosspost_auto_fetch_comments_mastodon" name="crosspost[auto_fetch_comments]" value="1" {{if ne $p.Config.AutoFetchComments 0}}checked{{end}}>
+      <label for="crosspost_auto_fetch_comments_mastodon">Auto-fetch Comments</label>
+    </div>
+    <div class="field">
+      <label for="crosspost_comment_fetch_schedule_mastodon">Comment Fetch Schedule</label>
+      <select id="crosspost_comment_fetch_schedule_mastodon" name="crosspost[comment_fetch_schedule]" class="form-select">
+        <option value="" {{if not $p.Config.CommentFetchSchedule.Valid}}selected{{end}}>Disabled</option>
+        <option value="daily" {{if eq $p.Config.CommentFetchSchedule.String "daily"}}selected{{end}}>Daily at 12:00 AM</option>
+        <option value="weekly" {{if eq $p.Config.CommentFetchSchedule.String "weekly"}}selected{{end}}>Weekly on Monday at 12:00 AM</option>
+        <option value="monthly" {{if eq $p.Config.CommentFetchSchedule.String "monthly"}}selected{{end}}>Monthly on 1st at 12:00 AM</option>
+      </select>
+      <small>Select the frequency for automatically fetching comments. All fetches run at 12:00 AM (midnight).</small>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <div id="verify-button-mastodon">
+        <button type="submit" form="verify-form-mastodon" class="btn btn-secondary">Verify</button>
+      </div>
+    </div>
+  </form>
+
+  <form method="post" action="/admin/crossposts/mastodon/verify" id="verify-form-mastodon" data-crosspost-form-target="verify" data-action="submit->crosspost-form#sync">
+    <input type="hidden" name="crosspost[platform]" value="mastodon">
+    <input type="hidden" name="crosspost[server_url]" value="{{$p.Config.ServerUrl.String}}" id="verify_server_url_mastodon">
+    <input type="hidden" name="crosspost[client_key]" value="{{$p.Config.ClientKey.String}}" id="verify_client_key_mastodon">
+    <input type="hidden" name="crosspost[client_secret]" value="{{$p.Config.ClientSecret.String}}" id="verify_client_secret_mastodon">
+    <input type="hidden" name="crosspost[access_token]" value="{{$p.Config.AccessToken.String}}" id="verify_access_token_mastodon">
+  </form>
+  <div id="verify-messages-mastodon"></div>
+</div>
+{{end}}
+
+{{if eq .ActivePlatform "twitter"}}{{$p := index .Platforms "twitter"}}
+<div class="form-section compact" data-controller="crosspost-form">
+  <h3>X (Twitter)</h3>
+  <small>First, obtain X credentials from <a href="https://developer.x.com" target="_blank">https://developer.x.com</a></small>
+
+  <form method="post" action="/admin/crossposts/twitter" data-crosspost-form-target="main" data-action="input->crosspost-form#sync change->crosspost-form#sync">
+    <input type="hidden" name="crosspost[platform]" value="twitter">
+
+    <div class="field checkbox">
+      <input type="hidden" name="crosspost[enabled]" value="0">
+      <input type="checkbox" id="crosspost_enabled_twitter" name="crosspost[enabled]" value="1" {{if ne $p.Config.Enabled 0}}checked{{end}}>
+      <label for="crosspost_enabled_twitter">Enable X CrossPost</label>
+    </div>
+
+    <div class="form-grid form-grid-2">
+      <div class="field">
+        <label for="crosspost_access_token_twitter">Access Token</label>
+        <input type="text" id="crosspost_access_token_twitter" name="crosspost[access_token]" value="{{$p.Config.AccessToken.String}}">
+      </div>
+      <div class="field">
+        <label for="crosspost_access_token_secret_twitter">Access Token Secret</label>
+        <input type="text" id="crosspost_access_token_secret_twitter" name="crosspost[access_token_secret]" value="{{$p.Config.AccessTokenSecret.String}}">
+      </div>
+    </div>
+    <div class="form-grid form-grid-2">
+      <div class="field">
+        <label for="crosspost_api_key_twitter">API Key</label>
+        <input type="text" id="crosspost_api_key_twitter" name="crosspost[api_key]" value="{{$p.Config.ApiKey.String}}">
+      </div>
+      <div class="field">
+        <label for="crosspost_api_key_secret_twitter">API Key Secret</label>
+        <input type="text" id="crosspost_api_key_secret_twitter" name="crosspost[api_key_secret]" value="{{$p.Config.ApiKeySecret.String}}">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="crosspost_max_characters_twitter">Max Characters</label>
+      <input type="number" min="1" id="crosspost_max_characters_twitter" name="crosspost[max_characters]" placeholder="{{$p.DefaultMaxChars}}" value="{{if $p.Config.MaxCharacters.Valid}}{{$p.Config.MaxCharacters.Int64}}{{else}}{{$p.DefaultMaxChars}}{{end}}">
+      <small>Maximum characters for posts. If content exceeds this limit, a "Read more" link will be added. Default: {{$p.DefaultMaxChars}} (non-ASCII characters count as 2)</small>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <div id="verify-button-twitter">
+        <button type="submit" form="verify-form-twitter" class="btn btn-secondary">Verify</button>
+      </div>
+    </div>
+  </form>
+
+  <form method="post" action="/admin/crossposts/twitter/verify" id="verify-form-twitter" data-crosspost-form-target="verify" data-action="submit->crosspost-form#sync">
+    <input type="hidden" name="crosspost[platform]" value="twitter">
+    <input type="hidden" name="crosspost[access_token]" value="{{$p.Config.AccessToken.String}}" id="verify_access_token_twitter">
+    <input type="hidden" name="crosspost[access_token_secret]" value="{{$p.Config.AccessTokenSecret.String}}" id="verify_access_token_secret_twitter">
+    <input type="hidden" name="crosspost[api_key]" value="{{$p.Config.ApiKey.String}}" id="verify_api_key_twitter">
+    <input type="hidden" name="crosspost[api_key_secret]" value="{{$p.Config.ApiKeySecret.String}}" id="verify_api_key_secret_twitter">
+  </form>
+  <div id="verify-messages-twitter"></div>
+</div>
+{{end}}
+
+{{if eq .ActivePlatform "bluesky"}}{{$p := index .Platforms "bluesky"}}
+<div class="form-section compact" data-controller="crosspost-form">
+  <h3>Bluesky</h3>
+  <small>Get credentials: Log in to your Bluesky account and generate an App Password in settings.</small>
+
+  <form method="post" action="/admin/crossposts/bluesky" data-crosspost-form-target="main" data-action="input->crosspost-form#sync change->crosspost-form#sync">
+    <input type="hidden" name="crosspost[platform]" value="bluesky">
+
+    <div class="field checkbox">
+      <input type="hidden" name="crosspost[enabled]" value="0">
+      <input type="checkbox" id="crosspost_enabled_bluesky" name="crosspost[enabled]" value="1" {{if ne $p.Config.Enabled 0}}checked{{end}}>
+      <label for="crosspost_enabled_bluesky">Enable Bluesky CrossPost</label>
+    </div>
+
+    <div class="form-grid form-grid-2">
+      <div class="field">
+        <label for="crosspost_username_bluesky">Username</label>
+        <input type="text" id="crosspost_username_bluesky" name="crosspost[username]" value="{{$p.Config.Username.String}}" placeholder="your.handle">
+      </div>
+      <div class="field">
+        <label for="crosspost_app_password_bluesky">App Password</label>
+        <input type="text" id="crosspost_app_password_bluesky" name="crosspost[app_password]" value="{{$p.Config.AppPassword.String}}">
+      </div>
+    </div>
+    <div class="field">
+      <label for="crosspost_server_url_bluesky">Server URL</label>
+      <input type="text" id="crosspost_server_url_bluesky" name="crosspost[server_url]" value="{{$p.Config.ServerUrl.String}}" placeholder="https://bsky.social/xrpc">
+    </div>
+
+    <div class="field">
+      <label for="crosspost_max_characters_bluesky">Max Characters</label>
+      <input type="number" min="1" id="crosspost_max_characters_bluesky" name="crosspost[max_characters]" placeholder="{{$p.DefaultMaxChars}}" value="{{if $p.Config.MaxCharacters.Valid}}{{$p.Config.MaxCharacters.Int64}}{{else}}{{$p.DefaultMaxChars}}{{end}}">
+      <small>Maximum characters for posts. If content exceeds this limit, a "Read more" link will be added. Default: {{$p.DefaultMaxChars}}</small>
+    </div>
+
+    <div class="field checkbox">
+      <input type="hidden" name="crosspost[auto_fetch_comments]" value="0">
+      <input type="checkbox" id="crosspost_auto_fetch_comments_bluesky" name="crosspost[auto_fetch_comments]" value="1" {{if ne $p.Config.AutoFetchComments 0}}checked{{end}}>
+      <label for="crosspost_auto_fetch_comments_bluesky">Auto-fetch Comments</label>
+    </div>
+    <div class="field">
+      <label for="crosspost_comment_fetch_schedule_bluesky">Comment Fetch Schedule</label>
+      <select id="crosspost_comment_fetch_schedule_bluesky" name="crosspost[comment_fetch_schedule]" class="form-select">
+        <option value="" {{if not $p.Config.CommentFetchSchedule.Valid}}selected{{end}}>Disabled</option>
+        <option value="daily" {{if eq $p.Config.CommentFetchSchedule.String "daily"}}selected{{end}}>Daily at 12:00 AM</option>
+        <option value="weekly" {{if eq $p.Config.CommentFetchSchedule.String "weekly"}}selected{{end}}>Weekly on Monday at 12:00 AM</option>
+        <option value="monthly" {{if eq $p.Config.CommentFetchSchedule.String "monthly"}}selected{{end}}>Monthly on 1st at 12:00 AM</option>
+      </select>
+      <small>Select the frequency for automatically fetching comments. All fetches run at 12:00 AM (midnight).</small>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <div id="verify-button-bluesky">
+        <button type="submit" form="verify-form-bluesky" class="btn btn-secondary">Verify</button>
+      </div>
+    </div>
+  </form>
+
+  <form method="post" action="/admin/crossposts/bluesky/verify" id="verify-form-bluesky" data-crosspost-form-target="verify" data-action="submit->crosspost-form#sync">
+    <input type="hidden" name="crosspost[platform]" value="bluesky">
+    <input type="hidden" name="crosspost[username]" value="{{$p.Config.Username.String}}" id="verify_username_bluesky">
+    <input type="hidden" name="crosspost[app_password]" value="{{$p.Config.AppPassword.String}}" id="verify_app_password_bluesky">
+    <input type="hidden" name="crosspost[server_url]" value="{{$p.Config.ServerUrl.String}}" id="verify_server_url_bluesky">
+  </form>
+  <div id="verify-messages-bluesky"></div>
+</div>
+{{end}}
+
+{{if eq .ActivePlatform "xiaohongshu"}}{{$p := index .Platforms "xiaohongshu"}}
+<div class="form-section compact">
+  <h3>Xiaohongshu</h3>
+  <small>No public API available. These fields are for reference and manual posting.</small>
+
+  <form method="post" action="/admin/crossposts/xiaohongshu">
+    <input type="hidden" name="crosspost[platform]" value="xiaohongshu">
+
+    <div class="field checkbox">
+      <input type="hidden" name="crosspost[enabled]" value="0">
+      <input type="checkbox" id="crosspost_enabled_xiaohongshu" name="crosspost[enabled]" value="1" {{if ne $p.Config.Enabled 0}}checked{{end}}>
+      <label for="crosspost_enabled_xiaohongshu">Enable Xiaohongshu CrossPost</label>
+    </div>
+
+    <div class="form-grid form-grid-2">
+      <div class="field">
+        <label for="crosspost_username_xiaohongshu">Username (optional)</label>
+        <input type="text" id="crosspost_username_xiaohongshu" name="crosspost[username]" value="{{$p.Config.Username.String}}" placeholder="your_id">
+      </div>
+      <div class="field">
+        <label for="crosspost_server_url_xiaohongshu">Profile URL (optional)</label>
+        <input type="text" id="crosspost_server_url_xiaohongshu" name="crosspost[server_url]" value="{{$p.Config.ServerUrl.String}}" placeholder="https://www.xiaohongshu.com/user/profile/...">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="crosspost_max_characters_xiaohongshu">Max Characters</label>
+      <input type="number" min="1" id="crosspost_max_characters_xiaohongshu" name="crosspost[max_characters]" placeholder="{{$p.DefaultMaxChars}}" value="{{if $p.Config.MaxCharacters.Valid}}{{$p.Config.MaxCharacters.Int64}}{{else}}{{$p.DefaultMaxChars}}{{end}}">
+      <small>Maximum characters for manual posts. Default: {{$p.DefaultMaxChars}}</small>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+</div>
+{{end}}
+{{end}}

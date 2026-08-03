@@ -1,0 +1,91 @@
+{{/* Public-site chrome (plan T12), mirroring the Rails application layout:
+   head extras (RSS link, head_code, custom_css), the sidebar (site title,
+   description, social links, nav with search/Home/Tags/pages) and the
+   will_paginate markup. Data contracts:
+   - "public_head" and "public_sidebar": httpd.siteChrome (passed as .Chrome)
+   - "pagination": httpd.pagination (passed as .Page) */}}
+
+{{define "public_head"}}
+<link rel="alternate" type="application/rss+xml" title="{{.Title}}" href="/feed.xml">
+{{.HeadCode}}
+{{if .CustomCSS}}
+<style>
+{{.CustomCSS}}
+</style>
+{{end}}
+{{end}}
+
+{{define "public_sidebar"}}
+<div data-controller="sidebar">
+  <button
+    type="button"
+    class="mobile-menu-btn"
+    data-action="click->sidebar#toggle"
+    data-sidebar-target="toggle"
+    aria-label="Toggle menu"
+    aria-controls="public-sidebar"
+    aria-expanded="false">
+    <i class="fas fa-bars"></i>
+  </button>
+  <div
+    class="sidebar-overlay"
+    data-sidebar-target="overlay"
+    data-action="click->sidebar#close">
+  </div>
+  <aside id="public-sidebar" class="sidebar" data-sidebar-target="sidebar">
+  <header class="sidebar-header">
+    <div class="sidebar-header-content">
+      <h1><a href="/" class="front-page-title">{{.Title}}</a></h1>
+      <button
+        type="button"
+        class="sidebar-close-btn"
+        data-action="click->sidebar#close"
+        data-sidebar-target="toggle"
+        aria-label="Close menu"
+        aria-controls="public-sidebar"
+        aria-expanded="false">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <p class="site-description">{{.Description}}</p>
+  </header>
+  {{if .SocialLinks}}
+  <div class="social-links">
+    {{range .SocialLinks}}{{if .URL}}<a rel="me" href="{{.URL}}" target="_blank" class="social" title="{{.Name}}">{{if .Icon}}<i class="{{.Icon}}" style="font-size: 20px;"></i>{{end}}</a>{{end}}{{end}}
+  </div>
+  {{end}}
+  <nav class="sidebar-nav">
+    <div class="navbar-search">
+      <form method="get" action="/" class="search-form">
+        <input type="text" name="q" value="{{.Query}}" placeholder="搜索..." class="search-input">
+      </form>
+    </div>
+    <ul>
+      <li><a href="/" class="nav-link">Home</a></li>
+      {{if .HasTags}}<li><a href="/tags" class="nav-link">Tags</a></li>{{end}}
+      {{range .NavPages}}<li><a href="{{.URL}}" class="nav-link"{{if .External}} target="_blank" rel="noopener"{{end}}>{{.Title}}</a></li>{{end}}
+    </ul>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="theme-toggle">
+      <button type="button"
+              data-action="click->theme-toggle#toggle"
+              class="theme-toggle-btn"
+              aria-label="theme-toggle">
+        <i class="fas fa-moon" data-theme-toggle-target="icon"></i>
+      </button>
+    </div>
+  </div>
+  </aside>
+</div>
+{{end}}
+
+{{define "pagination"}}
+{{if .Links}}
+<div class="pagination" role="navigation" aria-label="Pagination">
+  {{if .PrevURL}}<a class="previous_page" rel="prev" href="{{.PrevURL}}">← Previous</a>{{else}}<span class="previous_page disabled">← Previous</span>{{end}}
+  {{range .Links}}{{if .Gap}}<span class="gap">…</span>{{else if .Current}}<em class="current" aria-current="page">{{.Page}}</em>{{else}}<a href="{{.URL}}" aria-label="Page {{.Page}}">{{.Page}}</a>{{end}}{{end}}
+  {{if .NextURL}}<a class="next_page" rel="next" href="{{.NextURL}}">Next →</a>{{else}}<span class="next_page disabled">Next →</span>{{end}}
+</div>
+{{end}}
+{{end}}

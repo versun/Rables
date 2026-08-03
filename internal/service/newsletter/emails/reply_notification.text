@@ -1,0 +1,18 @@
+New reply to your comment
+
+From:
+{{.ReplyAuthor}}
+
+Reply:
+{{.ReplyContent}}
+
+{{if .ParentContent}}Your comment:
+{{.ParentContent}}
+
+{{end}}{{if .CommentableTitle}}Post/Page:
+{{.CommentableTitle}}
+
+{{end}}{{if .CommentableURL}}View details:
+{{.CommentableURL}}
+
+{{end}}This email was sent automatically by {{.SiteTitle}}.

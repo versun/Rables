@@ -1,0 +1,48 @@
+{{/* Comment submission form. Data: comments.FormData. Field names mirror the
+   Rails params (comment[...], captcha[...]); the data-* hooks are the
+   contract for the vanilla math_captcha / reply_form JS (T28). */}}
+{{define "comment_form"}}
+<div class="comment-form {{if .IsReply}}reply-form{{end}}" id="{{if .IsReply}}comment-form-{{.ParentID}}{{else}}comment-form-container{{end}}" style="margin-top: {{if .IsReply}}0.5rem{{else}}1.5rem{{end}}; padding: 1rem; border: 1px solid #e0e0e0; border-radius: 6px; background: #fafafa;" data-controller="math-captcha" data-math-captcha-max-value="10">
+  <form method="post" action="{{.Action}}" data-action="submit->math-captcha#ensureValid">
+    {{if .IsReply}}<input type="hidden" name="comment[parent_id]" value="{{.ParentID}}">{{end}}
+
+    <div class="comment-form-row">
+      <div class="comment-form-field">
+        <input type="text" name="comment[author_name]" required placeholder="Name *" class="comment-form-input" data-action="focus->math-captcha#show">
+      </div>
+      <div class="comment-form-field">
+        <input type="email" name="comment[author_email]" placeholder="Email (optional, for reply notifications)" class="comment-form-input">
+      </div>
+    </div>
+
+    <div class="comment-form-row">
+      <div class="comment-form-field">
+        <input type="url" name="comment[author_url]" placeholder="Website (optional)" class="comment-form-input">
+      </div>
+    </div>
+
+    <div style="margin-bottom: 0.75rem;">
+      <textarea name="comment[content]" required placeholder="{{if .IsReply}}Reply *{{else}}Comment *{{end}}" rows="3" class="comment-form-textarea" data-action="focus->math-captcha#show"></textarea>
+    </div>
+
+    <div data-math-captcha-target="container" style="margin-bottom: 0.75rem;">
+      <div class="comment-form-captcha">
+        <label style="font-size: 0.875rem; color: #333; white-space: nowrap;"><span data-math-captcha-target="question">{{.Question}}</span></label>
+        <input type="text" name="captcha[answer]" required inputmode="numeric" autocomplete="off" placeholder="Answer" class="comment-captcha-input" data-math-captcha-target="answer" data-action="input->math-captcha#validate blur->math-captcha#validate">
+      </div>
+      <div data-math-captcha-target="message" style="margin-top: 0.25rem; font-size: 12px; display: none;"></div>
+      <input type="hidden" name="captcha[a]" value="{{.A}}" data-math-captcha-target="a">
+      <input type="hidden" name="captcha[b]" value="{{.B}}" data-math-captcha-target="b">
+      <input type="hidden" name="captcha[op]" value="{{.Op}}" data-math-captcha-target="op">
+      <input type="hidden" name="captcha[token]" value="{{.Token}}">
+    </div>
+
+    <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+      <input type="submit" value="{{if .IsReply}}Reply{{else}}Submit{{end}}" style="padding: 0.5rem 1.25rem; background-color: #333; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.875rem;">
+      {{if .IsReply}}
+        <button type="button" data-controller="reply-form" data-reply-form-comment-id-value="{{.ParentID}}" data-action="click->reply-form#hide" class="comment-form-cancel">Cancel</button>
+      {{end}}
+    </div>
+  </form>
+</div>
+{{end}}

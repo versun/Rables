@@ -1,0 +1,155 @@
+{{define "title"}}Newsletter Settings{{end}}
+{{define "content"}}
+<h3>Newsletter Settings</h3>
+
+<div data-controller="newsletter" data-newsletter-verify-url-value="/admin/newsletter/verify" data-newsletter-active-tab-value="{{.ActiveTab}}">
+  <div class="admin-toolbar">
+    <div class="status-tabs">
+      <a href="/admin/newsletter?tab=general" class="status-tab {{if eq .ActiveTab "general"}}active{{end}}">General</a>
+      <a href="/admin/newsletter?tab=native" class="status-tab {{if eq .ActiveTab "native"}}active{{end}}">Native Email</a>
+      <a href="/admin/newsletter?tab=listmonk" class="status-tab {{if eq .ActiveTab "listmonk"}}active{{end}}">Listmonk</a>
+    </div>
+  </div>
+
+  {{if eq .ActiveTab "general"}}
+  <div class="form-section">
+    <form method="post" action="/admin/newsletter">
+      <input type="hidden" name="tab" value="general">
+      <div class="field">
+        <input type="hidden" name="newsletter_setting[enabled]" value="0">
+        <label for="newsletter_setting_enabled">Enable Newsletter</label>
+        <input type="checkbox" id="newsletter_setting_enabled" name="newsletter_setting[enabled]" value="1" {{if ne .Setting.Enabled 0}}checked{{end}}>
+      </div>
+      <h4>Select Email Service Provider</h4>
+      <div class="field">
+        <label for="newsletter_setting_provider">Provider</label>
+        <select id="newsletter_setting_provider" name="newsletter_setting[provider]" data-newsletter-target="providerSelect" data-action="change->newsletter#providerChanged">
+          <option value="native" {{if ne .Setting.Provider "listmonk"}}selected{{end}}>Native Email</option>
+          <option value="listmonk" {{if eq .Setting.Provider "listmonk"}}selected{{end}}>Listmonk</option>
+        </select>
+      </div>
+
+      <div><button type="submit">Save General Settings</button></div>
+    </form>
+  </div>
+  {{end}}
+
+  {{if eq .ActiveTab "native"}}
+  <div class="form-section">
+    <form method="post" action="/admin/newsletter">
+      <input type="hidden" name="tab" value="native">
+      <div id="native-email-settings" data-newsletter-target="nativeSettings">
+        <h4>SMTP Configuration</h4>
+
+        <div class="field">
+          <label for="newsletter_setting_smtp_address">SMTP Address</label>
+          <input type="text" id="newsletter_setting_smtp_address" name="newsletter_setting[smtp_address]" value="{{.Setting.SmtpAddress.String}}" placeholder="smtp.example.com">
+        </div>
+
+        <div class="field">
+          <label for="newsletter_setting_smtp_port">SMTP Port</label>
+          <input type="number" id="newsletter_setting_smtp_port" name="newsletter_setting[smtp_port]" value="{{if .Setting.SmtpPort.Valid}}{{.Setting.SmtpPort.Int64}}{{else}}587{{end}}" placeholder="587">
+        </div>
+
+        <div class="field">
+          <label for="newsletter_setting_smtp_user_name">SMTP Username</label>
+          <input type="text" id="newsletter_setting_smtp_user_name" name="newsletter_setting[smtp_user_name]" value="{{.Setting.SmtpUserName.String}}">
+        </div>
+
+        <div class="field">
+          <label for="newsletter_setting_smtp_password">SMTP Password</label>
+          <input type="password" id="newsletter_setting_smtp_password" name="newsletter_setting[smtp_password]" {{if .PasswordSet}}value="••••••••"{{end}} placeholder="Enter password">
+        </div>
+
+        <div class="field">
+          <label for="newsletter_setting_smtp_domain">SMTP Domain (optional)</label>
+          <input type="text" id="newsletter_setting_smtp_domain" name="newsletter_setting[smtp_domain]" value="{{.Setting.SmtpDomain.String}}" placeholder="example.com">
+          <small>Leave blank to auto-detect from From Email</small>
+        </div>
+
+        <div class="field">
+          <label for="newsletter_setting_smtp_authentication">Authentication</label>
+          <select id="newsletter_setting_smtp_authentication" name="newsletter_setting[smtp_authentication]">
+            <option value="plain" {{if or (not .Setting.SmtpAuthentication.Valid) (eq .Setting.SmtpAuthentication.String "plain")}}selected{{end}}>Plain</option>
+            <option value="login" {{if eq .Setting.SmtpAuthentication.String "login"}}selected{{end}}>Login</option>
+            <option value="cram_md5" {{if eq .Setting.SmtpAuthentication.String "cram_md5"}}selected{{end}}>CRAM-MD5</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <input type="hidden" name="newsletter_setting[smtp_enable_starttls]" value="0">
+          <label for="newsletter_setting_smtp_enable_starttls">Enable STARTTLS</label>
+          <input type="checkbox" id="newsletter_setting_smtp_enable_starttls" name="newsletter_setting[smtp_enable_starttls]" value="1" {{if .StartTLSChecked}}checked{{end}}>
+        </div>
+
+        <div class="field">
+          <label for="newsletter_setting_from_email">From Email</label>
+          <input type="email" id="newsletter_setting_from_email" name="newsletter_setting[from_email]" value="{{.Setting.FromEmail.String}}" placeholder="noreply@example.com">
+        </div>
+
+        <div style="margin: 15px 0;">
+          <button type="button" data-newsletter-target="sesVerifyBtn" data-action="click->newsletter#verifySes" class="btn btn-secondary">Verify SMTP Configuration</button>
+          <span data-newsletter-target="sesVerifyStatus" style="margin-left: 10px;"></span>
+        </div>
+
+        <div style="margin-top: 20px;">
+          <a href="/admin/subscribers" class="btn btn-secondary">Manage Subscribers</a>
+        </div>
+        <div><button type="submit">Save Native Email Settings</button></div>
+      </div>
+    </form>
+  </div>
+  {{end}}
+
+  {{if eq .ActiveTab "listmonk"}}
+  <div class="form-section" id="listmonk-settings" data-newsletter-target="listmonkSettings">
+    <h4>Listmonk Configuration</h4>
+    <form method="post" action="/admin/newsletter">
+      <input type="hidden" name="tab" value="listmonk">
+      <div>
+        <label for="listmonk_url">Listmonk URL</label>
+        <input type="text" id="listmonk_url" name="listmonk[url]" value="{{.Listmonk.Url.String}}" placeholder="https://example.com">
+      </div>
+
+      <div>
+        <label for="listmonk_username">Username</label>
+        <input type="text" id="listmonk_username" name="listmonk[username]" value="{{.Listmonk.Username.String}}">
+      </div>
+
+      <div>
+        <label for="listmonk_api_key">API Key</label>
+        <input type="text" id="listmonk_api_key" name="listmonk[api_key]" value="{{.Listmonk.ApiKey.String}}">
+      </div>
+
+      <div style="margin: 15px 0;">
+        <button type="button" data-newsletter-target="verifyBtn" data-action="click->newsletter#verify" class="btn btn-secondary">Verify Configuration</button>
+        <span data-newsletter-target="verifyStatus" style="margin-left: 10px;"></span>
+      </div>
+
+      <div id="list-template-container">
+        <div>
+          <label for="list-select">List</label>
+          <select id="list-select" name="listmonk[list_id]" data-newsletter-target="listSelect">
+            <option value="">Select a List</option>
+            {{range .Lists}}
+            <option value="{{.ID}}" {{if $.Listmonk.ListID.Valid}}{{if eq $.Listmonk.ListID.Int64 .ID}}selected{{end}}{{end}}>{{.Name}}</option>
+            {{end}}
+          </select>
+        </div>
+        <div>
+          <label for="template-select">Template</label>
+          <select id="template-select" name="listmonk[template_id]" data-newsletter-target="templateSelect">
+            <option value="">Select a Template</option>
+            {{range .Templates}}
+            <option value="{{.ID}}" {{if $.Listmonk.TemplateID.Valid}}{{if eq $.Listmonk.TemplateID.Int64 .ID}}selected{{end}}{{end}}>{{.Name}}</option>
+            {{end}}
+          </select>
+        </div>
+      </div>
+
+      <div><button type="submit">Save Listmonk Settings</button></div>
+    </form>
+  </div>
+  {{end}}
+</div>
+{{end}}

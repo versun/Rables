@@ -1,0 +1,52 @@
+{{define "title"}}Tags|Admin{{end}}
+{{define "content"}}
+<div class="admin-tags">
+  <div class="admin-toolbar">
+    <a href="/admin/tags/new" class="btn btn-primary">New Tag</a>
+  </div>
+
+  <form method="post" action="/admin/tags/batch_destroy" data-controller="batch-selection">
+    <div class="table-container">
+      <table class="admin-table compact-table">
+        <thead>
+          <tr>
+            <th style="width: 40px;">
+              <input type="checkbox" data-batch-selection-target="selectAll" data-action="change->batch-selection#toggleAll" aria-label="Select all">
+            </th>
+            <th class="col-actions-compact">Actions</th>
+            <th class="col-title">Name</th>
+            <th class="col-slug">Slug</th>
+            <th class="col-compact">Articles</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Tags}}
+          <tr>
+            <td><input type="checkbox" name="ids[]" value="{{.ID}}"
+                       data-batch-selection-target="checkbox" data-action="change->batch-selection#toggle"></td>
+            <td class="col-actions-compact">
+              <div class="action-buttons">
+                <a href="/admin/tags/{{.ID}}/edit" class="action-btn" title="Edit">Edit</a>
+                <button type="submit" formaction="/admin/tags/{{.ID}}/destroy" class="action-btn" title="Delete"
+                        onclick="return confirm('Are you sure?')">Delete</button>
+              </div>
+            </td>
+            <td class="col-title"><a href="/admin/tags/{{.ID}}/edit" class="title-link">{{.Name}}</a></td>
+            <td class="col-slug"><small>{{.Slug}}</small></td>
+            <td class="col-compact">{{.ArticlesTotal}}</td>
+          </tr>
+          {{else}}
+          <tr>
+            <td colspan="5" class="no-content-row">
+              <p>No tags found.</p>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <button type="submit" class="btn btn-sm">Delete</button>
+    <span style="margin-left: 10px; color: #666; font-size: 13px;"><strong><span data-batch-selection-target="count">0</span></strong> selected</span>
+  </form>
+</div>
+{{end}}

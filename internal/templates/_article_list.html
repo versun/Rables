@@ -1,0 +1,35 @@
+{{/* Public article list (plan T12), mirroring articles/_article_list.html.erb
+   including its will_paginate block. Data: httpd.articleListData. */}}
+{{define "article_list"}}
+<div class="article-list timeline{{if .IsHome}} is-home{{end}}">
+  {{range .Items}}
+  <article class="timeline-item" data-article-id="{{.ID}}">
+    <div class="timeline-marker"></div>
+    <div class="timeline-content">
+      <div class="timeline-header">
+        <div class="timeline-date">
+          <a href="{{.URL}}"><time datetime="{{formatTime .DateUnix $.TimeZone "2006-01-02T15:04:05Z07:00"}}">{{formatTime .DateUnix $.TimeZone "2006-01-02"}}</time></a>
+        </div>
+        {{if .Tags}}
+        <div class="timeline-tags">
+          {{range .Tags}}<a href="/tags/{{.Slug}}" class="tag">#{{.Name}}</a>{{end}}
+        </div>
+        {{end}}
+      </div>
+      {{if .Title}}
+      <h2 class="post-title"><a href="{{.URL}}">{{.Title}}</a></h2>
+      {{else}}
+      {{.SourceRef}}
+      {{end}}
+      {{if .SummaryHTML}}
+      <div class="post-description">{{.SummaryHTML}}</div>
+      {{else}}
+      <div class="post-content">{{.ContentHTML}}</div>
+      {{end}}
+    </div>
+  </article>
+  {{end}}
+</div>
+
+{{template "pagination" .Page}}
+{{end}}

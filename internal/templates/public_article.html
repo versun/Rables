@@ -1,0 +1,92 @@
+{{define "title"}}{{.MetaTitle}} | {{.Chrome.Title}}{{end}}
+{{define "head"}}{{template "public_head" .Chrome}}
+<meta name="description" content="{{.MetaDescription}}">
+<meta property="og:type" content="article">
+<meta property="og:url" content="{{.FullURL}}">
+<meta property="og:title" content="{{.MetaTitle}}">
+<meta property="og:description" content="{{.MetaDescription}}">
+{{if .MetaImage}}<meta property="og:image" content="{{.MetaImage}}">{{end}}
+<meta property="og:site_name" content="{{.Chrome.Title}}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="{{.FullURL}}">
+<meta name="twitter:title" content="{{.MetaTitle}}">
+<meta name="twitter:description" content="{{.MetaDescription}}">
+{{if .MetaImage}}<meta name="twitter:image" content="{{.MetaImage}}">{{end}}
+<meta property="article:published_time" content="{{formatTime .DateUnix .Chrome.TimeZone "2006-01-02T15:04:05Z07:00"}}">
+<meta property="article:modified_time" content="{{formatTime .UpdatedUnix .Chrome.TimeZone "2006-01-02T15:04:05Z07:00"}}">
+{{range .Tags}}<meta property="article:tag" content="{{.Name}}">
+{{end}}
+{{end}}
+{{define "content"}}
+<div class="site-container">
+  {{template "public_sidebar" .Chrome}}
+  <main class="main-content">
+    <div class="limiter">
+      <article>
+        <div class="article-header">
+          <h2>{{.Title}}</h2>
+        </div>
+        <small class="article-meta">
+          <span class="article-date">{{formatTime .DateUnix .Chrome.TimeZone "2006-01-02"}}</span>
+          <span class="share-container" data-controller="share" data-share-url-value="{{.FullURL}}">
+            <button class="share-button" data-action="click->share#toggle" title="Share Article">
+              <span>share</span>
+              <i class="fas fa-share-alt" style="font-size: 14px;"></i>
+            </button>
+            <div id="share-menu" class="share-menu" data-share-target="menu" style="display: none;">
+              <a href="#" data-action="click->share#copy" class="share-menu-item">
+                <i class="fas fa-link"></i> Copy Link
+              </a>
+              <a href="https://x.com/intent/tweet?url={{urlquery .FullURL}}&text={{urlquery .Title}}" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
+                <i class="fab fa-square-x-twitter"></i> Twitter
+              </a>
+              <a href="https://mastodon.social/share?text={{printf "%s %s" .Title .FullURL | urlquery}}" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
+                <i class="fab fa-mastodon"></i> Mastodon
+              </a>
+              <a href="https://bsky.app/intent/compose?text={{printf "%s %s" .Title .FullURL | urlquery}}" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
+                <i class="fab fa-square-bluesky"></i> Bluesky
+              </a>
+              <a href="https://www.facebook.com/sharer/sharer.php?u={{urlquery .FullURL}}" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
+                <i class="fab fa-facebook"></i> Facebook
+              </a>
+              <a href="https://www.linkedin.com/sharing/share-offsite/?url={{urlquery .FullURL}}" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
+                <i class="fab fa-linkedin"></i> LinkedIn
+              </a>
+              <a href="https://www.reddit.com/submit?url={{urlquery .FullURL}}&title={{urlquery .Title}}" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
+                <i class="fab fa-reddit"></i> Reddit
+              </a>
+              <a href="https://wa.me/?text={{printf "%s %s" .Title .FullURL | urlquery}}" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
+                <i class="fab fa-whatsapp"></i> WhatsApp
+              </a>
+              <a href="https://t.me/share/url?url={{urlquery .FullURL}}&text={{urlquery .Title}}" target="_blank" rel="noopener noreferrer" class="share-menu-item" data-action="click->share#close">
+                <i class="fab fa-telegram"></i> Telegram
+              </a>
+              <a href="mailto:?subject={{urlquery .Title}}&body={{printf "%s\n\n%s" .Title .FullURL | urlquery}}" class="share-menu-item" data-action="click->share#close">
+                <i class="fas fa-envelope"></i> Email
+              </a>
+            </div>
+          </span>
+        </small>
+        {{.SourceRef}}
+        <div class="article-content">
+          {{.ContentHTML}}
+        </div>
+      </article>
+      {{if .Comments.Enabled}}
+      <div id="comments-section">
+        {{if .Comments.Tree}}
+        <div style="margin-top: 2rem; margin-bottom: 1.5rem;">
+          <h3 style="margin-bottom: 1rem; color: #333; font-size: 1.125rem;">Comments ({{.Comments.Count}})</h3>
+        </div>
+        {{template "comments_tree" .Comments.Tree}}
+        {{end}}
+        {{template "comment_form" .Comments.Form}}
+        <div class="giscus"></div>
+        {{.Comments.Giscus}}
+      </div>
+      {{end}}
+    </div>
+  </main>
+</div>
+{{end}}
+{{define "bodyEnd"}}{{.Chrome.ToolCode}}{{end}}

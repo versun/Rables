@@ -1,0 +1,30 @@
+{{define "title"}}Edit Tag|Admin{{end}}
+{{define "content"}}
+<div class="admin-form">
+  <h2>Edit Tag</h2>
+  {{if .Error}}
+  <div class="form-errors">
+    <strong>1 error prohibited this tag from being saved:</strong>
+    <ul>
+      <li>{{.Error}}</li>
+    </ul>
+  </div>
+  {{end}}
+  <form method="post" action="/admin/tags/{{.Tag.ID}}">
+    <div class="form-section compact">
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" placeholder="e.g., Ruby on Rails" value="{{.Tag.Name}}">
+        <small class="help-text">The slug will be automatically generated from the name.</small>
+      </div>
+    </div>
+    <div class="form-actions">
+      <input type="submit" value="Save">
+      <a href="/admin/tags" class="btn btn-secondary">Cancel</a>
+    </div>
+  </form>
+  <form method="post" action="/admin/tags/{{.Tag.ID}}/destroy" onsubmit="return confirm('Are you sure?')">
+    <button type="submit" class="btn btn-danger">Delete</button>
+  </form>
+</div>
+{{end}}

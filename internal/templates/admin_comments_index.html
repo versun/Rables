@@ -1,0 +1,140 @@
+{{define "title"}}Comments|Admin{{end}}
+{{define "content"}}
+<form id="batch-comments" method="post"></form>
+<div class="admin-comments" data-controller="batch-selection">
+  <div class="admin-toolbar">
+    <div class="status-tabs">
+      <a href="/admin/comments" class="status-tab {{if eq .Status ""}}active{{end}}">All</a>
+      <a href="/admin/comments?status=pending" class="status-tab {{if eq .Status "pending"}}active{{end}}">Pending</a>
+      <a href="/admin/comments?status=approved" class="status-tab {{if eq .Status "approved"}}active{{end}}">Approved</a>
+      <a href="/admin/comments?status=rejected" class="status-tab {{if eq .Status "rejected"}}active{{end}}">Rejected</a>
+    </div>
+    <div class="batch-actions" data-batch-selection-target="actions" style="display: none; padding: 10px; background: #f5f5f5; border-radius: 4px; margin-bottom: 10px; gap: 10px;">
+      <span style="margin-right: 10px;"><strong><span data-batch-selection-target="count">0</span></strong> selected</span>
+      <button type="submit" form="batch-comments" formaction="/admin/comments/batch_approve" class="btn btn-sm" style="background: #28a745; color: white;">Approve</button>
+      <button type="submit" form="batch-comments" formaction="/admin/comments/batch_reject" class="btn btn-sm" style="background: #ffc107; color: black;">Reject</button>
+      <button type="submit" form="batch-comments" formaction="/admin/comments/batch_destroy" class="btn btn-sm" style="background: #dc3545; color: white;">Delete</button>
+    </div>
+  </div>
+
+  <div class="table-container">
+    <table class="admin-table compact-table">
+      <thead>
+        <tr>
+          <th style="width: 40px;">
+            <input type="checkbox" data-batch-selection-target="selectAll" data-action="change->batch-selection#toggleAll" aria-label="Select all">
+          </th>
+          <th class="col-actions-compact">Actions</th>
+          <th class="col-compact">Status</th>
+          <th class="col-content">Content</th>
+          <th class="col-title">Article/Page</th>
+          <th class="col-title">Author</th>
+          <th class="col-date-compact">Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{if .Comments}}
+          {{range .Comments}}
+            <tr>
+              <td>
+                <input type="checkbox" name="ids" value="{{.Comment.ID}}" form="batch-comments"
+                       data-batch-selection-target="checkbox" data-action="change->batch-selection#toggle">
+              </td>
+              <td class="col-actions-compact">
+                <div class="action-buttons">
+                  {{if .IsLocal}}
+                    {{if ne .Comment.Status 1}}
+                      <form method="post" action="/admin/comments/{{.Comment.ID}}/approve" style="display: inline;">
+                        <button type="submit" class="action-btn" title="Approve">✓</button>
+                      </form>
+                    {{end}}
+                    {{if ne .Comment.Status 2}}
+                      <form method="post" action="/admin/comments/{{.Comment.ID}}/reject" style="display: inline;">
+                        <button type="submit" class="action-btn" title="Reject">✕</button>
+                      </form>
+                    {{end}}
+                  {{end}}
+                  <form method="post" action="/admin/comments/batch_destroy" style="display: inline;" onsubmit="return confirm('Are you sure?');">
+                    <input type="hidden" name="ids" value="{{.Comment.ID}}">
+                    <button type="submit" class="action-btn" title="Delete">🗑</button>
+                  </form>
+                </div>
+              </td>
+              <td class="col-compact">
+                {{if eq .Comment.Status 1}}
+                  <span style="color: green;">✓</span>
+                {{else if eq .Comment.Status 2}}
+                  <span style="color: red;">✕</span>
+                {{else}}
+                  <span style="color: orange;">⏳</span>
+                {{end}}
+              </td>
+              <td class="col-content">
+                <small>{{.TruncatedContent}}</small>
+                {{if .IsLocal}}
+                  <details style="margin-top: 0.5rem;">
+                    <summary style="cursor: pointer; font-size: 0.85rem; color: #333;">Reply</summary>
+                    <div style="margin-top: 0.5rem;">
+                      <form method="post" action="/admin/comments/{{.Comment.ID}}/reply">
+                        <textarea name="comment[content]" required rows="3" placeholder="Reply..." style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; resize: vertical;"></textarea>
+                        <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                          <input type="submit" value="Reply" style="padding: 0.35rem 0.75rem; background-color: #333; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem;">
+                          {{if $.SiteAuthor}}
+                            <small style="color: #666;">as {{$.SiteAuthor}}{{if $.SiteURL}} · {{$.SiteURL}}{{end}}</small>
+                          {{end}}
+                        </div>
+                      </form>
+                    </div>
+                  </details>
+                {{end}}
+              </td>
+              <td class="col-title">
+                {{if .CommentableURL}}
+                  <a href="{{.CommentableURL}}" class="title-link" target="_blank">{{.TruncatedTitle}}</a>
+                {{else}}
+                  <small class="text-muted">—</small>
+                {{end}}
+              </td>
+              <td class="col-title">
+                <strong>{{.Comment.AuthorName}}</strong>
+                {{if .Comment.AuthorEmail.Valid}}
+                  <br><small>{{.Comment.AuthorEmail.String}}</small>
+                {{end}}
+                {{if .Comment.AuthorUrl.Valid}}
+                  <br><small><a href="{{.Comment.AuthorUrl.String}}" target="_blank" style="color: #666;">{{.Comment.AuthorUrl.String}}</a></small>
+                {{end}}
+                {{if .Comment.Platform.Valid}}
+                  <br><small style="color: #999;">via {{.PlatformTitle}}</small>
+                {{end}}
+              </td>
+              <td class="col-date-compact">
+                <small>{{formatTime .DateUnix $.TimeZone "01/02 15:04"}}</small>
+              </td>
+            </tr>
+          {{end}}
+        {{else}}
+          <tr>
+            <td colspan="7" class="no-content-row">
+              <p>No comments found.</p>
+            </td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{if .Comments}}
+    <div class="pagination-wrapper">
+      {{range paginationWindow .Page .Pages}}
+        {{if .Gap}}
+          <span class="pagination-gap">…</span>
+        {{else if eq .Page $.Page}}
+          <span class="pagination-current">{{.Page}}</span>
+        {{else}}
+          <a href="/admin/comments?page={{.Page}}{{if $.Status}}&status={{$.Status}}{{end}}" class="pagination-link">{{.Page}}</a>
+        {{end}}
+      {{end}}
+    </div>
+  {{end}}
+</div>
+{{end}}
