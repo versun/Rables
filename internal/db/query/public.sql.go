@@ -76,7 +76,7 @@ func (q *Queries) CountSearchPublishedArticles(ctx context.Context, arg CountSea
 
 const getPublicArticleBySlug = `-- name: GetPublicArticleBySlug :one
 
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles WHERE slug = ?
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles WHERE slug = ?
 `
 
 // Public site queries (plan T12). Visibility follows plan section 4.1: only
@@ -106,12 +106,13 @@ func (q *Queries) GetPublicArticleBySlug(ctx context.Context, slug sql.NullStrin
 		&i.ScheduledSendNewsletter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
 
 const getPublicPageBySlug = `-- name: GetPublicPageBySlug :one
-SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at FROM pages WHERE slug = ?
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages WHERE slug = ?
 `
 
 func (q *Queries) GetPublicPageBySlug(ctx context.Context, slug sql.NullString) (Page, error) {
@@ -130,6 +131,7 @@ func (q *Queries) GetPublicPageBySlug(ctx context.Context, slug sql.NullString) 
 		&i.ScheduledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
@@ -269,7 +271,7 @@ func (q *Queries) ListPublishedArticleSitemap(ctx context.Context) ([]ListPublis
 }
 
 const listPublishedArticles = `-- name: ListPublishedArticles :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
 WHERE status = 1
 ORDER BY created_at DESC
 LIMIT ? OFFSET ?
@@ -310,6 +312,7 @@ func (q *Queries) ListPublishedArticles(ctx context.Context, arg ListPublishedAr
 			&i.ScheduledSendNewsletter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}
@@ -325,7 +328,7 @@ func (q *Queries) ListPublishedArticles(ctx context.Context, arg ListPublishedAr
 }
 
 const listPublishedArticlesByTag = `-- name: ListPublishedArticlesByTag :many
-SELECT articles.id, articles.title, articles.slug, articles.content_html, articles.content_type, articles.description, articles.excerpt, articles.meta_description, articles.meta_title, articles.meta_image, articles.source_author, articles.source_url, articles.source_content, articles.status, articles.comment, articles.scheduled_at, articles.scheduled_crosspost_platforms, articles.scheduled_send_newsletter, articles.created_at, articles.updated_at FROM articles
+SELECT articles.id, articles.title, articles.slug, articles.content_html, articles.content_type, articles.description, articles.excerpt, articles.meta_description, articles.meta_title, articles.meta_image, articles.source_author, articles.source_url, articles.source_content, articles.status, articles.comment, articles.scheduled_at, articles.scheduled_crosspost_platforms, articles.scheduled_send_newsletter, articles.created_at, articles.updated_at, articles.content_markdown FROM articles
 JOIN article_tags ON article_tags.article_id = articles.id
 WHERE articles.status = 1 AND article_tags.tag_id = ?
 ORDER BY articles.created_at DESC
@@ -368,6 +371,7 @@ func (q *Queries) ListPublishedArticlesByTag(ctx context.Context, arg ListPublis
 			&i.ScheduledSendNewsletter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}
@@ -489,7 +493,7 @@ func (q *Queries) ListTagsForArticle(ctx context.Context, articleID int64) ([]Ta
 }
 
 const searchPublishedArticles = `-- name: SearchPublishedArticles :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
 WHERE status = 1 AND (
   (title LIKE ? ESCAPE '\') OR
   (slug LIKE ? ESCAPE '\') OR
@@ -549,6 +553,7 @@ func (q *Queries) SearchPublishedArticles(ctx context.Context, arg SearchPublish
 			&i.ScheduledSendNewsletter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}

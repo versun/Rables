@@ -16,11 +16,15 @@
         <div class="field">
           <select name="content_type" id="content_type_select" required data-content-form-target="contentTypeSelect" data-action="change->content-form#toggleContentType">
             <option value="rich_text" {{if eq .Form.ContentType "rich_text"}}selected{{end}}>Rich Text</option>
+            <option value="markdown" {{if eq .Form.ContentType "markdown"}}selected{{end}}>Markdown</option>
             <option value="html" {{if eq .Form.ContentType "html"}}selected{{end}}>HTML Code</option>
           </select>
         </div>
-        <div class="field" id="rich_text_field" data-content-form-target="richTextField"{{if eq .Form.ContentType "html"}} style="display: none;"{{end}}>
+        <div class="field" id="rich_text_field" data-content-form-target="richTextField"{{if ne .Form.ContentType "rich_text"}} style="display: none;"{{end}}>
           <textarea name="content" rows="14" placeholder="Content">{{.Form.Content}}</textarea>
+        </div>
+        <div class="field" id="markdown_content_field" data-content-form-target="markdownContentField"{{if ne .Form.ContentType "markdown"}} style="display: none;"{{end}}>
+          <textarea name="markdown_content" rows="14" placeholder="Markdown Content">{{.Form.MarkdownContent}}</textarea>
         </div>
         <div class="field" id="html_content_field" data-content-form-target="htmlContentField"{{if ne .Form.ContentType "html"}} style="display: none;"{{end}}>
           <textarea name="html_content" rows="10" placeholder="Enter your HTML code here..." class="code-editor">{{.Form.HTMLContent}}</textarea>

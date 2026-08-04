@@ -125,6 +125,12 @@ func (s *Server) userUpdate(w http.ResponseWriter, r *http.Request) {
 			fail("Password confirmation doesn't match password.")
 			return
 		}
+		// bcrypt rejects inputs over 72 bytes; Rails' has_secure_password
+		// validates the length instead, so mirror it as a form error.
+		if len(password) > 72 {
+			fail("Password is too long (maximum is 72 characters).")
+			return
+		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 		if err != nil {
 			s.Log.Error("hash password", "error", err)

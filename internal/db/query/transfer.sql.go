@@ -62,7 +62,7 @@ func (q *Queries) ExportArticleTags(ctx context.Context) ([]ExportArticleTagsRow
 }
 
 const exportArticles = `-- name: ExportArticles :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles ORDER BY id
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles ORDER BY id
 `
 
 func (q *Queries) ExportArticles(ctx context.Context) ([]Article, error) {
@@ -95,6 +95,7 @@ func (q *Queries) ExportArticles(ctx context.Context) ([]Article, error) {
 			&i.ScheduledSendNewsletter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}
@@ -379,7 +380,7 @@ func (q *Queries) ExportNewsletterSettings(ctx context.Context) ([]NewsletterSet
 }
 
 const exportPages = `-- name: ExportPages :many
-SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at FROM pages ORDER BY id
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages ORDER BY id
 `
 
 func (q *Queries) ExportPages(ctx context.Context) ([]Page, error) {
@@ -404,6 +405,7 @@ func (q *Queries) ExportPages(ctx context.Context) ([]Page, error) {
 			&i.ScheduledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}

@@ -28,15 +28,15 @@ SELECT COUNT(*) FROM pages WHERE slug = ? AND id != ?;
 
 -- name: CreatePage :one
 INSERT INTO pages (
-  title, slug, content_html, content_type, redirect_url,
+  title, slug, content_html, content_type, content_markdown, redirect_url,
   page_order, status, comment, scheduled_at,
   created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: UpdatePage :one
 UPDATE pages
-SET title = ?, slug = ?, content_html = ?, content_type = ?, redirect_url = ?,
+SET title = ?, slug = ?, content_html = ?, content_type = ?, content_markdown = ?, redirect_url = ?,
     page_order = ?, status = ?, comment = ?, scheduled_at = ?, updated_at = ?
 WHERE id = ?
 RETURNING *;

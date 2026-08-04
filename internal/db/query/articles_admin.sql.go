@@ -150,14 +150,14 @@ func (q *Queries) CountSearchAdminArticlesByStatus(ctx context.Context, arg Coun
 
 const createArticle = `-- name: CreateArticle :one
 INSERT INTO articles (
-  title, slug, content_html, content_type, description, excerpt,
+  title, slug, content_html, content_type, content_markdown, description, excerpt,
   meta_description, meta_title, meta_image,
   source_author, source_url, source_content,
   status, comment, scheduled_at,
   scheduled_crosspost_platforms, scheduled_send_newsletter,
   created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown
 `
 
 type CreateArticleParams struct {
@@ -165,6 +165,7 @@ type CreateArticleParams struct {
 	Slug                        sql.NullString
 	ContentHtml                 sql.NullString
 	ContentType                 string
+	ContentMarkdown             sql.NullString
 	Description                 sql.NullString
 	Excerpt                     sql.NullString
 	MetaDescription             sql.NullString
@@ -188,6 +189,7 @@ func (q *Queries) CreateArticle(ctx context.Context, arg CreateArticleParams) (A
 		arg.Slug,
 		arg.ContentHtml,
 		arg.ContentType,
+		arg.ContentMarkdown,
 		arg.Description,
 		arg.Excerpt,
 		arg.MetaDescription,
@@ -226,6 +228,7 @@ func (q *Queries) CreateArticle(ctx context.Context, arg CreateArticleParams) (A
 		&i.ScheduledSendNewsletter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
@@ -297,7 +300,7 @@ func (q *Queries) DeleteSocialMediaPostsByArticleID(ctx context.Context, article
 }
 
 const getAdminArticleByID = `-- name: GetAdminArticleByID :one
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles WHERE id = ?
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles WHERE id = ?
 `
 
 func (q *Queries) GetAdminArticleByID(ctx context.Context, id int64) (Article, error) {
@@ -324,13 +327,14 @@ func (q *Queries) GetAdminArticleByID(ctx context.Context, id int64) (Article, e
 		&i.ScheduledSendNewsletter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
 
 const getAdminArticleBySlug = `-- name: GetAdminArticleBySlug :one
 
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles WHERE slug = ?
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles WHERE slug = ?
 `
 
 // Admin article management (plan section 4.1). Feature-local lookups are
@@ -359,6 +363,7 @@ func (q *Queries) GetAdminArticleBySlug(ctx context.Context, slug sql.NullString
 		&i.ScheduledSendNewsletter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
@@ -468,7 +473,7 @@ func (q *Queries) InsertArticleTag(ctx context.Context, arg InsertArticleTagPara
 }
 
 const listAdminArticles = `-- name: ListAdminArticles :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles ORDER BY created_at DESC LIMIT ? OFFSET ?
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles ORDER BY created_at DESC LIMIT ? OFFSET ?
 `
 
 type ListAdminArticlesParams struct {
@@ -507,6 +512,7 @@ func (q *Queries) ListAdminArticles(ctx context.Context, arg ListAdminArticlesPa
 			&i.ScheduledSendNewsletter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}
@@ -522,7 +528,7 @@ func (q *Queries) ListAdminArticles(ctx context.Context, arg ListAdminArticlesPa
 }
 
 const listAdminArticlesByStatus = `-- name: ListAdminArticlesByStatus :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?
 `
 
 type ListAdminArticlesByStatusParams struct {
@@ -561,6 +567,7 @@ func (q *Queries) ListAdminArticlesByStatus(ctx context.Context, arg ListAdminAr
 			&i.ScheduledSendNewsletter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}
@@ -813,7 +820,7 @@ func (q *Queries) ListSocialPostsForArticles(ctx context.Context, ids []int64) (
 }
 
 const searchAdminArticles = `-- name: SearchAdminArticles :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
 WHERE like(?, title, '\') OR like(?, slug, '\')
    OR like(?, description, '\') OR like(?, content_html, '\')
 ORDER BY created_at DESC LIMIT ? OFFSET ?
@@ -870,6 +877,7 @@ func (q *Queries) SearchAdminArticles(ctx context.Context, arg SearchAdminArticl
 			&i.ScheduledSendNewsletter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}
@@ -885,7 +893,7 @@ func (q *Queries) SearchAdminArticles(ctx context.Context, arg SearchAdminArticl
 }
 
 const searchAdminArticlesByStatus = `-- name: SearchAdminArticlesByStatus :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
 WHERE status = ? AND (like(?, title, '\') OR like(?, slug, '\')
    OR like(?, description, '\') OR like(?, content_html, '\'))
 ORDER BY created_at DESC LIMIT ? OFFSET ?
@@ -939,6 +947,7 @@ func (q *Queries) SearchAdminArticlesByStatus(ctx context.Context, arg SearchAdm
 			&i.ScheduledSendNewsletter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}
@@ -955,14 +964,14 @@ func (q *Queries) SearchAdminArticlesByStatus(ctx context.Context, arg SearchAdm
 
 const updateArticle = `-- name: UpdateArticle :one
 UPDATE articles
-SET title = ?, slug = ?, content_html = ?, content_type = ?, description = ?, excerpt = ?,
+SET title = ?, slug = ?, content_html = ?, content_type = ?, content_markdown = ?, description = ?, excerpt = ?,
     meta_description = ?, meta_title = ?, meta_image = ?,
     source_author = ?, source_url = ?, source_content = ?,
     status = ?, comment = ?, scheduled_at = ?,
     scheduled_crosspost_platforms = ?, scheduled_send_newsletter = ?,
     created_at = ?, updated_at = ?
 WHERE id = ?
-RETURNING id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at
+RETURNING id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown
 `
 
 type UpdateArticleParams struct {
@@ -970,6 +979,7 @@ type UpdateArticleParams struct {
 	Slug                        sql.NullString
 	ContentHtml                 sql.NullString
 	ContentType                 string
+	ContentMarkdown             sql.NullString
 	Description                 sql.NullString
 	Excerpt                     sql.NullString
 	MetaDescription             sql.NullString
@@ -994,6 +1004,7 @@ func (q *Queries) UpdateArticle(ctx context.Context, arg UpdateArticleParams) (A
 		arg.Slug,
 		arg.ContentHtml,
 		arg.ContentType,
+		arg.ContentMarkdown,
 		arg.Description,
 		arg.Excerpt,
 		arg.MetaDescription,
@@ -1033,6 +1044,7 @@ func (q *Queries) UpdateArticle(ctx context.Context, arg UpdateArticleParams) (A
 		&i.ScheduledSendNewsletter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
@@ -1041,7 +1053,7 @@ const updateArticleStatus = `-- name: UpdateArticleStatus :one
 UPDATE articles
 SET status = ?, scheduled_crosspost_platforms = ?, scheduled_send_newsletter = ?, updated_at = ?
 WHERE id = ?
-RETURNING id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at
+RETURNING id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown
 `
 
 type UpdateArticleStatusParams struct {
@@ -1085,6 +1097,7 @@ func (q *Queries) UpdateArticleStatus(ctx context.Context, arg UpdateArticleStat
 		&i.ScheduledSendNewsletter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }

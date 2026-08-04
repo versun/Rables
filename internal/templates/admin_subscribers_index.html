@@ -119,7 +119,7 @@
         {{else if eq .Page $.Page}}
           <span class="pagination-current">{{.Page}}</span>
         {{else}}
-          <a href="/admin/subscribers?page={{.Page}}&{{$.FilterQuery}}" class="pagination-link">{{.Page}}</a>
+          <a href="/admin/subscribers?page={{.Page}}&status={{$.Status}}{{range $.TagIDs}}&tag_ids%5B%5D={{.}}{{end}}{{if $.IncludeAll}}&include_all=1{{end}}" class="pagination-link">{{.Page}}</a>
         {{end}}
       {{end}}
     </div>

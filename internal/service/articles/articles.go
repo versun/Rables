@@ -63,8 +63,8 @@ type (
 type SaveParams struct {
 	Title           string
 	Slug            string
-	ContentType     string // domain.ContentTypeRichText | domain.ContentTypeHTML
-	ContentHTML     string // raw rich-text body or raw html_content
+	ContentType     string // domain.ContentTypeRichText | domain.ContentTypeHTML | domain.ContentTypeMarkdown
+	ContentHTML     string // raw rich-text body, raw html_content, or markdown source
 	Description     string
 	MetaTitle       string
 	MetaImage       string
@@ -158,7 +158,16 @@ func Save(ctx context.Context, db *sql.DB, existing *query.Article, p SaveParams
 	}
 
 	slug := domain.GenerateSlug(p.Slug, p.Title, now, exists)
-	contentHTML := domain.AddLazyLoading(domain.SanitizeHTML(p.ContentHTML))
+	// Markdown articles store the source in content_markdown and the rendered
+	// HTML in content_html, so the sanitize/lazy-load write path and every
+	// content_html reader (public page, feed, newsletter, crosspost) treat
+	// them exactly like rich-text articles.
+	isMarkdown := p.ContentType == string(domain.ContentTypeMarkdown)
+	body := p.ContentHTML
+	if isMarkdown {
+		body = domain.RenderMarkdown(body)
+	}
+	contentHTML := domain.AddLazyLoading(domain.SanitizeHTML(body))
 	excerpt := domain.BuildExcerpt(p.Description, contentHTML)
 
 	var errs []string
@@ -171,11 +180,16 @@ func Save(ctx context.Context, db *sql.DB, existing *query.Article, p SaveParams
 	if p.Status == domain.StatusSchedule && p.ScheduledAt == nil {
 		errs = append(errs, "Scheduled at can't be blank")
 	}
-	if p.ContentType == string(domain.ContentTypeHTML) {
+	switch {
+	case p.ContentType == string(domain.ContentTypeHTML):
 		if domain.IsBlank(p.ContentHTML) {
 			errs = append(errs, "Html content can't be blank")
 		}
-	} else if domain.IsBlank(domain.PlainText(contentHTML)) {
+	case isMarkdown:
+		if domain.IsBlank(p.ContentHTML) {
+			errs = append(errs, "Content can't be blank")
+		}
+	case domain.IsBlank(domain.PlainText(contentHTML)):
 		errs = append(errs, "Content can't be blank")
 	}
 	if len(errs) > 0 {
@@ -218,11 +232,19 @@ func Save(ctx context.Context, db *sql.DB, existing *query.Article, p SaveParams
 	qtx := q.WithTx(tx)
 	nowUnix := now.Unix()
 
+	// Markdown source is kept only while the article is markdown; switching
+	// to another content type clears it.
+	var contentMarkdown sql.NullString
+	if isMarkdown {
+		contentMarkdown = nullString(p.ContentHTML)
+	}
+
 	columns := query.CreateArticleParams{
 		Title:                       nullString(p.Title),
 		Slug:                        nullString(slug),
 		ContentHtml:                 nullString(contentHTML),
 		ContentType:                 contentTypeOrDefault(p.ContentType),
+		ContentMarkdown:             contentMarkdown,
 		Description:                 nullString(p.Description),
 		Excerpt:                     nullString(excerpt),
 		MetaDescription:             nullString(p.MetaDescription),
@@ -248,6 +270,7 @@ func Save(ctx context.Context, db *sql.DB, existing *query.Article, p SaveParams
 			Slug:                        columns.Slug,
 			ContentHtml:                 columns.ContentHtml,
 			ContentType:                 columns.ContentType,
+			ContentMarkdown:             columns.ContentMarkdown,
 			Description:                 columns.Description,
 			Excerpt:                     columns.Excerpt,
 			MetaDescription:             columns.MetaDescription,
@@ -558,8 +581,11 @@ func nullString(s string) sql.NullString {
 }
 
 func contentTypeOrDefault(ct string) string {
-	if ct == string(domain.ContentTypeHTML) {
+	switch ct {
+	case string(domain.ContentTypeHTML):
 		return string(domain.ContentTypeHTML)
+	case string(domain.ContentTypeMarkdown):
+		return string(domain.ContentTypeMarkdown)
 	}
 	return string(domain.ContentTypeRichText)
 }

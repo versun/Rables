@@ -53,18 +53,18 @@ WHERE status = ? AND (like(?, title, '\') OR like(?, slug, '\')
 
 -- name: CreateArticle :one
 INSERT INTO articles (
-  title, slug, content_html, content_type, description, excerpt,
+  title, slug, content_html, content_type, content_markdown, description, excerpt,
   meta_description, meta_title, meta_image,
   source_author, source_url, source_content,
   status, comment, scheduled_at,
   scheduled_crosspost_platforms, scheduled_send_newsletter,
   created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: UpdateArticle :one
 UPDATE articles
-SET title = ?, slug = ?, content_html = ?, content_type = ?, description = ?, excerpt = ?,
+SET title = ?, slug = ?, content_html = ?, content_type = ?, content_markdown = ?, description = ?, excerpt = ?,
     meta_description = ?, meta_title = ?, meta_image = ?,
     source_author = ?, source_url = ?, source_content = ?,
     status = ?, comment = ?, scheduled_at = ?,

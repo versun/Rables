@@ -39,6 +39,7 @@ type Article struct {
 	ScheduledSendNewsletter     int64
 	CreatedAt                   int64
 	UpdatedAt                   int64
+	ContentMarkdown             sql.NullString
 }
 
 type ArticleTag struct {
@@ -161,18 +162,19 @@ type NewsletterSetting struct {
 }
 
 type Page struct {
-	ID          int64
-	Title       sql.NullString
-	Slug        sql.NullString
-	ContentHtml sql.NullString
-	ContentType string
-	RedirectUrl sql.NullString
-	PageOrder   int64
-	Status      int64
-	Comment     int64
-	ScheduledAt sql.NullInt64
-	CreatedAt   int64
-	UpdatedAt   int64
+	ID              int64
+	Title           sql.NullString
+	Slug            sql.NullString
+	ContentHtml     sql.NullString
+	ContentType     string
+	RedirectUrl     sql.NullString
+	PageOrder       int64
+	Status          int64
+	Comment         int64
+	ScheduledAt     sql.NullInt64
+	CreatedAt       int64
+	UpdatedAt       int64
+	ContentMarkdown sql.NullString
 }
 
 type Redirect struct {

@@ -162,10 +162,10 @@ func findOrCreate(ctx context.Context, q *query.Queries, name string) (query.Tag
 		if err != nil {
 			return query.Tag{}, err
 		}
-		err = q.InsertTagIfAbsent(ctx, query.InsertTagIfAbsentParams{Name: name, Slug: slug, CreatedAt: now, UpdatedAt: now})
+		err = q.InsertTagIfAbsent(ctx, query.InsertTagIfAbsentParams{Name: name, Slug: slug, CreatedAt: now, UpdatedAt: now, LowerName: name})
 		if err != nil {
-			// Only the slug can still conflict (the name is absorbed by
-			// ON CONFLICT); loop to generate the next suffix.
+			// Only the slug can still conflict (the insert atomically skips
+			// existing names case-insensitively); loop for the next suffix.
 			if isUniqueViolation(err) {
 				continue
 			}

@@ -347,6 +347,7 @@ type adminArticleForm struct {
 	ContentType      string
 	Content          string // rich_text body
 	HTMLContent      string // html body
+	MarkdownContent  string // markdown source
 	Description      string
 	MetaTitle        string
 	MetaImage        string
@@ -998,9 +999,12 @@ func (s *Server) parseArticleForm(r *http.Request, existing *query.Article) (art
 
 	contentType := r.PostFormValue("content_type")
 	raw := r.PostFormValue("content")
-	if contentType == string(domain.ContentTypeHTML) {
+	switch contentType {
+	case string(domain.ContentTypeHTML):
 		raw = r.PostFormValue("html_content")
-	} else {
+	case string(domain.ContentTypeMarkdown):
+		raw = r.PostFormValue("markdown_content")
+	default:
 		contentType = string(domain.ContentTypeRichText)
 	}
 
@@ -1119,6 +1123,7 @@ func (s *Server) articleFormFromArticle(ctx context.Context, article query.Artic
 		ContentType:      article.ContentType,
 		Content:          content,
 		HTMLContent:      content,
+		MarkdownContent:  article.ContentMarkdown.String,
 		Description:      article.Description.String,
 		MetaTitle:        article.MetaTitle.String,
 		MetaImage:        article.MetaImage.String,
@@ -1158,9 +1163,12 @@ func articleFormFromParams(p articlesvc.SaveParams, tzName string) adminArticleF
 		Crosspost:       p.Crosspost,
 		SocialURLs:      p.SocialURLs,
 	}
-	if p.ContentType == string(domain.ContentTypeHTML) {
+	switch p.ContentType {
+	case string(domain.ContentTypeHTML):
 		form.HTMLContent = p.ContentHTML
-	} else {
+	case string(domain.ContentTypeMarkdown):
+		form.MarkdownContent = p.ContentHTML
+	default:
 		form.Content = p.ContentHTML
 	}
 	if !p.CreatedAt.IsZero() {

@@ -153,6 +153,17 @@ func TestChangePassword(t *testing.T) {
 		t.Fatalf("mismatched confirmation: status = %d, want 422", rec.Code)
 	}
 
+	// Over-72-byte new password is rejected (422), mirroring the Rails
+	// has_secure_password length validation instead of erroring in bcrypt.
+	long := strings.Repeat("a", 100)
+	rec = change(url.Values{
+		"user_name": {"admin"}, "current_password": {"secret-pw"},
+		"password": {long}, "password_confirmation": {long},
+	})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("too-long password: status = %d, want 422", rec.Code)
+	}
+
 	// Valid change succeeds and the new password works.
 	rec = change(url.Values{
 		"user_name": {"admin"}, "current_password": {"secret-pw"},
@@ -269,6 +280,7 @@ func TestSetupValidation(t *testing.T) {
 		form url.Values
 	}{
 		{name: "password mismatch", form: with(setupForm, "password_confirmation", "other")},
+		{name: "password too long", form: with(with(setupForm, "password", strings.Repeat("a", 100)), "password_confirmation", strings.Repeat("a", 100))},
 		{name: "blank password", form: with(setupForm, "password", "")},
 		{name: "blank username", form: with(setupForm, "user_name", "")},
 		{name: "blank title", form: with(setupForm, "title", "")},

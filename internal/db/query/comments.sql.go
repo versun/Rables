@@ -146,7 +146,7 @@ func (q *Queries) GetCommentByID(ctx context.Context, id int64) (Comment, error)
 }
 
 const getCommentableArticleByID = `-- name: GetCommentableArticleByID :one
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles WHERE id = ?
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles WHERE id = ?
 `
 
 func (q *Queries) GetCommentableArticleByID(ctx context.Context, id int64) (Article, error) {
@@ -173,13 +173,14 @@ func (q *Queries) GetCommentableArticleByID(ctx context.Context, id int64) (Arti
 		&i.ScheduledSendNewsletter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
 
 const getCommentableArticleBySlug = `-- name: GetCommentableArticleBySlug :one
 
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles WHERE slug = ?
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles WHERE slug = ?
 `
 
 // Comment chain (plan section 4.5). Commentable lookups are duplicated here under
@@ -209,12 +210,13 @@ func (q *Queries) GetCommentableArticleBySlug(ctx context.Context, slug sql.Null
 		&i.ScheduledSendNewsletter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
 
 const getCommentablePageByID = `-- name: GetCommentablePageByID :one
-SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at FROM pages WHERE id = ?
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages WHERE id = ?
 `
 
 func (q *Queries) GetCommentablePageByID(ctx context.Context, id int64) (Page, error) {
@@ -233,12 +235,13 @@ func (q *Queries) GetCommentablePageByID(ctx context.Context, id int64) (Page, e
 		&i.ScheduledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
 
 const getCommentablePageBySlug = `-- name: GetCommentablePageBySlug :one
-SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at FROM pages WHERE slug = ?
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages WHERE slug = ?
 `
 
 func (q *Queries) GetCommentablePageBySlug(ctx context.Context, slug sql.NullString) (Page, error) {
@@ -257,6 +260,7 @@ func (q *Queries) GetCommentablePageBySlug(ctx context.Context, slug sql.NullStr
 		&i.ScheduledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }

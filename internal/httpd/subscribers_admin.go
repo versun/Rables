@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -89,7 +88,6 @@ type adminSubscribersPage struct {
 	Subscribers []adminSubscriberRow
 	Page        int
 	Pages       int
-	FilterQuery string // filter params carried by the pagination links
 	TimeZone    string
 }
 
@@ -213,15 +211,6 @@ func (s *Server) adminSubscribersIndex(w http.ResponseWriter, r *http.Request) {
 		pageRows = append(pageRows, adminSubscriberRow{Subscriber: sub, Tags: subTags})
 	}
 
-	filter := url.Values{}
-	filter.Set("status", status)
-	for _, id := range tagIDs {
-		filter.Add("tag_ids[]", strconv.FormatInt(id, 10))
-	}
-	if includeAll {
-		filter.Set("include_all", "1")
-	}
-
 	s.render(w, http.StatusOK, "admin_subscribers_index", adminSubscribersPage{
 		Flash:       PopFlash(r, w),
 		Status:      status,
@@ -231,7 +220,6 @@ func (s *Server) adminSubscribersIndex(w http.ResponseWriter, r *http.Request) {
 		Subscribers: pageRows,
 		Page:        int(page),
 		Pages:       int((total + adminSubscribersPerPage - 1) / adminSubscribersPerPage),
-		FilterQuery: filter.Encode(),
 		TimeZone:    st.TimeZone,
 	})
 }

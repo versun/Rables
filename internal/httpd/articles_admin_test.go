@@ -334,6 +334,88 @@ func TestAdminArticlesCreateValidation(t *testing.T) {
 	}
 }
 
+// TestAdminArticlesMarkdownFlow covers markdown authoring: the source lands in
+// content_markdown while content_html gets the rendered, sanitized HTML, and
+// the edit form shows the source again.
+func TestAdminArticlesMarkdownFlow(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	ctx := t.Context()
+
+	source := "# Hello\n\nSome **bold** text.\n\n<script>alert(1)</script>\n\n![pic](/x.png)\n"
+	form := validArticleForm()
+	form.Set("title", "Markdown Post")
+	form.Set("content_type", "markdown")
+	form.Set("markdown_content", source)
+	rec := doRequest(t, h, http.MethodPost, "/admin/posts", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("markdown create: status = %d", rec.Code)
+	}
+	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug("markdown-post"))
+	if err != nil {
+		t.Fatalf("markdown article: %v", err)
+	}
+	if article.ContentType != string(domain.ContentTypeMarkdown) {
+		t.Errorf("content_type = %q, want markdown", article.ContentType)
+	}
+	if article.ContentMarkdown.String != source {
+		t.Errorf("content_markdown = %q, want the submitted source", article.ContentMarkdown.String)
+	}
+	body := article.ContentHtml.String
+	for _, want := range []string{"<h1>Hello</h1>", "<strong>bold</strong>", `loading="lazy"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("content_html missing %q: %q", want, body)
+		}
+	}
+	if strings.Contains(body, "script") {
+		t.Errorf("content_html still contains script: %q", body)
+	}
+
+	// The edit form selects markdown and shows the source, not rendered HTML.
+	rec = doRequest(t, h, http.MethodGet, "/admin/posts/markdown-post/edit", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("edit form: status = %d", rec.Code)
+	}
+	page := rec.Body.String()
+	if !strings.Contains(page, `value="markdown" selected`) {
+		t.Errorf("edit form does not select markdown")
+	}
+	if !strings.Contains(page, `name="markdown_content"`) ||
+		!strings.Contains(page, "# Hello") || !strings.Contains(page, "**bold**") {
+		t.Errorf("edit form does not show the markdown source")
+	}
+
+	// Blank markdown source is a validation error.
+	form = validArticleForm()
+	form.Set("title", "Blank Markdown")
+	form.Set("content_type", "markdown")
+	form.Set("markdown_content", "  ")
+	rec = doRequest(t, h, http.MethodPost, "/admin/posts", form, session)
+	if rec.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(rec.Body.String(), "Content can&#39;t be blank") {
+		t.Errorf("blank markdown: status = %d", rec.Code)
+	}
+
+	// Switching back to rich_text clears the stored markdown source.
+	form = validArticleForm()
+	form.Set("title", "Markdown Post")
+	form.Set("content", "<p>Back to rich</p>")
+	rec = doRequest(t, h, http.MethodPost, "/admin/posts/markdown-post", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("switch to rich_text: status = %d", rec.Code)
+	}
+	article, _ = s.Q.GetAdminArticleBySlug(ctx, nullSlug("markdown-post"))
+	if article.ContentType != string(domain.ContentTypeRichText) {
+		t.Errorf("content_type after switch = %q", article.ContentType)
+	}
+	if article.ContentMarkdown.Valid {
+		t.Errorf("content_markdown after switch = %q, want NULL", article.ContentMarkdown.String)
+	}
+	if !strings.Contains(article.ContentHtml.String, "Back to rich") {
+		t.Errorf("content_html after switch = %q", article.ContentHtml.String)
+	}
+}
+
 // TestAdminArticlesSchedule covers the schedule save: snapshot fields and the
 // publish_article job, including old-job cancellation on reschedule.
 func TestAdminArticlesSchedule(t *testing.T) {

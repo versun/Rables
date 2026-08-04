@@ -61,6 +61,11 @@ func (s *Server) setupCreate(w http.ResponseWriter, r *http.Request) {
 	case password != confirmation:
 		fail("Password confirmation doesn't match password.")
 		return
+	// bcrypt rejects inputs over 72 bytes; Rails' has_secure_password
+	// validates the length instead, so mirror it as a form error.
+	case len(password) > 72:
+		fail("Password is too long (maximum is 72 characters).")
+		return
 	case r.FormValue("title") == "":
 		fail("Title can't be blank.")
 		return

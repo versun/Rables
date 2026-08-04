@@ -73,25 +73,26 @@ func (q *Queries) CountAdminPagesByStatus(ctx context.Context, status int64) (in
 
 const createPage = `-- name: CreatePage :one
 INSERT INTO pages (
-  title, slug, content_html, content_type, redirect_url,
+  title, slug, content_html, content_type, content_markdown, redirect_url,
   page_order, status, comment, scheduled_at,
   created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown
 `
 
 type CreatePageParams struct {
-	Title       sql.NullString
-	Slug        sql.NullString
-	ContentHtml sql.NullString
-	ContentType string
-	RedirectUrl sql.NullString
-	PageOrder   int64
-	Status      int64
-	Comment     int64
-	ScheduledAt sql.NullInt64
-	CreatedAt   int64
-	UpdatedAt   int64
+	Title           sql.NullString
+	Slug            sql.NullString
+	ContentHtml     sql.NullString
+	ContentType     string
+	ContentMarkdown sql.NullString
+	RedirectUrl     sql.NullString
+	PageOrder       int64
+	Status          int64
+	Comment         int64
+	ScheduledAt     sql.NullInt64
+	CreatedAt       int64
+	UpdatedAt       int64
 }
 
 func (q *Queries) CreatePage(ctx context.Context, arg CreatePageParams) (Page, error) {
@@ -100,6 +101,7 @@ func (q *Queries) CreatePage(ctx context.Context, arg CreatePageParams) (Page, e
 		arg.Slug,
 		arg.ContentHtml,
 		arg.ContentType,
+		arg.ContentMarkdown,
 		arg.RedirectUrl,
 		arg.PageOrder,
 		arg.Status,
@@ -122,6 +124,7 @@ func (q *Queries) CreatePage(ctx context.Context, arg CreatePageParams) (Page, e
 		&i.ScheduledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
@@ -148,7 +151,7 @@ func (q *Queries) DeletePageComments(ctx context.Context, commentableID sql.Null
 
 const getAdminPageBySlug = `-- name: GetAdminPageBySlug :one
 
-SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at FROM pages WHERE slug = ?
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages WHERE slug = ?
 `
 
 // Admin page management (plan section 4.1, task T10). Mirrors
@@ -170,12 +173,13 @@ func (q *Queries) GetAdminPageBySlug(ctx context.Context, slug sql.NullString) (
 		&i.ScheduledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }
 
 const listAdminPages = `-- name: ListAdminPages :many
-SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at FROM pages
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages
 ORDER BY page_order DESC
 LIMIT ? OFFSET ?
 `
@@ -207,6 +211,7 @@ func (q *Queries) ListAdminPages(ctx context.Context, arg ListAdminPagesParams) 
 			&i.ScheduledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}
@@ -222,7 +227,7 @@ func (q *Queries) ListAdminPages(ctx context.Context, arg ListAdminPagesParams) 
 }
 
 const listAdminPagesByStatus = `-- name: ListAdminPagesByStatus :many
-SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at FROM pages
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages
 WHERE status = ?
 ORDER BY page_order DESC
 LIMIT ? OFFSET ?
@@ -256,6 +261,7 @@ func (q *Queries) ListAdminPagesByStatus(ctx context.Context, arg ListAdminPages
 			&i.ScheduledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}
@@ -272,24 +278,25 @@ func (q *Queries) ListAdminPagesByStatus(ctx context.Context, arg ListAdminPages
 
 const updatePage = `-- name: UpdatePage :one
 UPDATE pages
-SET title = ?, slug = ?, content_html = ?, content_type = ?, redirect_url = ?,
+SET title = ?, slug = ?, content_html = ?, content_type = ?, content_markdown = ?, redirect_url = ?,
     page_order = ?, status = ?, comment = ?, scheduled_at = ?, updated_at = ?
 WHERE id = ?
-RETURNING id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at
+RETURNING id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown
 `
 
 type UpdatePageParams struct {
-	Title       sql.NullString
-	Slug        sql.NullString
-	ContentHtml sql.NullString
-	ContentType string
-	RedirectUrl sql.NullString
-	PageOrder   int64
-	Status      int64
-	Comment     int64
-	ScheduledAt sql.NullInt64
-	UpdatedAt   int64
-	ID          int64
+	Title           sql.NullString
+	Slug            sql.NullString
+	ContentHtml     sql.NullString
+	ContentType     string
+	ContentMarkdown sql.NullString
+	RedirectUrl     sql.NullString
+	PageOrder       int64
+	Status          int64
+	Comment         int64
+	ScheduledAt     sql.NullInt64
+	UpdatedAt       int64
+	ID              int64
 }
 
 func (q *Queries) UpdatePage(ctx context.Context, arg UpdatePageParams) (Page, error) {
@@ -298,6 +305,7 @@ func (q *Queries) UpdatePage(ctx context.Context, arg UpdatePageParams) (Page, e
 		arg.Slug,
 		arg.ContentHtml,
 		arg.ContentType,
+		arg.ContentMarkdown,
 		arg.RedirectUrl,
 		arg.PageOrder,
 		arg.Status,
@@ -320,6 +328,7 @@ func (q *Queries) UpdatePage(ctx context.Context, arg UpdatePageParams) (Page, e
 		&i.ScheduledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }

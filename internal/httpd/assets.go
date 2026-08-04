@@ -20,6 +20,8 @@ func RegisterAssetsRoutes(r chi.Router, s *Server) {
 	r.Get("/assets/app.css", serveEmbeddedAsset("app.css", "text/css; charset=utf-8"))
 	r.Get("/assets/lexxy.min.js", serveEmbeddedAsset("lexxy.min.js", "text/javascript; charset=utf-8"))
 	r.Get("/assets/lexxy.css", serveEmbeddedAsset("lexxy.css", "text/css; charset=utf-8"))
+	r.Get("/assets/easymde.min.js", serveEmbeddedAsset("easymde.min.js", "text/javascript; charset=utf-8"))
+	r.Get("/assets/easymde.min.css", serveEmbeddedAsset("easymde.min.css", "text/css; charset=utf-8"))
 }
 
 // serveEmbeddedAsset loads name from the embedded FS once and returns a

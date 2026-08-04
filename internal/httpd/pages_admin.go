@@ -149,11 +149,13 @@ func (s *Server) adminPagesIndex(w http.ResponseWriter, r *http.Request) {
 type adminPageFormData struct {
 	Flash            templates.Flash
 	Page             query.Page
+	PathSlug         string // persisted slug for the edit form actions; Page.Slug may hold an unsaved submitted value
 	Errors           []string // validation messages, shown like the Rails form-errors block
 	IsNew            bool
 	StatusName       string // "" for new records (the prompt stays selected)
 	RichContent      string // content_html shown in the rich_text textarea
 	HTMLContent      string // content_html shown in the html textarea
+	MarkdownContent  string // content_markdown source shown in the markdown textarea
 	ScheduledAtValue string // datetime-local value in the site time zone
 }
 
@@ -181,10 +183,13 @@ func (s *Server) adminPagesEdit(w http.ResponseWriter, r *http.Request) {
 	data := adminPageFormData{
 		Flash:      PopFlash(r, w),
 		Page:       page,
+		PathSlug:   page.Slug.String,
 		StatusName: pageStatusName(page.Status),
 	}
 	if page.ContentType == string(domain.ContentTypeHTML) {
 		data.HTMLContent = page.ContentHtml.String
+	} else if page.ContentType == string(domain.ContentTypeMarkdown) {
+		data.MarkdownContent = page.ContentMarkdown.String
 	} else {
 		data.RichContent = page.ContentHtml.String
 	}
@@ -209,17 +214,18 @@ func (s *Server) adminPagesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC().Unix()
 	page, err := s.Q.CreatePage(r.Context(), query.CreatePageParams{
-		Title:       input.Title,
-		Slug:        input.Slug,
-		ContentHtml: input.StoredContent,
-		ContentType: input.ContentType,
-		RedirectUrl: input.RedirectURL,
-		PageOrder:   input.PageOrder,
-		Status:      int64(input.Status),
-		Comment:     input.Comment,
-		ScheduledAt: input.ScheduledAt,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		Title:           input.Title,
+		Slug:            input.Slug,
+		ContentHtml:     input.StoredContent,
+		ContentType:     input.ContentType,
+		ContentMarkdown: input.MarkdownSource,
+		RedirectUrl:     input.RedirectURL,
+		PageOrder:       input.PageOrder,
+		Status:          int64(input.Status),
+		Comment:         input.Comment,
+		ScheduledAt:     input.ScheduledAt,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	})
 	if err != nil {
 		if isUniqueViolation(err) { // slug race lost between check and insert
@@ -262,27 +268,30 @@ func (s *Server) adminPagesUpdate(w http.ResponseWriter, r *http.Request) {
 		data := input.formData(false)
 		data.Errors = errs
 		data.Page.ID = page.ID
+		data.PathSlug = page.Slug.String
 		s.render(w, http.StatusUnprocessableEntity, "admin_pages_edit", data)
 		return
 	}
 	updated, err := s.Q.UpdatePage(r.Context(), query.UpdatePageParams{
-		Title:       input.Title,
-		Slug:        input.Slug,
-		ContentHtml: input.StoredContent,
-		ContentType: input.ContentType,
-		RedirectUrl: input.RedirectURL,
-		PageOrder:   input.PageOrder,
-		Status:      int64(input.Status),
-		Comment:     input.Comment,
-		ScheduledAt: input.ScheduledAt,
-		UpdatedAt:   time.Now().UTC().Unix(),
-		ID:          page.ID,
+		Title:           input.Title,
+		Slug:            input.Slug,
+		ContentHtml:     input.StoredContent,
+		ContentType:     input.ContentType,
+		ContentMarkdown: input.MarkdownSource,
+		RedirectUrl:     input.RedirectURL,
+		PageOrder:       input.PageOrder,
+		Status:          int64(input.Status),
+		Comment:         input.Comment,
+		ScheduledAt:     input.ScheduledAt,
+		UpdatedAt:       time.Now().UTC().Unix(),
+		ID:              page.ID,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
 			data := input.formData(false)
 			data.Errors = []string{"Slug has already been taken"}
 			data.Page.ID = page.ID
+			data.PathSlug = page.Slug.String
 			s.render(w, http.StatusUnprocessableEntity, "admin_pages_edit", data)
 			return
 		}
@@ -451,16 +460,17 @@ type publishPagePayload struct {
 
 // pageFormInput is the parsed + validated admin page form.
 type pageFormInput struct {
-	Title         sql.NullString
-	Slug          sql.NullString
-	ContentType   string
-	RawContent    string // as submitted (content or html_content param)
-	StoredContent sql.NullString
-	RedirectURL   sql.NullString
-	PageOrder     int64
-	Status        domain.Status
-	Comment       int64
-	ScheduledAt   sql.NullInt64
+	Title          sql.NullString
+	Slug           sql.NullString
+	ContentType    string
+	RawContent     string // as submitted (content, markdown_content or html_content param)
+	StoredContent  sql.NullString
+	MarkdownSource sql.NullString // markdown source; NULL for other content types
+	RedirectURL    sql.NullString
+	PageOrder      int64
+	Status         domain.Status
+	Comment        int64
+	ScheduledAt    sql.NullInt64
 }
 
 // formData rebuilds the re-rendered form (Rails render :new/:edit with the
@@ -482,6 +492,8 @@ func (in pageFormInput) formData(isNew bool) adminPageFormData {
 	}
 	if in.ContentType == string(domain.ContentTypeHTML) {
 		data.HTMLContent = in.RawContent
+	} else if in.ContentType == string(domain.ContentTypeMarkdown) {
+		data.MarkdownContent = in.RawContent
 	} else {
 		data.RichContent = in.RawContent
 	}
@@ -499,9 +511,12 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 	in.Title = sql.NullString{String: r.FormValue("title"), Valid: true}
 	in.Slug = sql.NullString{String: r.FormValue("slug"), Valid: true}
 	in.ContentType = r.FormValue("content_type")
-	if in.ContentType == string(domain.ContentTypeHTML) {
+	switch in.ContentType {
+	case string(domain.ContentTypeHTML):
 		in.RawContent = r.FormValue("html_content")
-	} else {
+	case string(domain.ContentTypeMarkdown):
+		in.RawContent = r.FormValue("markdown_content")
+	default:
 		in.RawContent = r.FormValue("content")
 	}
 	in.RedirectURL = sql.NullString{String: r.FormValue("redirect_url"), Valid: true}
@@ -525,7 +540,7 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 		errs = append(errs, "Redirect url is not a valid URL")
 	}
 	switch domain.ContentType(in.ContentType) {
-	case domain.ContentTypeRichText, domain.ContentTypeHTML:
+	case domain.ContentTypeRichText, domain.ContentTypeHTML, domain.ContentTypeMarkdown:
 	default:
 		errs = append(errs, "Content type is not included in the list")
 	}
@@ -551,19 +566,33 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 	if in.Status == domain.StatusSchedule && !in.ScheduledAt.Valid {
 		errs = append(errs, "Scheduled at can't be blank")
 	}
-	if in.ContentType == string(domain.ContentTypeHTML) {
+	switch in.ContentType {
+	case string(domain.ContentTypeHTML):
 		if domain.IsBlank(in.RawContent) {
 			errs = append(errs, "Html content can't be blank")
 		}
-	} else if domain.IsBlank(domain.PlainText(in.RawContent)) {
-		errs = append(errs, "Content can't be blank")
+	case string(domain.ContentTypeMarkdown):
+		if domain.IsBlank(in.RawContent) {
+			errs = append(errs, "Content can't be blank")
+		}
+	default:
+		if domain.IsBlank(domain.PlainText(in.RawContent)) {
+			errs = append(errs, "Content can't be blank")
+		}
 	}
 	if len(errs) > 0 {
 		return in, errs
 	}
-	// Sanitize once at write time (decision log 2026-08-03, spec 4.4).
+	// Markdown pages store the source in content_markdown and the rendered
+	// HTML in content_html, like articles (0002). Sanitize once at write time
+	// (decision log 2026-08-03, spec 4.4).
+	body := in.RawContent
+	if in.ContentType == string(domain.ContentTypeMarkdown) {
+		body = domain.RenderMarkdown(body)
+		in.MarkdownSource = sql.NullString{String: in.RawContent, Valid: !domain.IsBlank(in.RawContent)}
+	}
 	in.StoredContent = sql.NullString{
-		String: domain.AddLazyLoading(domain.SanitizeHTML(in.RawContent)),
+		String: domain.AddLazyLoading(domain.SanitizeHTML(body)),
 		Valid:  true,
 	}
 	return in, nil

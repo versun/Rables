@@ -50,10 +50,14 @@ func (s CommentStatus) String() string {
 	return ""
 }
 
-// ContentType mirrors the Rails content_type enum ('rich_text'|'html').
+// ContentType mirrors the Rails content_type enum ('rich_text'|'html'), plus
+// 'markdown' for articles authored in Markdown: the source is kept in
+// content_markdown and the rendered (sanitized) HTML in content_html, so
+// every content_html reader works unchanged.
 type ContentType string
 
 const (
 	ContentTypeRichText ContentType = "rich_text"
 	ContentTypeHTML     ContentType = "html"
+	ContentTypeMarkdown ContentType = "markdown"
 )

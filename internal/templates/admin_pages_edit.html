@@ -10,7 +10,7 @@
     </ul>
   </div>
   {{end}}
-  <form method="post" action="/admin/pages/{{.Page.Slug.String}}" data-controller="content-form" data-action="submit->content-form#submit">
+  <form method="post" action="/admin/pages/{{.PathSlug}}" data-controller="content-form" data-action="submit->content-form#submit">
     <div class="article-form-layout">
       <div class="article-form-content-column">
         <div class="form-section compact">
@@ -18,13 +18,18 @@
           <div class="field">
             <label for="content_type">Content type</label>
             <select id="content_type" name="content_type" required data-content-form-target="contentTypeSelect" data-action="change->content-form#toggleContentType">
-              <option value="rich_text" {{if ne .Page.ContentType "html"}}selected{{end}}>Rich Text</option>
+              <option value="rich_text" {{if eq .Page.ContentType "rich_text"}}selected{{end}}>Rich Text</option>
+              <option value="markdown" {{if eq .Page.ContentType "markdown"}}selected{{end}}>Markdown</option>
               <option value="html" {{if eq .Page.ContentType "html"}}selected{{end}}>HTML Code</option>
             </select>
           </div>
-          <div class="field" data-content-form-target="richTextField"{{if eq .Page.ContentType "html"}} style="display: none;"{{end}}>
+          <div class="field" data-content-form-target="richTextField"{{if ne .Page.ContentType "rich_text"}} style="display: none;"{{end}}>
             <label for="content">Rich text content</label>
             <textarea id="content" name="content" rows="15">{{.RichContent}}</textarea>
+          </div>
+          <div class="field" data-content-form-target="markdownContentField"{{if ne .Page.ContentType "markdown"}} style="display: none;"{{end}}>
+            <label for="markdown_content">Markdown content</label>
+            <textarea id="markdown_content" name="markdown_content" rows="15">{{.MarkdownContent}}</textarea>
           </div>
           <div class="field" data-content-form-target="htmlContentField"{{if ne .Page.ContentType "html"}} style="display: none;"{{end}}>
             <label for="html_content">HTML content</label>
@@ -86,7 +91,7 @@
       <a href="/admin/pages" class="btn btn-secondary">Cancel</a>
     </div>
   </form>
-  <form method="post" action="/admin/pages/{{.Page.Slug.String}}/destroy" onsubmit="return confirm('Are you sure?')">
+  <form method="post" action="/admin/pages/{{.PathSlug}}/destroy" onsubmit="return confirm('Are you sure?')">
     <button type="submit" class="btn btn-danger">Delete</button>
   </form>
 </div>

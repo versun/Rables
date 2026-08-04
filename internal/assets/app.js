@@ -274,10 +274,15 @@
   // --- content_form ---------------------------------------------------------
   // Mirrors content_form_controller.js (schedule toggle, editor-mode toggle,
   // non-blank validation). The Go form fields are flat-named (content /
-  // html_content), so lookups go through the targets instead of a model param.
+  // markdown_content / html_content), so lookups go through the targets
+  // instead of a model param.
   // Rich-text mode progressively upgrades the plain textarea to the vendored
   // <lexxy-editor> (same form-associated custom element Rails renders); if the
   // module fails to load the textarea stays and both modes still work.
+  // Markdown mode likewise upgrades its textarea to the vendored EasyMDE;
+  // forceSync keeps the textarea current so the plain form POST is unchanged.
+  // The pages form shares this controller but has no markdown target, so every
+  // markdown path is guarded by hasMarkdownContentFieldTarget.
 
   let lexxyLoading = null;
 
@@ -299,18 +304,40 @@
     return lexxyLoading;
   }
 
+  let easymdeLoading = null;
+
+  function ensureEasyMDECSS() {
+    if (document.querySelector('link[href="/assets/easymde.min.css"]')) return;
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "/assets/easymde.min.css";
+    document.head.appendChild(link);
+  }
+
+  function loadEasyMDE() {
+    if (window.EasyMDE) return Promise.resolve(true);
+    if (!easymdeLoading) {
+      easymdeLoading = import("/assets/easymde.min.js")
+        .then(() => window.EasyMDE != null)
+        .catch(() => false);
+    }
+    return easymdeLoading;
+  }
+
   class ContentFormController extends Controller {
     static targets = [
       "scheduledAt",
       "scheduledAtHint",
       "contentTypeSelect",
       "richTextField",
+      "markdownContentField",
       "htmlContentField",
     ];
 
     connect() {
       this.toggleContentType();
       this.upgradeRichText();
+      this.upgradeMarkdown();
     }
 
     toggleScheduledAt(event) {
@@ -322,13 +349,17 @@
     }
 
     toggleContentType() {
-      const isHtml = this.contentTypeSelectTarget.value === "html";
-      this.richTextFieldTarget.style.display = isHtml ? "none" : "block";
-      this.htmlContentFieldTarget.style.display = isHtml ? "block" : "none";
+      const mode = this.contentTypeSelectTarget.value;
+      this.richTextFieldTarget.style.display = mode === "rich_text" ? "block" : "none";
+      this.htmlContentFieldTarget.style.display = mode === "html" ? "block" : "none";
+      if (this.hasMarkdownContentFieldTarget) {
+        this.markdownContentFieldTarget.style.display = mode === "markdown" ? "block" : "none";
+        if (mode === "markdown") this.upgradeMarkdown();
+      }
 
       const htmlTextArea = this.htmlContentFieldTarget.querySelector("textarea");
       if (htmlTextArea) {
-        if (isHtml) {
+        if (mode === "html") {
           htmlTextArea.setAttribute("required", "required");
         } else {
           htmlTextArea.removeAttribute("required");
@@ -351,6 +382,21 @@
       });
     }
 
+    upgradeMarkdown() {
+      if (!this.hasMarkdownContentFieldTarget || this.easymde) return;
+      const textarea = this.markdownContentFieldTarget.querySelector("textarea");
+      if (!textarea) return;
+      loadEasyMDE().then((ok) => {
+        if (!ok || this.easymde || !textarea.isConnected) return;
+        ensureEasyMDECSS();
+        this.easymde = new window.EasyMDE({
+          element: textarea,
+          forceSync: true, // keep the textarea current for the plain form POST
+          spellChecker: false,
+        });
+      });
+    }
+
     // Lexxy empty content is markup like "<p><br></p>": strip tags and &nbsp;
     richTextContentBlank(content) {
       const text = (content || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").trim();
@@ -358,9 +404,19 @@
     }
 
     submit(event) {
-      const isHtml = this.contentTypeSelectTarget.value === "html";
+      const mode = this.contentTypeSelectTarget.value;
 
-      if (!isHtml) {
+      if (mode === "markdown") {
+        const textarea = this.hasMarkdownContentFieldTarget
+          ? this.markdownContentFieldTarget.querySelector("textarea")
+          : null;
+        const content = this.easymde ? this.easymde.value() : textarea ? textarea.value : "";
+        if (!content.trim()) {
+          event.preventDefault();
+          alert("Content cannot be blank");
+          return false;
+        }
+      } else if (mode !== "html") {
         const editor = this.richTextFieldTarget.querySelector('lexxy-editor, textarea');
         const content = editor ? (editor.value ?? editor.getAttribute("value") ?? "") : "";
         if (this.richTextContentBlank(content)) {

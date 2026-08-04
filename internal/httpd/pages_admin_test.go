@@ -273,7 +273,7 @@ func TestAdminPagesValidation(t *testing.T) {
 		{"taken slug", func(f url.Values) { f.Set("slug", "taken") }, "Slug has already been taken"},
 		{"bad redirect", func(f url.Values) { f.Set("redirect_url", "notaurl") }, "Redirect url is not a valid URL"},
 		{"ftp redirect", func(f url.Values) { f.Set("redirect_url", "ftp://example.com/x") }, "Redirect url is not a valid URL"},
-		{"bad content type", func(f url.Values) { f.Set("content_type", "markdown") }, "Content type is not included in the list"},
+		{"bad content type", func(f url.Values) { f.Set("content_type", "textile") }, "Content type is not included in the list"},
 		{"bad status", func(f url.Values) { f.Set("status", "archived") }, "Status is not included in the list"},
 		{"schedule without time", func(f url.Values) { f.Set("status", "schedule") }, "Scheduled at can&#39;t be blank"},
 		{"schedule with bad time", func(f url.Values) {
@@ -285,6 +285,10 @@ func TestAdminPagesValidation(t *testing.T) {
 			f.Set("html_content", "  ")
 		}, "Html content can&#39;t be blank"},
 		{"rich text without content", func(f url.Values) { f.Set("content", "<p>  </p>") }, "Content can&#39;t be blank"},
+		{"markdown without content", func(f url.Values) {
+			f.Set("content_type", "markdown")
+			f.Set("markdown_content", "  ")
+		}, "Content can&#39;t be blank"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -545,5 +549,69 @@ func TestAdminPagesHTMLMode(t *testing.T) {
 	rec := doRequest(t, h, http.MethodGet, "/admin/pages/raw/edit", nil, session)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `option value="html" selected`) {
 		t.Fatalf("edit form for html page: status = %d", rec.Code)
+	}
+}
+
+// TestAdminPagesMarkdown covers markdown-authored pages: the source lands in
+// content_markdown, content_html gets the rendered sanitized HTML, the edit
+// form shows the source again, and switching types clears the source.
+func TestAdminPagesMarkdown(t *testing.T) {
+	s, h := newPagesTestServer(t)
+	session := pagesSessionCookie(t, s)
+	ctx := t.Context()
+
+	source := "# About\n\nSome **bold** text.\n\n<script>alert(1)</script>\n"
+	form := validPageForm()
+	form.Set("slug", "about-md")
+	form.Set("content_type", "markdown")
+	form.Set("content", "<p>ignored rich text</p>")
+	form.Set("markdown_content", source)
+	page := createPageViaForm(t, h, s, session, form)
+	if page.ContentType != string(domain.ContentTypeMarkdown) {
+		t.Fatalf("content_type = %q, want markdown", page.ContentType)
+	}
+	if page.ContentMarkdown.String != source {
+		t.Errorf("content_markdown = %q, want the submitted source", page.ContentMarkdown.String)
+	}
+	stored := page.ContentHtml.String
+	if !strings.Contains(stored, "<h1>About</h1>") || !strings.Contains(stored, "<strong>bold</strong>") {
+		t.Errorf("stored content_html is not rendered markdown: %s", stored)
+	}
+	if strings.Contains(stored, "script") {
+		t.Errorf("stored content_html kept the script: %s", stored)
+	}
+
+	// The edit form selects markdown and shows the source in its textarea.
+	rec := doRequest(t, h, http.MethodGet, "/admin/pages/about-md/edit", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("edit form: status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `option value="markdown" selected`) {
+		t.Errorf("edit form does not select markdown")
+	}
+	if !strings.Contains(body, `name="markdown_content"`) ||
+		!strings.Contains(body, "# About") || !strings.Contains(body, "**bold**") {
+		t.Errorf("edit form does not show the markdown source")
+	}
+
+	// Switching back to rich_text clears the stored markdown source.
+	form = validPageForm()
+	form.Set("slug", "about-md")
+	form.Set("content", "<p>Back to rich</p>")
+	rec = doRequest(t, h, http.MethodPost, "/admin/pages/about-md", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("switch to rich_text: status = %d", rec.Code)
+	}
+	page, err := s.Q.GetAdminPageBySlug(ctx, sql.NullString{String: "about-md", Valid: true})
+	if err != nil {
+		t.Fatalf("page after switch: %v", err)
+	}
+	if page.ContentType != string(domain.ContentTypeRichText) || page.ContentMarkdown.Valid {
+		t.Errorf("after switch: content_type = %q content_markdown = %+v, want rich_text/NULL",
+			page.ContentType, page.ContentMarkdown)
+	}
+	if !strings.Contains(page.ContentHtml.String, "Back to rich") {
+		t.Errorf("content_html after switch = %q", page.ContentHtml.String)
 	}
 }

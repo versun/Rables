@@ -10,7 +10,7 @@ import (
 )
 
 const getArticleByID = `-- name: GetArticleByID :one
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at FROM articles WHERE id = ?
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles WHERE id = ?
 `
 
 func (q *Queries) GetArticleByID(ctx context.Context, id int64) (Article, error) {
@@ -37,6 +37,7 @@ func (q *Queries) GetArticleByID(ctx context.Context, id int64) (Article, error)
 		&i.ScheduledSendNewsletter,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContentMarkdown,
 	)
 	return i, err
 }

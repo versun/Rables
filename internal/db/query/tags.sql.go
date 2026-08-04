@@ -121,7 +121,9 @@ func (q *Queries) GetTagByLowerName(ctx context.Context, lower string) (Tag, err
 }
 
 const insertTagIfAbsent = `-- name: InsertTagIfAbsent :exec
-INSERT INTO tags (name, slug, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING
+INSERT INTO tags (name, slug, created_at, updated_at)
+SELECT ?, ?, ?, ?
+WHERE NOT EXISTS (SELECT 1 FROM tags WHERE LOWER(name) = LOWER(?5))
 `
 
 type InsertTagIfAbsentParams struct {
@@ -129,16 +131,21 @@ type InsertTagIfAbsentParams struct {
 	Slug      string
 	CreatedAt int64
 	UpdatedAt int64
+	LowerName string
 }
 
-// Race-safe insert for find-or-create: a name race is absorbed here and the
-// row is re-read afterwards, mirroring the RecordNotUnique rescue.
+// Race-safe insert for find-or-create: the name check and the insert are one
+// atomic statement (SQLite serializes writers), so even case-variant names
+// ("Go" vs "go", which the case-sensitive UNIQUE(name) would both admit)
+// cannot duplicate; the row is re-read afterwards, mirroring the
+// RecordNotUnique rescue. A slug conflict still errors so the caller loops.
 func (q *Queries) InsertTagIfAbsent(ctx context.Context, arg InsertTagIfAbsentParams) error {
 	_, err := q.db.ExecContext(ctx, insertTagIfAbsent,
 		arg.Name,
 		arg.Slug,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.LowerName,
 	)
 	return err
 }
