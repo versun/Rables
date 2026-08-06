@@ -47,27 +47,34 @@ func newMigratesImportTestServer(t *testing.T) (*Server, http.Handler) {
 	return s, r
 }
 
-// postZipUpload sends a multipart form with a single file field.
-func postZipUpload(t *testing.T, h http.Handler, fieldName, filename, contentType string, content []byte, session *http.Cookie) *httptest.ResponseRecorder {
+// importUpload is one file field of a multipart form.
+type importUpload struct {
+	filename    string
+	contentType string
+	content     []byte
+}
+
+// postUpload sends a multipart form with the given file fields to path.
+func postUpload(t *testing.T, h http.Handler, path string, fields map[string]importUpload, session *http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
-	if content != nil {
+	for name, f := range fields {
 		hdr := textproto.MIMEHeader{}
-		hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldName, filename))
-		hdr.Set("Content-Type", contentType)
+		hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, name, f.filename))
+		hdr.Set("Content-Type", f.contentType)
 		part, err := mw.CreatePart(hdr)
 		if err != nil {
 			t.Fatalf("create part: %v", err)
 		}
-		if _, err := part.Write(content); err != nil {
+		if _, err := part.Write(f.content); err != nil {
 			t.Fatalf("write part: %v", err)
 		}
 	}
 	if err := mw.Close(); err != nil {
 		t.Fatalf("close multipart: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/admin/migrates/import", &buf)
+	req := httptest.NewRequest(http.MethodPost, path, &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.AddCookie(session)
 	rec := httptest.NewRecorder()
@@ -83,9 +90,16 @@ func latestJob(t *testing.T, s *Server) (string, sql.NullString, error) {
 	return kind, payload, err
 }
 
+func clearJobs(t *testing.T, s *Server) {
+	t.Helper()
+	if _, err := s.DB.Exec(`DELETE FROM job_runs`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdminMigratesImportAuth(t *testing.T) {
 	_, h := newMigratesImportTestServer(t)
-	for _, path := range []string{"/admin/migrates/import", "/admin/migrates/import_rss"} {
+	for _, path := range []string{"/admin/migrates/import", "/admin/migrates/import_rails", "/admin/migrates/import_rss"} {
 		rec := doRequest(t, h, http.MethodPost, path, nil)
 		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/session/new" {
 			t.Errorf("POST %s unauthenticated: status = %d location = %q, want 302 /session/new",
@@ -101,7 +115,7 @@ func TestAdminMigratesImportFormActions(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	for _, want := range []string{`action="/admin/migrates/import"`, `action="/admin/migrates/import_rss"`} {
+	for _, want := range []string{`action="/admin/migrates/import"`, `action="/admin/migrates/import_rails"`, `action="/admin/migrates/import_rss"`} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("import tab missing %q", want)
 		}
@@ -124,9 +138,7 @@ func TestAdminMigratesImportRSS(t *testing.T) {
 		{"missing url", url.Values{}, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := s.DB.Exec(`DELETE FROM job_runs`); err != nil {
-				t.Fatal(err)
-			}
+			clearJobs(t, s)
 			rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_rss", tt.form, session)
 			if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
 				t.Fatalf("status = %d location = %q, want 302 /admin/migrates?tab=import", rec.Code, rec.Header().Get("Location"))
@@ -155,13 +167,16 @@ func TestAdminMigratesImportRSS(t *testing.T) {
 	}
 }
 
-func TestAdminMigratesImportZip(t *testing.T) {
+func TestAdminMigratesImportDB(t *testing.T) {
 	s, h := newMigratesImportTestServer(t)
 	session := redirectsSessionCookie(t, s)
 	zipBytes := []byte("PK\x03\x04fake-zip")
 
 	t.Run("valid zip enqueued", func(t *testing.T) {
-		rec := postZipUpload(t, h, "zip_file", "backup.zip", "application/zip", zipBytes, session)
+		clearJobs(t, s)
+		rec := postUpload(t, h, "/admin/migrates/import", map[string]importUpload{
+			"backup_file": {"backup.zip", "application/zip", zipBytes},
+		}, session)
 		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
 			t.Fatalf("status = %d location = %q, want 302 tab=import", rec.Code, rec.Header().Get("Location"))
 		}
@@ -169,10 +184,10 @@ func TestAdminMigratesImportZip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected queued job: %v", err)
 		}
-		if kind != "import_zip" {
-			t.Errorf("kind = %q, want import_zip", kind)
+		if kind != "import_db" {
+			t.Errorf("kind = %q, want import_db", kind)
 		}
-		var p transfer.ImportZipPayload
+		var p transfer.ImportDBPayload
 		if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
 			t.Fatalf("payload not JSON: %v", err)
 		}
@@ -191,11 +206,35 @@ func TestAdminMigratesImportZip(t *testing.T) {
 		}
 	})
 
-	t.Run("zip extension accepted with octet-stream type", func(t *testing.T) {
-		if _, err := s.DB.Exec(`DELETE FROM job_runs`); err != nil {
-			t.Fatal(err)
+	t.Run("bare database accepted", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postUpload(t, h, "/admin/migrates/import", map[string]importUpload{
+			"backup_file": {"rables.sqlite3", "application/octet-stream", []byte("sqlite")},
+		}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
 		}
-		rec := postZipUpload(t, h, "zip_file", "backup.zip", "application/octet-stream", zipBytes, session)
+		kind, payload, err := latestJob(t, s)
+		if err != nil {
+			t.Fatalf("expected queued job: %v", err)
+		}
+		if kind != "import_db" {
+			t.Errorf("kind = %q, want import_db", kind)
+		}
+		var p transfer.ImportDBPayload
+		if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
+			t.Fatalf("payload not JSON: %v", err)
+		}
+		if !strings.HasSuffix(p.Path, ".sqlite3") {
+			t.Errorf("stored path = %q, want .sqlite3 suffix", p.Path)
+		}
+	})
+
+	t.Run("uppercase .ZIP extension accepted", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postUpload(t, h, "/admin/migrates/import", map[string]importUpload{
+			"backup_file": {"backup.ZIP", "application/x-zip-compressed", zipBytes},
+		}, session)
 		if rec.Code != http.StatusFound {
 			t.Fatalf("status = %d, want 302", rec.Code)
 		}
@@ -204,13 +243,13 @@ func TestAdminMigratesImportZip(t *testing.T) {
 		}
 	})
 
-	t.Run("non-zip rejected", func(t *testing.T) {
-		if _, err := s.DB.Exec(`DELETE FROM job_runs`); err != nil {
-			t.Fatal(err)
-		}
+	t.Run("wrong type rejected", func(t *testing.T) {
+		clearJobs(t, s)
 		importsDir := filepath.Join(s.Cfg.DataDir, "imports")
 		before, _ := os.ReadDir(importsDir)
-		rec := postZipUpload(t, h, "zip_file", "notes.txt", "text/plain", []byte("hello"), session)
+		rec := postUpload(t, h, "/admin/migrates/import", map[string]importUpload{
+			"backup_file": {"notes.txt", "text/plain", []byte("hello")},
+		}, session)
 		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
 			t.Fatalf("status = %d, want 302 tab=import", rec.Code)
 		}
@@ -225,10 +264,120 @@ func TestAdminMigratesImportZip(t *testing.T) {
 	})
 
 	t.Run("missing file field", func(t *testing.T) {
-		if _, err := s.DB.Exec(`DELETE FROM job_runs`); err != nil {
-			t.Fatal(err)
+		clearJobs(t, s)
+		rec := postUpload(t, h, "/admin/migrates/import", map[string]importUpload{}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
 		}
-		rec := postZipUpload(t, h, "zip_file", "", "", nil, session)
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
+		}
+	})
+}
+
+func TestAdminMigratesImportRails(t *testing.T) {
+	s, h := newMigratesImportTestServer(t)
+	session := redirectsSessionCookie(t, s)
+	dbBytes := []byte("fake-sqlite")
+	zipBytes := []byte("PK\x03\x04fake-zip")
+
+	t.Run("database only enqueued", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
+			"db_file": {"production.sqlite3", "application/octet-stream", dbBytes},
+		}, session)
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
+			t.Fatalf("status = %d location = %q, want 302 tab=import", rec.Code, rec.Header().Get("Location"))
+		}
+		kind, payload, err := latestJob(t, s)
+		if err != nil {
+			t.Fatalf("expected queued job: %v", err)
+		}
+		if kind != "import_rails" {
+			t.Errorf("kind = %q, want import_rails", kind)
+		}
+		var p transfer.ImportRailsPayload
+		if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
+			t.Fatalf("payload not JSON: %v", err)
+		}
+		if !strings.HasSuffix(p.DBPath, ".sqlite3") || p.StoragePath != "" {
+			t.Errorf("payload = %+v, want DBPath *.sqlite3 and empty StoragePath", p)
+		}
+		stored, err := os.ReadFile(p.DBPath)
+		if err != nil {
+			t.Fatalf("stored upload: %v", err)
+		}
+		if !bytes.Equal(stored, dbBytes) {
+			t.Errorf("stored content = %q, want the uploaded bytes", stored)
+		}
+	})
+
+	t.Run("database and storage enqueued", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
+			"db_file":      {"production.sqlite3", "application/octet-stream", dbBytes},
+			"storage_file": {"storage.zip", "application/zip", zipBytes},
+		}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		kind, payload, err := latestJob(t, s)
+		if err != nil {
+			t.Fatalf("expected queued job: %v", err)
+		}
+		if kind != "import_rails" {
+			t.Errorf("kind = %q, want import_rails", kind)
+		}
+		var p transfer.ImportRailsPayload
+		if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
+			t.Fatalf("payload not JSON: %v", err)
+		}
+		if !strings.HasSuffix(p.StoragePath, ".zip") {
+			t.Errorf("StoragePath = %q, want data/imports/import_*.zip", p.StoragePath)
+		}
+		if _, err := os.Stat(p.StoragePath); err != nil {
+			t.Errorf("stored storage upload: %v", err)
+		}
+	})
+
+	t.Run("wrong database type rejected", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
+			"db_file": {"dump.sql", "text/plain", []byte("sql")},
+		}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
+		}
+	})
+
+	t.Run("wrong storage type rejected and db file cleaned up", func(t *testing.T) {
+		clearJobs(t, s)
+		importsDir := filepath.Join(s.Cfg.DataDir, "imports")
+		before, _ := os.ReadDir(importsDir)
+		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
+			"db_file":      {"production.sqlite3", "application/octet-stream", dbBytes},
+			"storage_file": {"storage.tar", "application/x-tar", []byte("tar")},
+		}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
+		}
+		after, _ := os.ReadDir(importsDir)
+		if len(after) != len(before) {
+			t.Errorf("rejected upload left files behind: before %d, after %d", len(before), len(after))
+		}
+	})
+
+	t.Run("missing database field", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
+			"storage_file": {"storage.zip", "application/zip", zipBytes},
+		}, session)
 		if rec.Code != http.StatusFound {
 			t.Fatalf("status = %d, want 302", rec.Code)
 		}

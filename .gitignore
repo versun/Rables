@@ -7,6 +7,13 @@ data/
 
 # Archives
 *.zip
+*.tar
+
+# Local Rails migration test dumps (production data, never commit)
+/tmp_rails_db/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 
 # macOS
 .DS_Store

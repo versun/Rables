@@ -11,16 +11,11 @@ import (
 
 	"rables/internal/jobs"
 	"rables/internal/service/activity"
-	"rables/internal/service/transfer"
 	"rables/internal/templates"
 )
 
-// Flash texts of Admin::MigratesController#handle_export.
-const (
-	migratesExportNotice         = "Export Initiated"
-	migratesMarkdownExportNotice = "Markdown Export Initiated"
-	migratesBadExportTypeAlert   = "Unsupported export type"
-)
+// Flash text of the export submission (Admin::MigratesController#handle_export).
+const migratesExportNotice = "Export Initiated"
 
 // RegisterMigratesAdminRoutes mounts the export/import page, mirroring
 // Rails' namespace :admin resources :migrates (index/create). Import
@@ -66,45 +61,23 @@ func (s *Server) adminMigratesIndex(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// adminMigratesExport handles POST /admin/migrates/export, mirroring
-// handle_export: it enqueues the export job and flashes the same notices.
+// adminMigratesExport handles POST /admin/migrates/export: it enqueues the
+// export job, which packs a copy of the SQLite database plus all media blobs
+// into a downloadable zip under data/exports.
 func (s *Server) adminMigratesExport(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	fail := func(alert string) {
 		SetFlash(w, templates.Flash{Alert: alert})
 		http.Redirect(w, r, "/admin/migrates?tab=export", http.StatusFound)
 	}
-	if err := r.ParseForm(); err != nil {
-		fail(migratesBadExportTypeAlert)
-		return
-	}
-
-	exportType := r.PostFormValue("export_type")
-	if exportType == "" {
-		exportType = "default"
-	}
-	notice := migratesExportNotice
-	switch exportType {
-	case "default":
-	case "markdown":
-		notice = migratesMarkdownExportNotice
-	default:
-		fail(migratesBadExportTypeAlert)
-		return
-	}
-
-	payload := transfer.ExportPayload{
-		Format:          exportType,
-		KeepCredentials: r.PostFormValue("keep_credentials") == "1",
-	}
-	if _, err := s.Enqueuer().Enqueue(ctx, jobs.KindExport, payload, time.Now()); err != nil {
+	if _, err := s.Enqueuer().Enqueue(ctx, jobs.KindExport, nil, time.Now()); err != nil {
 		s.Log.Error("enqueue export", "error", err)
 		fail("Export failed: " + err.Error())
 		return
 	}
-	activity.Log(ctx, s.DB, "info", "queued", "export", "format="+exportType)
+	activity.Log(ctx, s.DB, "info", "queued", "export", "")
 
-	SetFlash(w, templates.Flash{Notice: notice})
+	SetFlash(w, templates.Flash{Notice: migratesExportNotice})
 	http.Redirect(w, r, "/admin/migrates?tab=export", http.StatusFound)
 }
 

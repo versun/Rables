@@ -2,12 +2,10 @@ package httpd
 
 import (
 	"database/sql"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +15,6 @@ import (
 
 	"rables/internal/config"
 	"rables/internal/db"
-	"rables/internal/service/transfer"
 	"rables/internal/templates"
 )
 
@@ -98,63 +95,31 @@ func TestAdminMigratesExport(t *testing.T) {
 	s, h := newMigratesTestServer(t)
 	session := redirectsSessionCookie(t, s)
 
-	for _, tt := range []struct {
-		name            string
-		form            url.Values
-		wantLocation    string
-		wantFormat      string
-		wantKeepSecrets bool
-		wantJob         bool
-	}{
-		{"default", url.Values{"export_type": {"default"}}, "/admin/migrates?tab=export", "default", false, true},
-		{"markdown with credentials", url.Values{"export_type": {"markdown"}, "keep_credentials": {"1"}}, "/admin/migrates?tab=export", "markdown", true, true},
-		{"unsupported type", url.Values{"export_type": {"xml"}}, "/admin/migrates?tab=export", "", false, false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := s.DB.Exec(`DELETE FROM job_runs`); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := s.DB.Exec(`DELETE FROM activity_logs`); err != nil {
-				t.Fatal(err)
-			}
-			rec := doRequest(t, h, http.MethodPost, "/admin/migrates/export", tt.form, session)
-			if rec.Code != http.StatusFound || rec.Header().Get("Location") != tt.wantLocation {
-				t.Fatalf("status = %d location = %q, want 302 %q", rec.Code, rec.Header().Get("Location"), tt.wantLocation)
-			}
+	rec := doRequest(t, h, http.MethodPost, "/admin/migrates/export", nil, session)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=export" {
+		t.Fatalf("status = %d location = %q, want 302 /admin/migrates?tab=export", rec.Code, rec.Header().Get("Location"))
+	}
 
-			var payload sql.NullString
-			var kind string
-			row := s.DB.QueryRow(`SELECT kind, payload FROM job_runs ORDER BY id DESC LIMIT 1`)
-			scanErr := row.Scan(&kind, &payload)
-			if !tt.wantJob {
-				if scanErr == nil {
-					t.Errorf("no job expected, got kind %s", kind)
-				}
-				return
-			}
-			if scanErr != nil {
-				t.Fatalf("expected queued job: %v", scanErr)
-			}
-			if kind != "export" {
-				t.Errorf("kind = %q, want export", kind)
-			}
-			var p transfer.ExportPayload
-			if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
-				t.Fatalf("payload not JSON: %v", err)
-			}
-			if p.Format != tt.wantFormat || p.KeepCredentials != tt.wantKeepSecrets {
-				t.Errorf("payload = %+v, want format=%s keep=%v", p, tt.wantFormat, tt.wantKeepSecrets)
-			}
+	var payload sql.NullString
+	var kind string
+	row := s.DB.QueryRow(`SELECT kind, payload FROM job_runs ORDER BY id DESC LIMIT 1`)
+	if err := row.Scan(&kind, &payload); err != nil {
+		t.Fatalf("expected queued job: %v", err)
+	}
+	if kind != "export" {
+		t.Errorf("kind = %q, want export", kind)
+	}
+	if payload.Valid {
+		t.Errorf("payload = %q, want NULL (no options)", payload.String)
+	}
 
-			// Queued activity mirrors handle_export's ActivityLog.log!.
-			var count int
-			if err := s.DB.QueryRow(`SELECT COUNT(*) FROM activity_logs WHERE target = 'export' AND action = 'queued'`).Scan(&count); err != nil {
-				t.Fatal(err)
-			}
-			if count != 1 {
-				t.Errorf("queued activity rows = %d, want 1", count)
-			}
-		})
+	// Queued activity mirrors the old handle_export's ActivityLog.log!.
+	var count int
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM activity_logs WHERE target = 'export' AND action = 'queued'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("queued activity rows = %d, want 1", count)
 	}
 }
 

@@ -17,7 +17,7 @@ All implementation tasks (T01–T29) are complete: core blog, admin, comments, s
 - **Newsletter**: native SMTP or listmonk, tag-scoped subscriptions, double opt-in confirm/unsubscribe
 - **Crossposting**: Mastodon, Bluesky (hand-written XRPC + facets), X (OAuth1.0a, chunked media upload, quote-tweet/GIF rules); Xiaohongshu is log-only
 - **Twitter**: account sync (tweets archived as articles) + official archive ZIP import (streaming, memory-flat) with a public timeline page
-- **Transfer**: full-site ZIP export/import (CSV manifests, credential redaction), Markdown export, RSS import (SSRF-hardened)
+- **Transfer**: full-site export (SQLite database + media files in one ZIP), import from a Rables export or bare database (upsert by id — a restore mechanism for fresh installs or the originating site, not a merge of two populated sites; users, including your own account, are overwritten), import from a Rails rables SQLite database (+ optional storage ZIP), RSS import (SSRF-hardened)
 - **Ops**: background jobs (`job_runs` table + in-process worker), cron scheduler, activity log, regex redirects, static file hosting
 
 ## Quick start
@@ -77,6 +77,8 @@ go build -o migrate-rails ./cmd/migrate-rails
 ```
 
 The tool is idempotent (safe to re-run to catch up before cutover), migrates all content and rewrites ActionText attachments to `/files/<key>` URLs, and prints a per-table report (old/inserted/skipped counts). It exits non-zero if row counts mismatch. Disk files are **not** copied — mount the Rails `storage/` directory as `DATA_DIR/files/` (the `xx/yy/<key>` layout is identical). Sessions are not migrated; everyone logs in again after cutover.
+
+The same migration also runs from the admin UI (/admin/migrates, Import tab): upload the Rails SQLite database plus an optional ZIP of the `storage/` directory.
 
 ## Layout
 
