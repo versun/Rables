@@ -88,8 +88,6 @@ Rails.application.routes.draw do
     end
     resources :migrates, only: [ :index, :create ]
 
-    # 导出文件下载
-    get "downloads/:filename", to: "downloads#show", as: :download, constraints: { filename: /[^\/]+/ }
     resources :crossposts, only: [ :index, :update ] do
       member do
         post :verify

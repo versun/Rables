@@ -32,18 +32,7 @@
             <td class="col-description">
               <div class="description-content">
                 <% description_text = log.description.to_s %>
-                <% if description_text.include?('/tmp/exports/') %>
-                  <% match = description_text.match(/(?:^|\s)(?:file|path|url)=("[^"]+"|\S+)/) %>
-                  <% raw_path = match ? match[1] : nil %>
-                  <% raw_path = raw_path&.delete_prefix('"')&.delete_suffix('"') %>
-                  <% filename = raw_path.present? ? File.basename(raw_path) : description_text.split('/').last&.delete_suffix('"') %>
-                  <span class="truncate" title="<%= description_text.squish %>"><%= description_text %></span>
-                  <% if filename.present? %>
-                    <%= link_to "Download", admin_download_path(filename), class: "btn btn-small", download: filename %>
-                  <% end %>
-                <% else %>
-                  <span class="truncate" title="<%= description_text.squish %>"><%= description_text %></span>
-                <% end %>
+                <span class="truncate" title="<%= description_text.squish %>"><%= description_text %></span>
               </div>
             </td>
           </tr>

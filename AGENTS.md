@@ -91,7 +91,7 @@ All admin routes under `/admin/` namespace. Key controllers handle:
 - Comment moderation (approve/reject)
 - Settings, newsletter config, crosspost config
 - Static file management, redirects
-- Import/Export (WordPress, RSS, ZIP)
+- Backup/Restore (full SQLite + uploads ZIP via `SiteBackup`) and RSS import
 
 ### Key Models
 - `Setting`: Site-wide configuration (singleton pattern via `first_or_create`)

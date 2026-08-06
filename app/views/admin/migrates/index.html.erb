@@ -7,31 +7,19 @@
       <%= link_to "Import", admin_migrates_path(tab: "import"), class: "status-tab #{@active_tab == 'import' ? 'active' : ''}" %>
     </div>
   </div>
-  
+
   <% if @active_tab == "export" %>
   <div class="form-section compact">
     <h3>Export Data</h3>
-    
-    <div class="form-grid form-grid-2">
-      <div>
-        <h4>CSV Format Export</h4>
-        <p>Export data in CSV format, including all articles, pages, settings, etc.</p>
-        <%= form_with url: admin_migrates_path, method: :post, data: { turbo: false } do |f| %>
-          <%= hidden_field_tag :operation_type, 'export' %>
-          <%= hidden_field_tag :export_type, 'default' %>
-          <%= f.submit "Export Default Format", class: "btn btn-primary" %>
-        <% end %>
-      </div>
-      
-      <div>
-        <h4>Markdown Export</h4>
-        <p>Export articles and pages in Markdown format (YAML front matter + body), including local attachments.</p>
-        <%= form_with url: admin_migrates_path, method: :post, data: { turbo: false } do |f| %>
-          <%= hidden_field_tag :operation_type, 'export' %>
-          <%= hidden_field_tag :export_type, 'markdown' %>
-          <%= f.submit "Export Markdown Format", class: "btn btn-primary" %>
-        <% end %>
-      </div>
+
+    <div>
+      <h4>Full Backup</h4>
+      <p>Download a ZIP archive containing a snapshot of the SQLite database and all uploaded files.</p>
+      <p><small>The backup is generated during the request; on large sites this can take a while, so don't close the page until the download starts.</small></p>
+      <%= form_with url: admin_migrates_path, method: :post, data: { turbo: false } do |f| %>
+        <%= hidden_field_tag :operation_type, 'export' %>
+        <%= f.submit "Download Backup", class: "btn btn-primary" %>
+      <% end %>
     </div>
   </div>
   <% end %>
@@ -39,41 +27,42 @@
   <% if @active_tab == "import" %>
   <div class="form-section compact">
     <h3>Import Data</h3>
-    
+
     <div class="form-grid form-grid-2">
       <div>
         <h4>Import from RSS</h4>
         <p>Import articles from an RSS feed URL</p>
         <%= form_with url: admin_migrates_path, method: :post, data: { turbo: false }, multipart: true do |f| %>
           <%= hidden_field_tag :operation_type, 'import' %>
-          
+
           <div class="field">
             <%= label_tag :url, "RSS URL" %>
             <%= text_field_tag :url, nil, placeholder: "https://example.com/feed.xml" %>
           </div>
-          
+
           <div class="field checkbox">
             <%= check_box_tag :import_images, '1', false %>
             <%= label_tag :import_images, "Import Images" %>
           </div>
-          
+
           <%= f.submit "Import From RSS", class: "btn btn-primary" %>
         <% end %>
       </div>
-      
+
       <div>
-        <h4>Import from ZIP File</h4>
-        <p>Upload a ZIP file containing exported data</p>
+        <h4>Restore from Backup</h4>
+        <p>Upload a backup ZIP file created by the export.</p>
         <%= form_with url: admin_migrates_path, method: :post, data: { turbo: false }, multipart: true do |f| %>
           <%= hidden_field_tag :operation_type, 'import' %>
-          
+
           <div class="field">
-            <%= label_tag :zip_file, "ZIP File" %>
-            <%= file_field_tag :zip_file, accept: ".zip" %>
-            <small>Upload a ZIP file containing exported data (CSV files and attachments)</small>
+            <%= label_tag :backup_file, "Backup File" %>
+            <%= file_field_tag :backup_file, accept: ".zip" %>
+            <small>Warning: restoring replaces the entire current database and all uploaded files.</small>
+            <small>The restore runs during the request and can take a while on large sites; don't close the page or restart the server until it finishes.</small>
           </div>
-          
-          <%= f.submit "Import From ZIP", class: "btn btn-primary" %>
+
+          <%= f.submit "Restore Backup", class: "btn btn-primary" %>
         <% end %>
       </div>
     </div>

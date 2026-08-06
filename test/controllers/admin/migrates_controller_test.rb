@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "minitest/mock"
 
 class Admin::MigratesControllerTest < ActionDispatch::IntegrationTest
   def setup
@@ -36,30 +37,81 @@ class Admin::MigratesControllerTest < ActionDispatch::IntegrationTest
 
   test "should handle export operation" do
     sign_in(@user)
+    zip_path = create_temp_zip_file
 
-    assert_enqueued_with(job: ExportDataJob, args: [ "default" ]) do
-      post admin_migrates_path, params: { operation_type: "export", export_type: "default" }
+    SiteBackup.stub(:export, Pathname.new(zip_path)) do
+      post admin_migrates_path, params: { operation_type: "export" }
     end
 
-    assert_redirected_to admin_migrates_path(tab: "export")
-    assert_match "Export Initiated", flash[:notice]
+    assert_response :success
+    assert_equal "application/zip", response.media_type
+    assert_match "attachment", response.headers["Content-Disposition"]
+    assert_match "test_backup.zip", response.headers["Content-Disposition"]
   end
 
-  test "should handle markdown export operation" do
+  test "should restore from a backup file" do
     sign_in(@user)
+    file = fixture_file_upload(create_temp_zip_file, "application/zip")
+    captured_path = nil
+    fake_import = ->(path, **_kwargs) { captured_path = path; true }
 
-    assert_enqueued_with(job: ExportDataJob, args: [ "markdown" ]) do
-      post admin_migrates_path, params: { operation_type: "export", export_type: "markdown" }
+    SiteBackup.stub(:import, fake_import) do
+      post admin_migrates_path, params: {
+        operation_type: "import",
+        backup_file: file
+      }
     end
 
-    assert_redirected_to admin_migrates_path(tab: "export")
-    assert_match "Markdown Export Initiated", flash[:notice]
+    assert_redirected_to admin_migrates_path(tab: "import")
+    assert_match "restored", flash[:notice]
+    assert_equal @uploads_dir.to_s, File.dirname(captured_path.to_s)
+    assert_match(/\.zip\z/, captured_path.to_s)
   end
 
-  test "should reject non-zip files" do
+  test "backup import failure shows an alert" do
     sign_in(@user)
+    file = fixture_file_upload(create_temp_zip_file, "application/zip")
+    failing_import = ->(*_args) { raise SiteBackup::Error, "corrupt backup" }
 
-    # Create a mock uploaded file with wrong content type
+    SiteBackup.stub(:import, failing_import) do
+      post admin_migrates_path, params: {
+        operation_type: "import",
+        backup_file: file
+      }
+    end
+
+    assert_redirected_to admin_migrates_path(tab: "import")
+    assert_match "corrupt backup", flash[:alert]
+  end
+
+  test "backup import unexpected error shows an alert and notifies" do
+    sign_in(@user)
+    file = fixture_file_upload(create_temp_zip_file, "application/zip")
+    failing_import = ->(*_args) { raise Errno::EIO, "disk exploded" }
+
+    notifier = RecordingNotifier.new
+    original_event = Rails.event
+    Rails.define_singleton_method(:event) { notifier }
+    begin
+      SiteBackup.stub(:import, failing_import) do
+        post admin_migrates_path, params: {
+          operation_type: "import",
+          backup_file: file
+        }
+      end
+    ensure
+      Rails.define_singleton_method(:event) { original_event }
+    end
+
+    assert_redirected_to admin_migrates_path(tab: "import")
+    assert_match "disk exploded", flash[:alert]
+    event = notifier.events.find { |name, _| name == "admin.migrates_controller.backup_import_error" }
+    assert_not_nil event
+    assert_match "disk exploded", event[1][:message]
+  end
+
+  test "should reject non-zip backup files" do
+    sign_in(@user)
     file = fixture_file_upload(
       create_temp_file("test.txt", "test content"),
       "text/plain"
@@ -67,65 +119,17 @@ class Admin::MigratesControllerTest < ActionDispatch::IntegrationTest
 
     post admin_migrates_path, params: {
       operation_type: "import",
-      zip_file: file
+      backup_file: file
     }
 
     assert_redirected_to admin_migrates_path(tab: "import")
     assert_match "ZIP", flash[:alert]
   end
 
-  test "should accept zip files for import" do
-    sign_in(@user)
-
-    # Create a minimal valid zip file
-    temp_zip = create_temp_zip_file
-
-    file = fixture_file_upload(temp_zip, "application/zip")
-
-    assert_enqueued_with(job: ImportFromZipJob) do
-      post admin_migrates_path, params: {
-        operation_type: "import",
-        zip_file: file
-      }
-    end
-
-    assert_redirected_to admin_migrates_path(tab: "import")
-    assert_match "ZIP Import in progress", flash[:notice]
-  end
-
-  test "cleans up uploaded zip when job enqueue fails" do
-    sign_in(@user)
-
-    file = fixture_file_upload(create_temp_zip_file, "application/zip")
-
-    original = ImportFromZipJob.method(:perform_later)
-    ImportFromZipJob.define_singleton_method(:perform_later) { |*_args| raise StandardError, "queue unavailable" }
-
-    post admin_migrates_path, params: {
-      operation_type: "import",
-      zip_file: file
-    }
-
-    assert_redirected_to admin_migrates_path(tab: "import")
-    assert_match "ZIP import failed", flash[:alert]
-    assert_empty Dir.glob(@uploads_dir.join("*.zip"))
-  ensure
-    ImportFromZipJob.define_singleton_method(:perform_later, original)
-  end
-
-  test "file basename sanitizes filename for import" do
-    # File.basename should strip path traversal attempts with forward slashes
-    assert_equal "malicious.zip", File.basename("../../../malicious.zip")
-    assert_equal "malicious.zip", File.basename("/etc/malicious.zip")
-    # Note: File.basename behavior with backslashes is platform-dependent
-    # On Unix, backslashes are valid filename characters
-    # The controller code uses forward slash path separators
-  end
-
   test "should handle RSS import with URL" do
     sign_in(@user)
 
-    assert_enqueued_with(job: ImportFromRssJob) do
+    assert_enqueued_with(job: ImportFromRssJob, args: [ "https://example.com/feed.xml", nil ]) do
       post admin_migrates_path, params: {
         operation_type: "import",
         url: "https://example.com/feed.xml"
@@ -145,17 +149,26 @@ class Admin::MigratesControllerTest < ActionDispatch::IntegrationTest
     assert_match "Unsupported operation type", flash[:alert]
   end
 
+  test "should reject import without URL or backup file" do
+    sign_in(@user)
+
+    post admin_migrates_path, params: { operation_type: "import" }
+
+    assert_redirected_to admin_migrates_path(tab: "import")
+    assert_match "RSS URL or backup file", flash[:alert]
+  end
+
   private
 
   def create_temp_file(filename, content)
-    temp_path = Rails.root.join("tmp", filename)
+    temp_path = @uploads_dir.join(filename)
     File.write(temp_path, content)
     temp_path
   end
 
   def create_temp_zip_file
     require "zip"
-    temp_path = Rails.root.join("tmp", "test_import.zip")
+    temp_path = @uploads_dir.join("test_backup.zip")
 
     Zip::File.open(temp_path, create: true) do |zipfile|
       zipfile.get_output_stream("test.txt") { |f| f.write "test content" }
