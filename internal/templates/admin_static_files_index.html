@@ -1,60 +1,63 @@
 {{define "title"}}Static Files|Admin{{end}}
 {{define "content"}}
-<div class="admin-container">
-  <h1>Static Files Management</h1>
-  <p class="subtitle">Manage static files for your website, such as icons, logos, etc.</p>
-
-  <div class="upload-section">
-    <h2>Upload New File</h2>
-    <form method="post" action="/admin/static_files" enctype="multipart/form-data" class="upload-form">
-      <div class="form-group">
-        <label for="file">Choose File</label>
-        <input type="file" id="file" name="file" required>
-        <small class="help-text">File will use the original filename from upload</small>
-      </div>
-      <div class="form-group">
-        <label for="description">Description (Optional)</label>
-        <textarea id="description" name="description" rows="2" placeholder="Description of file usage"></textarea>
-      </div>
-      <input type="submit" value="Upload File" class="btn btn-primary">
-    </form>
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Static Files</h1>
+    <p class="page-subtitle">Manage static files for your website, such as icons, logos, etc.</p>
   </div>
+</div>
 
-  <div class="files-section">
-    <h2>Uploaded Files</h2>
-    {{if .Files}}
-    <table class="files-table">
-      <thead>
-        <tr>
-          <th>Filename</th>
-          <th>Description</th>
-          <th>Size</th>
-          <th>Upload Time</th>
-          <th>Access Link</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Files}}
-        <tr>
-          <td><code>{{.Filename}}</code></td>
-          <td>{{.Description}}</td>
-          <td>{{.SizeHuman}}</td>
-          <td>{{.UploadedAt}}</td>
-          <td><a href="{{.PublicPath}}" target="_blank" class="btn-link">{{.PublicPath}}</a></td>
-          <td>
-            <form method="post" action="/admin/static_files/{{.ID}}/destroy"
-                  onsubmit="return confirm('Are you sure you want to delete {{.Filename}}?')">
-              <button type="submit" class="btn-danger btn-small">Delete</button>
-            </form>
-          </td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-    {{else}}
-    <p class="no-files">No files uploaded yet</p>
-    {{end}}
-  </div>
+<div class="card">
+  <h2 class="card-title">Upload New File</h2>
+  <form method="post" action="/admin/static_files" enctype="multipart/form-data">
+    <div class="field">
+      <label for="file">Choose File</label>
+      <input type="file" id="file" name="file" required>
+      <small>File will use the original filename from upload</small>
+    </div>
+    <div class="field">
+      <label for="description">Description (Optional)</label>
+      <textarea id="description" name="description" rows="2" placeholder="Description of file usage"></textarea>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Upload File</button>
+    </div>
+  </form>
+</div>
+
+<div class="table-card">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Filename</th>
+        <th>Description</th>
+        <th>Size</th>
+        <th>Upload Time</th>
+        <th>Access Link</th>
+        <th class="row-actions">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Files}}
+      <tr>
+        <td><code>{{.Filename}}</code></td>
+        <td>{{.Description}}</td>
+        <td class="text-muted">{{.SizeHuman}}</td>
+        <td><small class="text-muted">{{.UploadedAt}}</small></td>
+        <td><a href="{{.PublicPath}}" target="_blank" class="title-link">{{.PublicPath}}</a></td>
+        <td class="row-actions">
+          <form method="post" action="/admin/static_files/{{.ID}}/destroy"
+                onsubmit="return confirm('Are you sure you want to delete {{.Filename}}?')">
+            <button type="submit" class="row-btn is-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {{else}}
+      <tr>
+        <td colspan="6" class="empty">No files uploaded yet.</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
 </div>
 {{end}}

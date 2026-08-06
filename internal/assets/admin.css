@@ -1,0 +1,1069 @@
+/* Rables admin design system. Loaded by admin_layout.html after app.css;
+ * every rule is scoped under .admin-body so the public site is unaffected.
+ * Dark mode follows [data-theme="dark"] on <html> (theme-toggle controller).
+ *
+ * Components: sidebar, page-head, card, tabs, toolbar, batch-bar, table,
+ * badge, buttons, forms, pagination, flash, empty state.
+ */
+
+body.admin-body {
+    --ad-bg: #f4f5f7;
+    --ad-surface: #ffffff;
+    --ad-border: #e4e7ec;
+    --ad-text: #1c2430;
+    --ad-text-2: #667085;
+    --ad-hover: #f2f4f7;
+    --ad-accent: #c04000;
+    --ad-accent-soft: #fbeadd;
+    --ad-danger: #d92d20;
+    --ad-danger-soft: #fee4e2;
+    --ad-success: #067647;
+    --ad-success-soft: #d1fadf;
+    --ad-warning: #b54708;
+    --ad-warning-soft: #fef0c7;
+    --ad-info: #175cd3;
+    --ad-info-soft: #e0eaff;
+    --ad-radius: 8px;
+    --ad-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+
+    background: var(--ad-bg);
+    color: var(--ad-text);
+    font-size: 14px;
+}
+
+[data-theme="dark"] body.admin-body {
+    --ad-bg: #131518;
+    --ad-surface: #1c1f26;
+    --ad-border: #31363f;
+    --ad-text: #e8eaef;
+    --ad-text-2: #98a2b3;
+    --ad-hover: #262a33;
+    --ad-accent: #ff7a45;
+    --ad-accent-soft: #40241a;
+    --ad-danger: #f97066;
+    --ad-danger-soft: #3d1c1a;
+    --ad-success: #32d583;
+    --ad-success-soft: #113528;
+    --ad-warning: #fdb022;
+    --ad-warning-soft: #3d2f12;
+    --ad-info: #6ea8fe;
+    --ad-info-soft: #1a2a4a;
+    --ad-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* ============================== Layout ============================== */
+
+.admin-layout {
+    display: flex;
+    min-height: 100vh;
+}
+
+.admin-layout > [data-controller~="sidebar"] {
+    display: contents;
+}
+
+.admin-main {
+    flex: 1;
+    min-width: 0;
+    margin-left: 232px;
+    padding: 24px 32px 48px;
+}
+
+.admin-main > * {
+    max-width: 1200px;
+}
+
+/* ============================== Sidebar ============================== */
+
+.admin-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    width: 232px;
+    height: 100vh;
+    overflow-y: auto;
+    background: var(--ad-surface);
+    border-right: 1px solid var(--ad-border);
+    transition: transform 0.25s ease;
+}
+
+.admin-sidebar .sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 16px 16px 12px;
+}
+
+.admin-sidebar .sidebar-brand {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ad-text);
+    text-decoration: none;
+}
+
+.admin-sidebar .view-site {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--ad-text-2);
+    text-decoration: none;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--ad-border);
+}
+
+.admin-sidebar .view-site:hover {
+    color: var(--ad-accent);
+    border-color: var(--ad-accent);
+}
+
+.admin-sidebar .sidebar-close-btn {
+    display: none;
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    color: var(--ad-text);
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    font-size: 18px;
+}
+
+.admin-sidebar .sidebar-close-btn:hover {
+    background: var(--ad-hover);
+}
+
+.admin-sidebar .side-nav {
+    flex: 1;
+    padding: 4px 8px;
+}
+
+.admin-sidebar .nav-section {
+    margin-bottom: 16px;
+}
+
+.admin-sidebar .nav-label {
+    padding: 6px 10px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ad-text-2);
+}
+
+.admin-sidebar .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    margin-bottom: 1px;
+    border-radius: 6px;
+    color: var(--ad-text-2);
+    text-decoration: none;
+    font-size: 14px;
+    line-height: 1.4;
+    transition: background 0.12s, color 0.12s;
+}
+
+.admin-sidebar .nav-link svg {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+}
+
+.admin-sidebar .nav-link:hover {
+    background: var(--ad-hover);
+    color: var(--ad-text);
+}
+
+.admin-sidebar .nav-link.active {
+    background: var(--ad-accent-soft);
+    color: var(--ad-accent);
+    font-weight: 500;
+}
+
+.admin-sidebar .side-foot {
+    border-top: 1px solid var(--ad-border);
+    padding: 8px;
+}
+
+.admin-sidebar .side-foot form {
+    margin: 0;
+}
+
+/* Logout / theme buttons are <button> elements styled as nav links. */
+.admin-sidebar .side-foot button.nav-link {
+    width: 100%;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    font-weight: 400;
+}
+
+.admin-sidebar .nav-link i {
+    flex-shrink: 0;
+    width: 16px;
+    text-align: center;
+    font-size: 14px;
+}
+
+.admin-sidebar .nav-link.is-danger {
+    color: var(--ad-danger);
+}
+
+.admin-sidebar .nav-link.is-danger:hover {
+    background: var(--ad-danger-soft);
+}
+
+/* Mobile chrome (hidden on desktop) */
+.admin-body .mobile-menu-btn {
+    display: none;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 1001;
+    width: 38px;
+    height: 38px;
+    border: 1px solid var(--ad-border);
+    border-radius: 8px;
+    background: var(--ad-surface);
+    color: var(--ad-text);
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--ad-shadow);
+}
+
+.admin-body .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 999;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+.admin-body .sidebar-overlay.overlay-visible {
+    display: block;
+    opacity: 1;
+}
+
+/* ============================== Page head ============================== */
+
+.page-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.page-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--ad-text);
+    margin: 0;
+}
+
+.page-subtitle {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--ad-text-2);
+}
+
+.page-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* ============================== Card ============================== */
+
+.card {
+    background: var(--ad-surface);
+    border: 1px solid var(--ad-border);
+    border-radius: var(--ad-radius);
+    box-shadow: var(--ad-shadow);
+    padding: 20px;
+    margin-bottom: 16px;
+}
+
+.card-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ad-text);
+    margin: 0 0 4px;
+}
+
+.card-desc {
+    font-size: 13px;
+    color: var(--ad-text-2);
+    margin: 0 0 16px;
+    line-height: 1.5;
+}
+
+.card > :last-child {
+    margin-bottom: 0;
+}
+
+/* Inline input + button row (source URL fetch) */
+.url-fetch-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.url-fetch-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Source-reference fetch status; colors and display are set by the controller. */
+.source-status {
+    padding: 8px;
+    margin-top: 8px;
+    border-radius: 4px;
+}
+
+/* Crosspost platform row: checkbox + label + URL input */
+.crosspost-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 14px;
+}
+
+.crosspost-row label {
+    white-space: nowrap;
+}
+
+.crosspost-row .crosspost-url {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+/* ============================== Buttons ============================== */
+
+.admin-body .btn,
+.admin-body button,
+.admin-body input[type="submit"] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: inherit;
+    line-height: 1.4;
+    color: var(--ad-text);
+    background: var(--ad-surface);
+    border: 1px solid var(--ad-border);
+    border-radius: 6px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.admin-body .btn:hover,
+.admin-body button:hover,
+.admin-body input[type="submit"]:hover {
+    background: var(--ad-hover);
+}
+
+.admin-body .btn-primary,
+.admin-body button[type="submit"]:not([class]),
+.admin-body input[type="submit"]:not([class]) {
+    background: var(--ad-text);
+    border-color: var(--ad-text);
+    color: var(--ad-bg);
+}
+
+.admin-body .btn-primary:hover,
+.admin-body button[type="submit"]:not([class]):hover,
+.admin-body input[type="submit"]:not([class]):hover {
+    background: var(--ad-text);
+    opacity: 0.88;
+}
+
+.admin-body .btn-danger {
+    color: var(--ad-danger);
+}
+
+.admin-body .btn-danger:hover {
+    background: var(--ad-danger-soft);
+    border-color: var(--ad-danger);
+}
+
+.admin-body .btn-success {
+    color: var(--ad-success);
+}
+
+.admin-body .btn-success:hover {
+    background: var(--ad-success-soft);
+    border-color: var(--ad-success);
+}
+
+.admin-body .btn-warning {
+    color: var(--ad-warning);
+}
+
+.admin-body .btn-warning:hover {
+    background: var(--ad-warning-soft);
+    border-color: var(--ad-warning);
+}
+
+.admin-body .btn-info {
+    color: var(--ad-info);
+}
+
+.admin-body .btn-info:hover {
+    background: var(--ad-info-soft);
+    border-color: var(--ad-info);
+}
+
+.admin-body .btn-sm {
+    padding: 4px 10px;
+    font-size: 13px;
+}
+
+.admin-body .btn:disabled,
+.admin-body button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* ============================== Forms ============================== */
+
+.admin-body .field {
+    margin-bottom: 14px;
+}
+
+.admin-body .field > label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ad-text);
+    margin-bottom: 5px;
+}
+
+.admin-body input[type="text"],
+.admin-body input[type="email"],
+.admin-body input[type="password"],
+.admin-body input[type="url"],
+.admin-body input[type="number"],
+.admin-body input[type="date"],
+.admin-body input[type="datetime-local"],
+.admin-body input[type="file"],
+.admin-body textarea,
+.admin-body select {
+    width: 100%;
+    padding: 7px 10px;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--ad-text);
+    background: var(--ad-surface);
+    border: 1px solid var(--ad-border);
+    border-radius: 6px;
+    transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.admin-body input:focus,
+.admin-body textarea:focus,
+.admin-body select:focus {
+    outline: none;
+    border-color: var(--ad-accent);
+    box-shadow: 0 0 0 3px var(--ad-accent-soft);
+}
+
+.admin-body input:disabled,
+.admin-body textarea:disabled,
+.admin-body select:disabled {
+    background: var(--ad-hover);
+    color: var(--ad-text-2);
+    cursor: not-allowed;
+}
+
+.admin-body input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--ad-accent);
+}
+
+.admin-body textarea {
+    min-height: 60px;
+    resize: vertical;
+}
+
+.admin-body textarea.code-editor {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+}
+
+.admin-body lexxy-editor {
+    min-height: 400px;
+    display: block;
+}
+
+.admin-body .help-text,
+.admin-body .field small {
+    display: block;
+    margin-top: 5px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ad-text-2);
+}
+
+.admin-body .field-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.admin-body .field-row > .field {
+    flex: 1;
+    min-width: 0;
+}
+
+.admin-body .form-grid {
+    display: grid;
+    gap: 0 16px;
+}
+
+.admin-body .form-grid-2 {
+    grid-template-columns: repeat(2, 1fr);
+}
+
+.admin-body .form-grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.admin-body .field-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 14px;
+}
+
+.admin-body .field-checkbox label {
+    margin: 0;
+    font-weight: 400;
+}
+
+.admin-body .form-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.admin-body .form-errors {
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    background: var(--ad-danger-soft);
+    border: 1px solid var(--ad-danger);
+    border-radius: var(--ad-radius);
+    color: var(--ad-danger);
+    font-size: 13px;
+}
+
+.admin-body .form-errors strong {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.admin-body .form-errors ul {
+    margin: 0;
+    padding-left: 1.25rem;
+    list-style: disc;
+}
+
+/* Article / page editor two-column layout */
+.admin-body .editor-layout {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.admin-body .editor-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.admin-body .editor-side {
+    width: 300px;
+    flex-shrink: 0;
+}
+
+.admin-body .editor-side .card {
+    padding: 16px;
+}
+
+/* ============================== Toolbar / tabs / search ============================== */
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.tabs {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--ad-hover);
+    border-radius: 8px;
+    flex-wrap: wrap;
+}
+
+.tab {
+    padding: 5px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ad-text-2);
+    text-decoration: none;
+    border-radius: 6px;
+    white-space: nowrap;
+    transition: background 0.12s, color 0.12s;
+}
+
+.tab:hover {
+    color: var(--ad-text);
+}
+
+.tab.active {
+    background: var(--ad-surface);
+    color: var(--ad-text);
+    box-shadow: var(--ad-shadow);
+}
+
+.toolbar .search-form {
+    margin-left: auto;
+}
+
+.toolbar .search-input {
+    width: 240px;
+    max-width: 100%;
+}
+
+/* Batch actions bar (revealed by the batch-selection controller) */
+.batch-bar {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    background: var(--ad-surface);
+    border: 1px solid var(--ad-border);
+    border-radius: var(--ad-radius);
+    box-shadow: var(--ad-shadow);
+    font-size: 13px;
+}
+
+.batch-bar .batch-count {
+    font-weight: 600;
+    margin-right: 4px;
+}
+
+.batch-bar .batch-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding-left: 8px;
+    border-left: 1px solid var(--ad-border);
+}
+
+.batch-bar .batch-input {
+    width: 160px;
+    padding: 4px 8px;
+    font-size: 13px;
+}
+
+.batch-bar label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ad-text-2);
+}
+
+/* ============================== Tables ============================== */
+
+.table-card {
+    background: var(--ad-surface);
+    border: 1px solid var(--ad-border);
+    border-radius: var(--ad-radius);
+    box-shadow: var(--ad-shadow);
+    overflow-x: auto;
+    margin-bottom: 16px;
+}
+
+.admin-body .table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.admin-body .table th {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--ad-border);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ad-text-2);
+    white-space: nowrap;
+}
+
+.admin-body .table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--ad-border);
+    font-size: 14px;
+    vertical-align: middle;
+}
+
+.admin-body .table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.admin-body .table tbody tr:hover {
+    background: var(--ad-hover);
+}
+
+.admin-body .table .row-check {
+    width: 36px;
+}
+
+.admin-body .table .row-actions {
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* Cell content helpers */
+.title-link {
+    color: var(--ad-text);
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.title-link:hover {
+    color: var(--ad-accent);
+}
+
+.text-muted {
+    color: var(--ad-text-2);
+}
+
+.text-danger {
+    color: var(--ad-danger);
+}
+
+.admin-body code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--ad-text-2);
+}
+
+.truncate {
+    display: inline-block;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+}
+
+/* Row action buttons (Edit / Trash / Delete …). Scoped with element selectors
+ * so they beat the .admin-body button[type="submit"] primary rule. */
+.admin-body a.row-btn,
+.admin-body button.row-btn {
+    display: inline-block;
+    padding: 3px 8px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--ad-text-2);
+    font-size: 13px;
+    font-weight: 400;
+    font-family: inherit;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.admin-body a.row-btn:hover,
+.admin-body button.row-btn:hover {
+    background: var(--ad-hover);
+    color: var(--ad-text);
+}
+
+.admin-body .row-btn.is-danger {
+    color: var(--ad-danger);
+}
+
+.admin-body .row-btn.is-danger:hover {
+    background: var(--ad-danger-soft);
+    color: var(--ad-danger);
+}
+
+.row-actions form {
+    display: inline;
+}
+
+/* Empty state */
+.empty {
+    padding: 48px 16px;
+    text-align: center;
+    color: var(--ad-text-2);
+    font-size: 14px;
+}
+
+/* ============================== Badges ============================== */
+
+.badge {
+    display: inline-block;
+    padding: 2px 9px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+    border-radius: 999px;
+    background: var(--ad-hover);
+    color: var(--ad-text-2);
+    white-space: nowrap;
+}
+
+.badge-publish,
+.badge-enabled,
+.badge-success {
+    background: var(--ad-success-soft);
+    color: var(--ad-success);
+}
+
+.badge-draft,
+.badge-secondary {
+    background: var(--ad-hover);
+    color: var(--ad-text-2);
+}
+
+.badge-schedule,
+.badge-warning {
+    background: var(--ad-warning-soft);
+    color: var(--ad-warning);
+}
+
+.badge-trash,
+.badge-disabled,
+.badge-danger {
+    background: var(--ad-danger-soft);
+    color: var(--ad-danger);
+}
+
+.badge-shared,
+.badge-info {
+    background: var(--ad-info-soft);
+    color: var(--ad-info);
+}
+
+/* Activity log levels */
+.badge-level-unknown {
+    background: var(--ad-hover);
+    color: var(--ad-text-2);
+}
+
+.badge-level-info {
+    background: var(--ad-info-soft);
+    color: var(--ad-info);
+}
+
+.badge-level-warn,
+.badge-level-warning {
+    background: var(--ad-warning-soft);
+    color: var(--ad-warning);
+}
+
+.badge-level-error {
+    background: var(--ad-danger-soft);
+    color: var(--ad-danger);
+}
+
+/* ============================== Pagination ============================== */
+
+.pagination-bar {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.pagination-link,
+.pagination-current,
+.pagination-gap {
+    min-width: 30px;
+    padding: 5px 10px;
+    text-align: center;
+    font-size: 13px;
+    border: 1px solid var(--ad-border);
+    border-radius: 6px;
+    color: var(--ad-text-2);
+    text-decoration: none;
+    background: var(--ad-surface);
+}
+
+.pagination-link:hover {
+    background: var(--ad-hover);
+    color: var(--ad-text);
+}
+
+.pagination-current {
+    background: var(--ad-text);
+    border-color: var(--ad-text);
+    color: var(--ad-bg);
+}
+
+.pagination-gap {
+    border-color: transparent;
+    background: transparent;
+}
+
+/* ============================== Flash ============================== */
+
+.admin-body .flash {
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    border-radius: var(--ad-radius);
+    font-size: 13px;
+    max-width: 1200px;
+}
+
+.admin-body .flash-notice {
+    background: var(--ad-success-soft);
+    border: 1px solid var(--ad-success);
+    color: var(--ad-success);
+}
+
+.admin-body .flash-alert {
+    background: var(--ad-danger-soft);
+    border: 1px solid var(--ad-danger);
+    color: var(--ad-danger);
+}
+
+/* ============================== Misc ============================== */
+
+/* Inline reply form on the comments page */
+.reply-details summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--ad-accent);
+}
+
+.reply-details[open] summary {
+    margin-bottom: 8px;
+}
+
+/* Fetch-comments buttons in the posts table */
+.fetch-platforms {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 8px;
+}
+
+.fetch-platforms form {
+    display: inline;
+}
+
+/* Stats line (twitter archive counts etc.) */
+.stat-line {
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.stat-line strong {
+    color: var(--ad-text);
+}
+
+/* Standalone section heading between cards/tables */
+.section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ad-text);
+    margin: 24px 0 12px;
+}
+
+/* ============================== Responsive ============================== */
+
+@media (max-width: 900px) {
+    .admin-body .editor-layout {
+        flex-direction: column;
+    }
+
+    .admin-body .editor-side {
+        width: 100%;
+    }
+
+    .admin-body .form-grid-2,
+    .admin-body .form-grid-3 {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 768px) {
+    .admin-body .mobile-menu-btn {
+        display: flex;
+    }
+
+    .admin-sidebar {
+        transform: translateX(-100%);
+        width: 260px;
+        box-shadow: 2px 0 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .admin-sidebar.sidebar-open {
+        transform: translateX(0);
+    }
+
+    .admin-sidebar .sidebar-close-btn {
+        display: flex;
+    }
+
+    .admin-main {
+        margin-left: 0;
+        padding: 60px 16px 32px;
+    }
+
+    .toolbar .search-form {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .toolbar .search-input {
+        width: 100%;
+    }
+
+    .tabs {
+        max-width: 100%;
+        overflow-x: auto;
+        flex-wrap: nowrap;
+    }
+
+    .batch-bar .batch-group {
+        border-left: none;
+        padding-left: 0;
+    }
+}

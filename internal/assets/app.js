@@ -155,6 +155,24 @@
     }, 5000);
   }
 
+  // --- admin nav ------------------------------------------------------------
+  // Highlights the sidebar link matching the current path (longest prefix
+  // wins, so /admin/posts/slug/edit lights up "Posts").
+
+  function markActiveNavLink() {
+    let best = null;
+    document.querySelectorAll(".admin-sidebar .nav-link[href]").forEach((link) => {
+      const href = link.getAttribute("href");
+      if (!href || !href.startsWith("/")) return;
+      const path = window.location.pathname;
+      const matches = path === href || path.startsWith(href.replace(/\/$/, "") + "/");
+      if (matches && (!best || href.length > best.getAttribute("href").length)) {
+        best = link;
+      }
+    });
+    if (best) best.classList.add("active");
+  }
+
   // --- batch_selection -----------------------------------------------------
 
   class BatchSelectionController extends Controller {
@@ -1268,6 +1286,7 @@
   function start() {
     boot();
     document.querySelectorAll(".flash").forEach(flashFade);
+    markActiveNavLink();
   }
 
   if (document.readyState === "loading") {

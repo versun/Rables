@@ -1,8 +1,13 @@
 {{define "title"}}Edit Article|Admin{{end}}
 {{define "content"}}
-<h3>Edit Post</h3>
+<div class="page-head">
+  <h1 class="page-title">Edit Post</h1>
+  <div class="page-actions">
+    <a href="/admin/posts" class="btn">Back to Posts</a>
+    <form method="post" action="{{.FormAction}}/destroy" onsubmit="return confirm('Are you sure?');">
+      <button type="submit" class="btn btn-danger">Delete</button>
+    </form>
+  </div>
+</div>
 {{template "article_form" .}}
-<form method="post" action="{{.FormAction}}/destroy" onsubmit="return confirm('Are you sure?');" style="margin-top: 0.5rem;">
-  <button type="submit" class="btn btn-danger">Delete</button>
-</form>
 {{end}}

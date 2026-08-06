@@ -1,23 +1,32 @@
 {{define "title"}}Upload file{{end}}
 {{define "content"}}
-<h1>Upload file</h1>
-<form method="post" action="/admin/uploads" enctype="multipart/form-data">
-  <div class="field">
-    <label for="file">File</label>
-    <input type="file" id="file" name="file" required>
-  </div>
-  <div class="field">
-    <label for="record_type">Record type (optional)</label>
-    <input type="text" id="record_type" name="record_type" placeholder="Article">
-  </div>
-  <div class="field">
-    <label for="record_id">Record ID (optional)</label>
-    <input type="number" id="record_id" name="record_id">
-  </div>
-  <div class="field">
-    <label for="name">Attachment name (optional)</label>
-    <input type="text" id="name" name="name" placeholder="embeds">
-  </div>
-  <button type="submit">Upload</button>
-</form>
+<div class="page-head">
+  <h1 class="page-title">Upload File</h1>
+</div>
+
+<div class="card">
+  <form method="post" action="/admin/uploads" enctype="multipart/form-data">
+    <div class="field">
+      <label for="file">File</label>
+      <input type="file" id="file" name="file" required>
+    </div>
+    <div class="form-grid form-grid-3">
+      <div class="field">
+        <label for="record_type">Record type (optional)</label>
+        <input type="text" id="record_type" name="record_type" placeholder="Article">
+      </div>
+      <div class="field">
+        <label for="record_id">Record ID (optional)</label>
+        <input type="number" id="record_id" name="record_id">
+      </div>
+      <div class="field">
+        <label for="name">Attachment name (optional)</label>
+        <input type="text" id="name" name="name" placeholder="embeds">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Upload</button>
+    </div>
+  </form>
+</div>
 {{end}}

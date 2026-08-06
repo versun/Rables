@@ -1,17 +1,19 @@
 {{define "title"}}Twitter Sync{{end}}
 {{define "content"}}
-<h1>Twitter Sync</h1>
+<div class="page-head">
+  <h1 class="page-title">Twitter Sync</h1>
+</div>
 
-<div class="form-section compact">
-  <h3>Archive Tweets as Articles</h3>
-  <small>
+<div class="card">
+  <h2 class="card-title">Archive Tweets as Articles</h2>
+  <p class="card-desc">
     Periodically archives original tweets (and quote tweets) from the configured X account as published articles.
     Uses the X API credentials configured in <a href="/admin/crossposts?platform=twitter">Crosspost settings</a>.
     Requires an X API plan with access to the user timeline endpoint (Basic or above).
-  </small>
+  </p>
 
   <form method="post" action="/admin/twitter_sync">
-    <div class="field checkbox">
+    <div class="field-checkbox">
       <input type="hidden" name="twitter_sync[enabled]" value="0">
       <input type="checkbox" id="twitter_sync_enabled" name="twitter_sync[enabled]" value="1" {{if ne .Sync.Enabled 0}}checked{{end}}>
       <label for="twitter_sync_enabled">Enable Twitter Sync</label>
@@ -23,44 +25,45 @@
       <small>Changing the username resets the sync cursor and starts archiving the new account from scratch.</small>
     </div>
 
-    <div class="field">
-      <label for="twitter_sync_start_date">Sync From Date</label>
-      <input type="date" id="twitter_sync_start_date" name="twitter_sync[start_date]" value="{{.Sync.StartDate.String}}">
-      <small>
-        Only tweets published on or after this date are archived (X Articles and their announcement tweets are always skipped).
-        Changing the date re-backfills from the new date; existing articles are kept and not duplicated.
-        Leave blank to only archive the latest tweets on the first run and new tweets afterwards.
-      </small>
-    </div>
+    <div class="form-grid form-grid-2">
+      <div class="field">
+        <label for="twitter_sync_start_date">Sync From Date</label>
+        <input type="date" id="twitter_sync_start_date" name="twitter_sync[start_date]" value="{{.Sync.StartDate.String}}">
+        <small>
+          Only tweets published on or after this date are archived (X Articles and their announcement tweets are always skipped).
+          Changing the date re-backfills from the new date; existing articles are kept and not duplicated.
+          Leave blank to only archive the latest tweets on the first run and new tweets afterwards.
+        </small>
+      </div>
 
-    <div class="field">
-      <label for="twitter_sync_sync_schedule">Sync Schedule</label>
-      <select id="twitter_sync_sync_schedule" name="twitter_sync[sync_schedule]" class="form-select">
-        {{range .Schedules}}
-        <option value="{{.Value}}" {{if eq $.Sync.SyncSchedule .Value}}selected{{end}}>{{.Label}}</option>
-        {{end}}
-      </select>
-      <small>How often new tweets are archived. "Sync Now" always runs immediately regardless of this setting.</small>
+      <div class="field">
+        <label for="twitter_sync_sync_schedule">Sync Schedule</label>
+        <select id="twitter_sync_sync_schedule" name="twitter_sync[sync_schedule]">
+          {{range .Schedules}}
+          <option value="{{.Value}}" {{if eq $.Sync.SyncSchedule .Value}}selected{{end}}>{{.Label}}</option>
+          {{end}}
+        </select>
+        <small>How often new tweets are archived. "Sync Now" always runs immediately regardless of this setting.</small>
+      </div>
     </div>
 
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">Save</button>
     </div>
   </form>
+</div>
 
-  <div class="field">
-    <p>
-      <strong>Last synced:</strong> {{if .LastSyncedLong}}{{.LastSyncedLong}}{{else}}Never{{end}}<br>
-      <strong>Cursor (since_id):</strong> {{if .Sync.SinceID.Valid}}{{.Sync.SinceID.String}}{{else}}-{{end}}<br>
-      <strong>Resolved user id:</strong> {{if .Sync.UserID.Valid}}{{.Sync.UserID.String}}{{else}}-{{end}}
-    </p>
-    {{if .Sync.LastError.Valid}}
-    <p class="text-danger"><strong>Last error:</strong> {{.Sync.LastError.String}}</p>
-    {{end}}
-  </div>
+<div class="card">
+  <h2 class="card-title">Sync Status</h2>
+  <p class="stat-line"><strong>Last synced:</strong> <span class="text-muted">{{if .LastSyncedLong}}{{.LastSyncedLong}}{{else}}Never{{end}}</span></p>
+  <p class="stat-line"><strong>Cursor (since_id):</strong> <span class="text-muted">{{if .Sync.SinceID.Valid}}{{.Sync.SinceID.String}}{{else}}-{{end}}</span></p>
+  <p class="stat-line"><strong>Resolved user id:</strong> <span class="text-muted">{{if .Sync.UserID.Valid}}{{.Sync.UserID.String}}{{else}}-{{end}}</span></p>
+  {{if .Sync.LastError.Valid}}
+  <p class="stat-line text-danger"><strong>Last error:</strong> {{.Sync.LastError.String}}</p>
+  {{end}}
 
-  <form method="post" action="/admin/twitter_sync/sync_now">
-    <button type="submit" class="btn btn-secondary">Sync Now</button>
+  <form method="post" action="/admin/twitter_sync/sync_now" class="form-actions">
+    <button type="submit" class="btn">Sync Now</button>
   </form>
 </div>
 {{end}}

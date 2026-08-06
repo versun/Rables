@@ -1,26 +1,30 @@
 {{define "title"}}New Tag|Admin{{end}}
 {{define "content"}}
-<div class="admin-form">
-  <h2>New Tag</h2>
-  {{if .Error}}
-  <div class="form-errors">
-    <strong>1 error prohibited this tag from being saved:</strong>
-    <ul>
-      <li>{{.Error}}</li>
-    </ul>
+<div class="page-head">
+  <h1 class="page-title">New Tag</h1>
+  <div class="page-actions">
+    <a href="/admin/tags" class="btn">Back to Tags</a>
   </div>
-  {{end}}
+</div>
+
+{{if .Error}}
+<div class="form-errors">
+  <strong>1 error prohibited this tag from being saved:</strong>
+  <ul>
+    <li>{{.Error}}</li>
+  </ul>
+</div>
+{{end}}
+
+<div class="card">
   <form method="post" action="/admin/tags">
-    <div class="form-section compact">
-      <div class="field">
-        <label for="name">Name</label>
-        <input type="text" id="name" name="name" placeholder="e.g., Ruby on Rails" value="{{.Tag.Name}}">
-        <small class="help-text">The slug will be automatically generated from the name.</small>
-      </div>
+    <div class="field">
+      <label for="name">Name</label>
+      <input type="text" id="name" name="name" placeholder="e.g., Ruby on Rails" value="{{.Tag.Name}}">
+      <small>The slug will be automatically generated from the name.</small>
     </div>
     <div class="form-actions">
-      <input type="submit" value="Save">
-      <a href="/admin/tags" class="btn btn-secondary">Cancel</a>
+      <button type="submit" class="btn btn-primary">Save</button>
     </div>
   </form>
 </div>

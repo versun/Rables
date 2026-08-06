@@ -1,50 +1,47 @@
 {{define "title"}}Redirects|Admin{{end}}
 {{define "content"}}
-<div class="admin-redirects">
-  <div class="admin-toolbar">
+<div class="page-head">
+  <h1 class="page-title">Redirects</h1>
+  <div class="page-actions">
     <a href="/admin/redirects/new" class="btn btn-primary">New Redirect</a>
   </div>
+</div>
 
-  <div class="table-container">
-    <table class="admin-table">
-      <thead>
-        <tr>
-          <th class="col-regex">Regex Pattern</th>
-          <th class="col-replacement">Replacement</th>
-          <th class="col-type">Type</th>
-          <th class="col-status">Status</th>
-          <th class="col-actions">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Redirects}}
-        <tr>
-          <td class="col-regex"><code class="regex-code">{{.Regex}}</code></td>
-          <td class="col-replacement"><code class="replacement-code">{{.Replacement}}</code></td>
-          <td class="col-type">
-            {{if .Permanent}}<span class="type-badge type-permanent">301 Permanent</span>{{else}}<span class="type-badge type-temporary">302 Temporary</span>{{end}}
-          </td>
-          <td class="col-status">
-            {{if .Enabled}}<span class="status-badge status-enabled">Enabled</span>{{else}}<span class="status-badge status-disabled">Disabled</span>{{end}}
-          </td>
-          <td class="col-actions">
-            <div class="action-buttons">
-              <a href="/admin/redirects/{{.ID}}/edit" class="action-btn" title="Edit">Edit</a>
-              <form method="post" action="/admin/redirects/{{.ID}}/destroy" onsubmit="return confirm('Are you sure?')">
-                <button type="submit" class="action-btn" title="Delete">Delete</button>
-              </form>
-            </div>
-          </td>
-        </tr>
-        {{else}}
-        <tr>
-          <td colspan="5" class="no-content-row">
-            <p>No redirects found.</p>
-          </td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
+<div class="table-card">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Regex Pattern</th>
+        <th>Replacement</th>
+        <th>Type</th>
+        <th>Status</th>
+        <th class="row-actions">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Redirects}}
+      <tr>
+        <td><code>{{.Regex}}</code></td>
+        <td><code>{{.Replacement}}</code></td>
+        <td>
+          {{if .Permanent}}<span class="badge badge-danger">301 Permanent</span>{{else}}<span class="badge badge-info">302 Temporary</span>{{end}}
+        </td>
+        <td>
+          {{if .Enabled}}<span class="badge badge-enabled">Enabled</span>{{else}}<span class="badge badge-disabled">Disabled</span>{{end}}
+        </td>
+        <td class="row-actions">
+          <a href="/admin/redirects/{{.ID}}/edit" class="row-btn">Edit</a>
+          <form method="post" action="/admin/redirects/{{.ID}}/destroy" onsubmit="return confirm('Are you sure?')">
+            <button type="submit" class="row-btn is-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {{else}}
+      <tr>
+        <td colspan="5" class="empty">No redirects found.</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
 </div>
 {{end}}

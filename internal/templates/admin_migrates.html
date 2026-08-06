@@ -1,111 +1,105 @@
 {{define "title"}}Migrate|Admin{{end}}
 {{define "content"}}
-<div class="admin-container">
-  <h1>Migrate</h1>
-
-  <div class="admin-toolbar">
-    <div class="status-tabs">
-      <a href="/admin/migrates?tab=export" class="status-tab {{if eq .ActiveTab "export"}}active{{end}}">Export</a>
-      <a href="/admin/migrates?tab=import" class="status-tab {{if eq .ActiveTab "import"}}active{{end}}">Import</a>
-    </div>
-  </div>
-
-  {{if eq .ActiveTab "export"}}
-  <div class="form-section compact">
-    <h3>Export Data</h3>
-    <p>Export the full SQLite database together with all uploaded media files as a single ZIP. It contains everything (including credentials), so keep it safe.</p>
-    <form method="post" action="/admin/migrates/export">
-      <button type="submit" class="btn btn-primary">Export Database + Media</button>
-    </form>
-  </div>
-
-  <div class="form-section compact">
-    <h3>Export Files</h3>
-    {{if .Exports}}
-    <table class="admin-activity-table">
-      <thead>
-        <tr>
-          <th>File</th>
-          <th>Size</th>
-          <th class="col-time">Created</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Exports}}
-        <tr>
-          <td><span class="truncate" title="{{.Name}}">{{.Name}}</span></td>
-          <td>{{.Size}} bytes</td>
-          <td class="col-time">{{formatTime .ModTime $.TimeZone "2006-01-02 15:04:05"}}</td>
-          <td><a href="/admin/downloads/{{.Name}}" class="btn btn-small" download="{{.Name}}">Download</a></td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-    {{else}}
-    <p>No export files yet.</p>
-    {{end}}
-  </div>
-  {{end}}
-
-  {{if eq .ActiveTab "import"}}
-  <div class="form-section compact">
-    <h3>Import Data</h3>
-
-    <div class="form-grid form-grid-2">
-      <div>
-        <h4>Import from Rables Backup</h4>
-        <p>Upload a Rables export ZIP (database + media) or a bare SQLite database file. Existing rows with the same id are overwritten — including your own user account (name and password). Meant for restoring onto a fresh install or back onto the site the backup came from; importing into a site that already has its own content can fail on unique fields (slug, email, …).</p>
-        <form method="post" action="/admin/migrates/import" enctype="multipart/form-data">
-          <div class="field">
-            <label for="backup_file">Backup File</label>
-            <input type="file" name="backup_file" id="backup_file" accept=".zip,.db,.sqlite,.sqlite3">
-            <small>A Rables export ZIP or a rables.db file</small>
-          </div>
-
-          <button type="submit" class="btn btn-primary">Import From Backup</button>
-        </form>
-      </div>
-
-      <div>
-        <h4>Import from Rails Database</h4>
-        <p>Upload the SQLite database of a Rails rables site (e.g. production.sqlite3). Rows that already exist are skipped. Optionally attach a ZIP of the Rails storage/ directory to restore the media files.</p>
-        <form method="post" action="/admin/migrates/import_rails" enctype="multipart/form-data">
-          <div class="field">
-            <label for="db_file">Rails Database</label>
-            <input type="file" name="db_file" id="db_file" accept=".sqlite3,.db,.sqlite">
-            <small>The Rails rables SQLite database (production.sqlite3)</small>
-          </div>
-
-          <div class="field">
-            <label for="storage_file">Storage ZIP (optional)</label>
-            <input type="file" name="storage_file" id="storage_file" accept=".zip">
-            <small>A ZIP of the Rails storage/ directory with the uploaded files</small>
-          </div>
-
-          <button type="submit" class="btn btn-primary">Import From Rails</button>
-        </form>
-      </div>
-
-      <div>
-        <h4>Import from RSS</h4>
-        <p>Import articles from an RSS feed URL</p>
-        <form method="post" action="/admin/migrates/import_rss">
-          <div class="field">
-            <label for="url">RSS URL</label>
-            <input type="text" name="url" id="url" placeholder="https://example.com/feed.xml">
-          </div>
-
-          <div class="field checkbox">
-            <input type="checkbox" name="import_images" id="import_images" value="1">
-            <label for="import_images">Import Images</label>
-          </div>
-
-          <button type="submit" class="btn btn-primary">Import From RSS</button>
-        </form>
-      </div>
-    </div>
-  </div>
-  {{end}}
+<div class="page-head">
+  <h1 class="page-title">Migrate</h1>
 </div>
+
+<div class="toolbar">
+  <div class="tabs">
+    <a href="/admin/migrates?tab=export" class="tab {{if eq .ActiveTab "export"}}active{{end}}">Export</a>
+    <a href="/admin/migrates?tab=import" class="tab {{if eq .ActiveTab "import"}}active{{end}}">Import</a>
+  </div>
+</div>
+
+{{if eq .ActiveTab "export"}}
+<div class="card">
+  <h2 class="card-title">Export Data</h2>
+  <p class="card-desc">Export the full SQLite database together with all uploaded media files as a single ZIP. It contains everything (including credentials), so keep it safe.</p>
+  <form method="post" action="/admin/migrates/export">
+    <button type="submit" class="btn btn-primary">Export Database + Media</button>
+  </form>
+</div>
+
+<div class="table-card">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>File</th>
+        <th>Size</th>
+        <th>Created</th>
+        <th class="row-actions"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Exports}}
+      <tr>
+        <td><span class="truncate" title="{{.Name}}">{{.Name}}</span></td>
+        <td class="text-muted">{{.Size}} bytes</td>
+        <td><small class="text-muted">{{formatTime .ModTime $.TimeZone "2006-01-02 15:04:05"}}</small></td>
+        <td class="row-actions"><a href="/admin/downloads/{{.Name}}" class="row-btn" download="{{.Name}}">Download</a></td>
+      </tr>
+      {{else}}
+      <tr>
+        <td colspan="4" class="empty">No export files yet.</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{if eq .ActiveTab "import"}}
+<div class="card">
+  <h2 class="card-title">Import from Rables Backup</h2>
+  <p class="card-desc">Upload a Rables export ZIP (database + media) or a bare SQLite database file. Existing rows with the same id are overwritten — including your own user account (name and password). Meant for restoring onto a fresh install or back onto the site the backup came from; importing into a site that already has its own content can fail on unique fields (slug, email, …).</p>
+  <form method="post" action="/admin/migrates/import" enctype="multipart/form-data">
+    <div class="field">
+      <label for="backup_file">Backup File</label>
+      <input type="file" name="backup_file" id="backup_file" accept=".zip,.db,.sqlite,.sqlite3">
+      <small>A Rables export ZIP or a rables.db file</small>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Import From Backup</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2 class="card-title">Import from Rails Database</h2>
+  <p class="card-desc">Upload the SQLite database of a Rails rables site (e.g. production.sqlite3). Rows that already exist are skipped. Optionally attach a ZIP of the Rails storage/ directory to restore the media files.</p>
+  <form method="post" action="/admin/migrates/import_rails" enctype="multipart/form-data">
+    <div class="field">
+      <label for="db_file">Rails Database</label>
+      <input type="file" name="db_file" id="db_file" accept=".sqlite3,.db,.sqlite">
+      <small>The Rails rables SQLite database (production.sqlite3)</small>
+    </div>
+    <div class="field">
+      <label for="storage_file">Storage ZIP (optional)</label>
+      <input type="file" name="storage_file" id="storage_file" accept=".zip">
+      <small>A ZIP of the Rails storage/ directory with the uploaded files</small>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Import From Rails</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2 class="card-title">Import from RSS</h2>
+  <p class="card-desc">Import articles from an RSS feed URL.</p>
+  <form method="post" action="/admin/migrates/import_rss">
+    <div class="field">
+      <label for="url">RSS URL</label>
+      <input type="text" name="url" id="url" placeholder="https://example.com/feed.xml">
+    </div>
+    <div class="field-checkbox">
+      <input type="checkbox" name="import_images" id="import_images" value="1">
+      <label for="import_images">Import Images</label>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Import From RSS</button>
+    </div>
+  </form>
+</div>
+{{end}}
 {{end}}

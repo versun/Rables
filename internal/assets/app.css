@@ -1,8 +1,9 @@
-/* Rables core styles — single stylesheet for the public site and admin,
- * ported from the Rails app/assets/stylesheets/application.css + admin.css
- * (plan T28: core layout/flash/forms/comments/pagination/admin tables, not
- * a line-by-line port). Public accent color: #c04000; admin uses neutral
- * CSS variables mirroring admin.css.
+/* Rables core styles — stylesheet for the public site and the auth pages,
+ * ported from the Rails app/assets/stylesheets/application.css (plan T28:
+ * core layout/flash/forms/comments/pagination, not a line-by-line port).
+ * Public accent color: #c04000. The admin area has its own scoped stylesheet
+ * (admin.css, loaded by admin_layout.html); only the shared form/button base
+ * used by the auth pages (bare layout) remains here.
  */
 
 /* Reset & Base */
@@ -684,41 +685,6 @@ h2 {
     pointer-events: none;
 }
 
-/* Pagination (admin) */
-.pagination-wrapper {
-    display: flex;
-    justify-content: center;
-    margin-top: 1rem;
-    gap: 0.25rem;
-    flex-wrap: wrap;
-}
-
-.pagination-link,
-.pagination-current,
-.pagination-gap {
-    padding: 0.375rem 0.75rem;
-    font-size: 13px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-light);
-    text-decoration: none;
-}
-
-.pagination-link:hover {
-    background: var(--bg-hover);
-    color: var(--text);
-}
-
-.pagination-current {
-    background: var(--text);
-    border-color: var(--text);
-    color: var(--bg);
-}
-
-.pagination-gap {
-    border-color: transparent;
-}
-
 /* Theme Toggle Button */
 .theme-toggle {
     margin-top: 1rem;
@@ -839,22 +805,8 @@ h2 {
 .fa-spinner::before { content: "\25CC"; }
 .fa-envelope::before { content: "\2709"; }
 
-/* Admin sidebar icons. */
-.fa-newspaper::before { content: "\1F4F0"; }
-.fa-file::before { content: "\1F4C4"; }
-.fa-tags::before { content: "\1F3F7"; }
-.fa-comments::before { content: "\1F4AC"; }
-.fa-folder::before { content: "\1F4C1"; }
-.fa-arrow-right::before { content: "\2192"; }
-.fa-cog::before { content: "\2699"; }
-.fa-exchange::before { content: "\21C4"; }
-.fa-share-nodes::before { content: "\29C9"; }
-.fa-tasks::before { content: "\2611"; }
-.fa-box-archive::before { content: "\1F4E6"; }
-.fa-cloud-arrow-down::before { content: "\2B07"; }
-.fa-user::before { content: "\1F464"; }
-.fa-history::before { content: "\21BB"; }
-.fa-sign-out::before { content: "\27A1"; }
+/* Admin sidebar icons are inline SVG (see _admin.html); the text glyphs
+ * above remain for the public sidebar, share menu and JS loading states. */
 
 .fa-spin {
     animation: fa-spin 1s linear infinite;
@@ -875,206 +827,6 @@ h2 {
     animation: fa-spin 1s linear infinite;
 }
 
-/* ================= Admin (ported from admin.css) ================= */
-
-.admin-body {
-    color: var(--text);
-    font-size: 14px;
-}
-
-.admin-layout {
-    display: flex;
-    min-height: 100vh;
-}
-
-.admin-main {
-    flex: 1;
-    margin-left: 220px;
-    padding: var(--spacing);
-    max-width: calc(100% - 220px);
-}
-
-/* Admin sidebar (ported from admin.css). Rules are scoped under
- * .admin-body/.admin-sidebar because the public sidebar reuses the
- * sidebar-nav/nav-link class names. */
-.admin-layout > [data-controller~="sidebar"] {
-    display: contents;
-}
-
-.admin-body .mobile-menu-btn {
-    display: none;
-    position: fixed;
-    top: 1rem;
-    left: 1rem;
-    z-index: 1001;
-    width: 40px;
-    height: 40px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg);
-    color: var(--text);
-    cursor: pointer;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.admin-body .mobile-menu-btn:hover {
-    background: var(--bg-hover);
-}
-
-.admin-body .mobile-menu-btn i {
-    font-size: 18px;
-}
-
-.admin-body .sidebar-overlay {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 999;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-}
-
-.admin-body .sidebar-overlay.overlay-visible {
-    display: block;
-    opacity: 1;
-}
-
-.admin-sidebar {
-    width: 220px;
-    background: var(--bg);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    position: fixed;
-    height: 100vh;
-    overflow-y: auto;
-    z-index: 1000;
-    transition: transform 0.3s ease;
-}
-
-.admin-sidebar .sidebar-header {
-    padding: 1rem;
-    border-bottom: 1px solid var(--border);
-}
-
-.admin-sidebar .sidebar-header-content {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.admin-sidebar .sidebar-close-btn {
-    display: none;
-    width: 32px;
-    height: 32px;
-    border: none;
-    background: transparent;
-    color: var(--text);
-    cursor: pointer;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    font-size: 18px;
-}
-
-.admin-sidebar .sidebar-close-btn:hover {
-    background: var(--bg-hover);
-}
-
-.admin-sidebar .sidebar-brand {
-    font-weight: 600;
-    font-size: 16px;
-    color: var(--text);
-    text-decoration: none;
-}
-
-.admin-sidebar .sidebar-nav {
-    flex: 1;
-    padding: 0.5rem 0;
-}
-
-.admin-sidebar .nav-section {
-    margin-bottom: 1rem;
-}
-
-.admin-sidebar .nav-label {
-    padding: 0.5rem 1rem;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    color: var(--text-light);
-    letter-spacing: 0.05em;
-}
-
-/* Extra .sidebar-nav/.sidebar-footer scope keeps these ahead of the public
- * mobile .sidebar-nav .nav-link rules in the cascade. */
-.admin-sidebar .sidebar-nav .nav-link,
-.admin-sidebar .sidebar-footer .nav-link {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.5rem 1rem;
-    color: var(--text-light);
-    text-decoration: none;
-    font-size: 14px;
-    transition: all 0.15s;
-}
-
-.admin-sidebar .sidebar-nav .nav-link:hover,
-.admin-sidebar .sidebar-footer .nav-link:hover {
-    background: var(--bg-hover);
-    color: var(--text);
-}
-
-.admin-sidebar .nav-link i {
-    width: 16px;
-    font-size: 14px;
-}
-
-.admin-sidebar .nav-badge {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    background-color: #dc2626;
-    border-radius: 50%;
-    margin-left: auto;
-    flex-shrink: 0;
-}
-
-.admin-sidebar .sidebar-footer {
-    border-top: 1px solid var(--border);
-    padding: 0.5rem 0;
-}
-
-.admin-sidebar .sidebar-footer form {
-    margin: 0;
-}
-
-/* Logout is a POST form button styled as a nav link (overrides the global
- * button / button[type="submit"] rules). */
-.admin-sidebar .logout-btn {
-    width: 100%;
-    background: none;
-    border: none;
-    border-radius: 0;
-    cursor: pointer;
-    text-align: left;
-}
-
-.admin-sidebar .logout-link {
-    color: #dc2626;
-}
-
-.admin-sidebar .logout-link:hover {
-    background: #fee;
-}
-
 h1 {
     font-size: 20px;
     font-weight: 600;
@@ -1087,7 +839,8 @@ h4 {
     margin: 0 0 0.5rem 0;
 }
 
-/* Buttons */
+/* Buttons (shared base: auth pages on the bare layout; admin refines these
+ * under .admin-body in admin.css). */
 button,
 input[type="submit"],
 .btn {
@@ -1108,7 +861,6 @@ input[type="submit"]:hover,
     background: var(--bg-hover);
 }
 
-.btn-primary,
 button[type="submit"],
 input[type="submit"] {
     background: var(--text);
@@ -1116,29 +868,9 @@ input[type="submit"] {
     border-color: var(--text);
 }
 
-.btn-primary:hover,
 button[type="submit"]:hover,
 input[type="submit"]:hover {
     opacity: 0.9;
-}
-
-.btn-secondary {
-    background: var(--bg);
-    color: var(--text);
-}
-
-.btn-danger {
-    color: #dc2626;
-}
-
-.btn-danger:hover {
-    background: #fee;
-}
-
-.btn-sm,
-.btn-small {
-    padding: 0.25rem 0.5rem;
-    font-size: 12px;
 }
 
 /* The admin input[type="submit"] rule above would otherwise override the
@@ -1204,25 +936,9 @@ select:focus {
     outline: none;
 }
 
-lexxy-editor {
-    min-height: 400px;
-    display: block;
-}
-
 textarea {
     min-height: 60px;
     resize: vertical;
-}
-
-textarea.description-compact {
-    min-height: auto;
-    height: 2.2rem;
-    resize: vertical;
-}
-
-textarea.code-editor {
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 13px;
 }
 
 .field small,
@@ -1259,346 +975,12 @@ textarea.code-editor {
     margin: 0.25rem 0;
 }
 
-/* Form Sections */
-.form-section {
-    margin-bottom: 0.75rem;
-    padding-bottom: 0;
-}
-
-.form-section h3 {
-    font-size: 13px;
-    font-weight: 600;
-    margin: 0 0 0.4rem 0;
-    color: var(--text);
-}
-
-.form-grid {
-    display: grid;
-    gap: 0.75rem;
-}
-
-.form-grid-2 {
-    grid-template-columns: repeat(2, 1fr);
-}
-
-.form-grid-3 {
-    grid-template-columns: repeat(3, 1fr);
-}
-
-.form-section.compact {
-    margin-bottom: 0.5rem;
-}
-
-.form-section.compact h3 {
-    margin-bottom: 0.375rem;
-}
-
-.checkbox-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin-top: 0.375rem;
-}
-
-.checkbox-group .field.checkbox {
-    margin-bottom: 0;
-}
-
-.field input[type="checkbox"] {
-    width: auto;
-    margin-right: 0.5rem;
-}
-
-.field.checkbox {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-}
-
-.field.checkbox label {
-    margin: 0;
-}
-
-.field.checkbox.crosspost-field {
-    gap: 0.5rem;
-    flex-wrap: nowrap;
-}
-
-.field.checkbox.crosspost-field .crosspost-url-input {
-    width: 200px;
-    flex-shrink: 0;
-}
-
-.form-actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.75rem;
-    padding-top: 0;
-}
-
-/* Article Form Two-Column Layout */
-.article-form-layout {
-    display: flex;
-    gap: 1rem;
-    align-items: stretch;
-}
-
-.article-form-content-column {
-    flex: 1;
-    min-width: 0;
-}
-
-.article-form-sidebar-column {
-    width: 280px;
-    flex-shrink: 0;
-    padding-right: 0.25rem;
-}
-
-.article-form-reference-row {
-    display: flex;
-    gap: 1rem;
-    margin-top: 1rem;
-}
-
-.article-form-reference-row > .form-section {
-    flex: 1;
-}
-
-.field-row {
-    display: flex;
-    gap: 0.75rem;
-    align-items: flex-start;
-}
-
-.field-row .field {
-    flex: 1;
-}
-
-.info-text {
-    font-size: 11px;
-    color: var(--text-light);
-    margin-left: 0.25rem;
-}
-
 input:disabled,
 textarea:disabled,
 select:disabled {
     background: var(--bg-hover);
     color: var(--text-light);
     cursor: not-allowed;
-}
-
-/* Tables */
-.admin-table,
-.admin-comments table,
-.admin-pages table,
-.admin-tags table,
-.admin-subscribers table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 1rem 0;
-}
-
-table thead th {
-    text-align: left;
-    padding: 0.75rem;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-light);
-}
-
-table tbody td {
-    padding: 0.75rem;
-    border-bottom: 1px solid var(--border);
-    font-size: 14px;
-}
-
-table tbody tr:last-child td {
-    border-bottom: none;
-}
-
-table tbody tr:hover {
-    background: var(--bg-hover);
-}
-
-.compact-table thead th {
-    padding: 0.5rem;
-    font-size: 12px;
-}
-
-.compact-table tbody td {
-    padding: 0.5rem;
-    font-size: 13px;
-}
-
-.table-container {
-    overflow-x: auto;
-}
-
-.col-order { width: 50px; text-align: center; }
-.col-title { width: auto; min-width: 180px; }
-.col-slug { width: 150px; }
-.col-status { width: 100px; }
-.col-description { width: 200px; }
-.col-redirect { width: 150px; }
-.col-compact { width: 80px; }
-.col-date-compact { width: 80px; font-size: 12px; }
-.col-actions-compact { width: 90px; text-align: right; }
-.col-content { width: auto; min-width: 200px; }
-
-.text-muted {
-    color: var(--text-light);
-}
-
-/* Toolbar */
-.admin-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    margin-bottom: 1rem;
-    gap: 1rem;
-    flex-wrap: wrap;
-}
-
-/* Status Tabs */
-.status-tabs {
-    display: flex;
-    gap: 0.25rem;
-    flex-wrap: wrap;
-}
-
-.status-tab {
-    padding: 0.375rem 0.75rem;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-light);
-    text-decoration: none;
-    border-radius: 4px;
-    transition: all 0.15s;
-    border: 1px solid transparent;
-}
-
-.status-tab:hover {
-    color: var(--text);
-    background: var(--bg-hover);
-}
-
-.status-tab.active {
-    color: var(--text);
-    background: var(--bg);
-    border-color: var(--border);
-}
-
-.search-box {
-    display: flex;
-    align-items: center;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 0.375rem 0.75rem;
-    max-width: 400px;
-}
-
-.admin-search-form {
-    margin: 0;
-    margin-left: auto;
-}
-
-.search-box .search-input {
-    border: none;
-    outline: none;
-    flex: 1;
-    font-size: 14px;
-    padding: 0;
-}
-
-/* Batch actions bar (shown by batch-selection JS once boxes are checked) */
-.batch-actions {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-/* Status badges */
-.status-badge {
-    display: inline-block;
-    padding: 0.25rem 0.5rem;
-    font-size: 12px;
-    border-radius: 3px;
-    background: var(--bg-hover);
-}
-
-.status-badge.status-publish { background: #d1fae5; color: #065f46; }
-.status-badge.status-draft { background: #f3f4f6; color: #4b5563; }
-.status-badge.status-schedule { background: #fed7aa; color: #92400e; }
-.status-badge.status-trash { background: #fee; color: #991b1b; }
-.status-badge.status-shared { background: #dbeafe; color: #1e40af; }
-
-.badge {
-    display: inline-block;
-    padding: 0.25rem 0.5rem;
-    font-size: 12px;
-    border-radius: 3px;
-    background: var(--bg-hover);
-}
-
-/* Actions */
-.action-buttons {
-    display: flex;
-    gap: 0.125rem;
-    flex-wrap: wrap;
-}
-
-.action-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 24px;
-    min-height: 24px;
-    padding: 2px 6px;
-    border-radius: 3px;
-    text-decoration: none;
-    color: var(--text-light);
-    font-size: 12px;
-    border: none;
-    background: transparent;
-}
-
-.action-btn:hover {
-    background: var(--bg-hover);
-    color: var(--text);
-}
-
-.title-link {
-    color: var(--text);
-    text-decoration: none;
-    font-weight: 500;
-}
-
-.title-link:hover {
-    text-decoration: underline;
-}
-
-.admin-main a,
-.admin-articles a,
-.admin-pages a,
-.admin-comments a,
-.admin-tags a,
-.admin-subscribers a {
-    color: var(--text);
-}
-
-.no-content-row {
-    text-align: center;
-    padding: 3rem 1rem;
-    color: var(--text-light);
-}
-
-code {
-    font-family: "Courier New", monospace;
-    font-size: 12px;
-    color: var(--text-light);
 }
 
 /* Password toggle */
@@ -1722,58 +1104,6 @@ code {
         align-items: flex-start;
     }
 
-    .article-form-layout {
-        flex-direction: column;
-    }
-
-    .article-form-sidebar-column {
-        width: 100%;
-    }
-
-    .article-form-reference-row {
-        flex-direction: column;
-    }
-
-    .admin-toolbar {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0.75rem;
-    }
-
-    /* Admin sidebar on mobile (ported from admin.css) */
-    .admin-body .mobile-menu-btn {
-        display: flex;
-    }
-
-    .admin-sidebar {
-        transform: translateX(-100%);
-        width: 280px;
-        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
-    }
-
-    .admin-sidebar.sidebar-open {
-        transform: translateX(0);
-    }
-
-    .admin-sidebar .sidebar-close-btn {
-        display: flex;
-    }
-
-    .admin-main {
-        margin-left: 0;
-        max-width: 100%;
-        padding: 3.5rem 0.75rem 1rem;
-    }
-
-    .admin-search-form {
-        margin-left: 0;
-    }
-
-    .status-tabs {
-        overflow-x: auto;
-        flex-wrap: nowrap;
-    }
-
     .share-menu {
         right: auto;
         left: 0;
@@ -1790,18 +1120,6 @@ code {
     }
 
     .site-container .sidebar {
-        width: 100%;
-        max-width: 320px;
-    }
-
-    .admin-body .mobile-menu-btn {
-        top: 0.5rem;
-        left: 0.5rem;
-        width: 36px;
-        height: 36px;
-    }
-
-    .admin-sidebar {
         width: 100%;
         max-width: 320px;
     }

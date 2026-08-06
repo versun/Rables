@@ -1,5 +1,10 @@
 {{define "title"}}New Article - Admin{{end}}
 {{define "content"}}
-<h3>New Posts</h3>
+<div class="page-head">
+  <h1 class="page-title">New Post</h1>
+  <div class="page-actions">
+    <a href="/admin/posts" class="btn">Back to Posts</a>
+  </div>
+</div>
 {{template "article_form" .}}
 {{end}}

@@ -9,11 +9,11 @@
     </div>
   {{end}}
 
-  <div class="article-form-layout">
-    <div class="article-form-content-column">
-      <div class="form-section compact">
-        <h3>Content</h3>
+  <div class="editor-layout">
+    <div class="editor-main">
+      <div class="card">
         <div class="field">
+          <label for="content_type_select">Content type</label>
           <select name="content_type" id="content_type_select" required data-content-form-target="contentTypeSelect" data-action="change->content-form#toggleContentType">
             <option value="rich_text" {{if eq .Form.ContentType "rich_text"}}selected{{end}}>Rich Text</option>
             <option value="markdown" {{if eq .Form.ContentType "markdown"}}selected{{end}}>Markdown</option>
@@ -28,71 +28,68 @@
         </div>
         <div class="field" id="html_content_field" data-content-form-target="htmlContentField"{{if ne .Form.ContentType "html"}} style="display: none;"{{end}}>
           <textarea name="html_content" rows="10" placeholder="Enter your HTML code here..." class="code-editor">{{.Form.HTMLContent}}</textarea>
-          <small>Raw HTML code will be rendered directly</small>
+          <small class="help-text">Raw HTML code will be rendered directly</small>
         </div>
       </div>
 
-      <div class="article-form-reference-row">
-        <div class="form-section compact" data-controller="source-reference">
-          <h3>Source Reference</h3>
-          <div class="field">
-            <div style="display: flex; gap: 0.5rem; align-items: flex-start;">
-              <input type="text" name="source_url" value="{{.Form.SourceURL}}" placeholder="Source URL" style="flex: 1;" data-source-reference-target="url">
-              <button type="button" class="btn btn-secondary" data-action="click->source-reference#fetchTwitter" data-source-reference-target="fetchBtn" style="white-space: nowrap;">
-                <i class="fab fa-twitter"></i> Fetch
-              </button>
-            </div>
-          </div>
-          <div class="field">
-            <input type="text" name="source_author" value="{{.Form.SourceAuthor}}" placeholder="Author / Source" data-source-reference-target="author">
-          </div>
-          <div class="field">
-            <textarea name="source_content" rows="2" placeholder="Quote Content" data-source-reference-target="content">{{.Form.SourceContent}}</textarea>
-          </div>
-          <div data-source-reference-target="status" style="display: none; padding: 0.5rem; border-radius: 4px; margin-top: 0.5rem;"></div>
+      <div class="card" data-controller="source-reference">
+        <h2 class="card-title">Source Reference</h2>
+        <div class="field url-fetch-row">
+          <input type="text" name="source_url" value="{{.Form.SourceURL}}" placeholder="Source URL" data-source-reference-target="url">
+          <button type="button" class="btn" data-action="click->source-reference#fetchTwitter" data-source-reference-target="fetchBtn">Fetch</button>
         </div>
+        <div class="field">
+          <input type="text" name="source_author" value="{{.Form.SourceAuthor}}" placeholder="Author / Source" data-source-reference-target="author">
+        </div>
+        <div class="field">
+          <textarea name="source_content" rows="2" placeholder="Quote Content" data-source-reference-target="content">{{.Form.SourceContent}}</textarea>
+        </div>
+        <div class="source-status" data-source-reference-target="status" style="display: none;"></div>
+      </div>
 
-        <div class="form-section compact">
-          <h3>SEO Meta Tags</h3>
-          <div class="field-row">
-            <div class="field">
-              <input type="text" name="meta_title" value="{{.Form.MetaTitle}}" placeholder="Meta Title">
-            </div>
-            <div class="field">
-              <input type="text" name="meta_image" value="{{.Form.MetaImage}}" placeholder="Meta Image URL (1200x630)">
-            </div>
+      <div class="card">
+        <h2 class="card-title">SEO Meta Tags</h2>
+        <div class="field-row">
+          <div class="field">
+            <input type="text" name="meta_title" value="{{.Form.MetaTitle}}" placeholder="Meta Title">
           </div>
           <div class="field">
-            <textarea name="meta_description" rows="2" placeholder="Meta Description (160 characters max)">{{.Form.MetaDescription}}</textarea>
+            <input type="text" name="meta_image" value="{{.Form.MetaImage}}" placeholder="Meta Image URL (1200x630)">
           </div>
+        </div>
+        <div class="field">
+          <textarea name="meta_description" rows="2" placeholder="Meta Description (160 characters max)">{{.Form.MetaDescription}}</textarea>
         </div>
       </div>
     </div>
 
-    <div class="article-form-sidebar-column">
-      <div class="form-section compact">
+    <div class="editor-side">
+      <div class="card">
         <div class="field">
-          <input type="text" name="title" value="{{.Form.Title}}" placeholder="Title">
+          <label for="article_title">Title</label>
+          <input type="text" id="article_title" name="title" value="{{.Form.Title}}" placeholder="Title">
         </div>
         <div class="field">
-          <input type="text" name="slug" value="{{.Form.Slug}}" placeholder="Slug">
+          <label for="article_slug">Slug</label>
+          <input type="text" id="article_slug" name="slug" value="{{.Form.Slug}}" placeholder="Slug">
         </div>
         <div class="field">
-          <input type="datetime-local" name="created_at" value="{{.Form.CreatedAtLocal}}" placeholder="Created At">
+          <label for="article_created_at">Created At</label>
+          <input type="datetime-local" id="article_created_at" name="created_at" value="{{.Form.CreatedAtLocal}}">
         </div>
         <div class="field">
-          <input type="text" name="tag_list" value="{{.Form.TagList}}" placeholder="Tags">
+          <label for="article_tag_list">Tags</label>
+          <input type="text" id="article_tag_list" name="tag_list" value="{{.Form.TagList}}" placeholder="tag1, tag2">
+        </div>
+        <div class="field">
+          <label for="article_description">Description</label>
+          <textarea id="article_description" name="description" rows="2" placeholder="Description">{{.Form.Description}}</textarea>
         </div>
       </div>
 
-      <div class="form-section compact">
+      <div class="card">
         <div class="field">
-          <textarea name="description" rows="1" class="description-compact" style="min-height: 2rem;" placeholder="Description">{{.Form.Description}}</textarea>
-        </div>
-      </div>
-
-      <div class="form-section compact">
-        <div class="field">
+          <label for="status_select">Status</label>
           <select name="status" id="status_select" required data-action="change->content-form#toggleScheduledAt">
             <option value="draft" {{if eq .Form.Status "draft"}}selected{{end}}>draft</option>
             <option value="publish" {{if eq .Form.Status "publish"}}selected{{end}}>publish</option>
@@ -102,65 +99,62 @@
           </select>
         </div>
         <div class="field" id="scheduled_at" data-content-form-target="scheduledAt"{{if ne .Form.Status "schedule"}} style="display: none;"{{end}}>
-          <input type="datetime-local" name="scheduled_at" value="{{.Form.ScheduledAtLocal}}" placeholder="Schedule For">
+          <label for="article_scheduled_at">Schedule For</label>
+          <input type="datetime-local" id="article_scheduled_at" name="scheduled_at" value="{{.Form.ScheduledAtLocal}}">
         </div>
-
-        <div class="field">
+        <div class="field-checkbox">
           <input type="hidden" name="comment" value="0">
-          <label style="display: inline-block; font-weight: bold;">
-            <input type="checkbox" name="comment" value="1" {{if .Form.Comment}}checked{{end}} style="margin-right: 0.5rem;">
-            Enable Comments
-          </label>
+          <input type="checkbox" id="article_comment" name="comment" value="1" {{if .Form.Comment}}checked{{end}}>
+          <label for="article_comment">Enable Comments</label>
         </div>
       </div>
 
-      <div class="form-section compact">
-        <div class="checkbox-group">
-          <div class="field checkbox">
-            <input type="hidden" name="send_newsletter" value="0">
-            <input type="checkbox" name="send_newsletter" value="1" {{if .Form.SendNewsletter}}checked{{end}} {{if not .NewsletterEnabled}}disabled{{end}}>
-            Send Newsletter
-            {{if not .NewsletterEnabled}}<span class="info-text">(not enabled)</span>{{end}}
-          </div>
-
-          <div class="field checkbox crosspost-field">
-            <input type="hidden" name="crosspost_mastodon" value="0">
-            <input type="checkbox" name="crosspost_mastodon" value="1" {{if index .Form.Crosspost "mastodon"}}checked{{end}} {{if not .MastodonEnabled}}disabled{{end}}>
-            Mastodon
-            {{if not .MastodonEnabled}}<span class="info-text">(off)</span>{{end}}
-            <input type="text" name="social_url_mastodon" value="{{index .Form.SocialURLs "mastodon"}}" placeholder="Mastodon URL" class="crosspost-url-input">
-          </div>
-
-          <div class="field checkbox crosspost-field">
-            <input type="hidden" name="crosspost_twitter" value="0">
-            <input type="checkbox" name="crosspost_twitter" value="1" {{if index .Form.Crosspost "twitter"}}checked{{end}} {{if not .TwitterEnabled}}disabled{{end}}>
-            Twitter
-            {{if not .TwitterEnabled}}<span class="info-text">(off)</span>{{end}}
-            <input type="text" name="social_url_twitter" value="{{index .Form.SocialURLs "twitter"}}" placeholder="Twitter URL" class="crosspost-url-input">
-          </div>
-
-          <div class="field checkbox crosspost-field">
-            <input type="hidden" name="crosspost_bluesky" value="0">
-            <input type="checkbox" name="crosspost_bluesky" value="1" {{if index .Form.Crosspost "bluesky"}}checked{{end}} {{if not .BlueskyEnabled}}disabled{{end}}>
-            Bluesky
-            {{if not .BlueskyEnabled}}<span class="info-text">(off)</span>{{end}}
-            <input type="text" name="social_url_bluesky" value="{{index .Form.SocialURLs "bluesky"}}" placeholder="Bluesky URL" class="crosspost-url-input">
-          </div>
-
-          <div class="field checkbox crosspost-field">
-            <input type="hidden" name="crosspost_xiaohongshu" value="0">
-            <input type="checkbox" name="crosspost_xiaohongshu" value="1" {{if index .Form.Crosspost "xiaohongshu"}}checked{{end}} {{if not .XiaohongshuEnabled}}disabled{{end}}>
-            Xiaohongshu
-            {{if not .XiaohongshuEnabled}}<span class="info-text">(off)</span>{{end}}
-            <input type="text" name="social_url_xiaohongshu" value="{{index .Form.SocialURLs "xiaohongshu"}}" placeholder="Xiaohongshu URL" class="crosspost-url-input">
-          </div>
+      <div class="card">
+        <h2 class="card-title">Distribution</h2>
+        <div class="field-checkbox">
+          <input type="hidden" name="send_newsletter" value="0">
+          <input type="checkbox" id="send_newsletter" name="send_newsletter" value="1" {{if .Form.SendNewsletter}}checked{{end}} {{if not .NewsletterEnabled}}disabled{{end}}>
+          <label for="send_newsletter">Send Newsletter</label>
+          {{if not .NewsletterEnabled}}<small class="text-muted">(not enabled)</small>{{end}}
         </div>
+
+        <div class="crosspost-row">
+          <input type="hidden" name="crosspost_mastodon" value="0">
+          <input type="checkbox" id="crosspost_mastodon" name="crosspost_mastodon" value="1" {{if index .Form.Crosspost "mastodon"}}checked{{end}} {{if not .MastodonEnabled}}disabled{{end}}>
+          <label for="crosspost_mastodon">Mastodon</label>
+          {{if not .MastodonEnabled}}<small class="text-muted">(off)</small>{{end}}
+          <input type="text" name="social_url_mastodon" value="{{index .Form.SocialURLs "mastodon"}}" placeholder="Mastodon URL" class="crosspost-url">
+        </div>
+
+        <div class="crosspost-row">
+          <input type="hidden" name="crosspost_twitter" value="0">
+          <input type="checkbox" id="crosspost_twitter" name="crosspost_twitter" value="1" {{if index .Form.Crosspost "twitter"}}checked{{end}} {{if not .TwitterEnabled}}disabled{{end}}>
+          <label for="crosspost_twitter">Twitter</label>
+          {{if not .TwitterEnabled}}<small class="text-muted">(off)</small>{{end}}
+          <input type="text" name="social_url_twitter" value="{{index .Form.SocialURLs "twitter"}}" placeholder="Twitter URL" class="crosspost-url">
+        </div>
+
+        <div class="crosspost-row">
+          <input type="hidden" name="crosspost_bluesky" value="0">
+          <input type="checkbox" id="crosspost_bluesky" name="crosspost_bluesky" value="1" {{if index .Form.Crosspost "bluesky"}}checked{{end}} {{if not .BlueskyEnabled}}disabled{{end}}>
+          <label for="crosspost_bluesky">Bluesky</label>
+          {{if not .BlueskyEnabled}}<small class="text-muted">(off)</small>{{end}}
+          <input type="text" name="social_url_bluesky" value="{{index .Form.SocialURLs "bluesky"}}" placeholder="Bluesky URL" class="crosspost-url">
+        </div>
+
+        <div class="crosspost-row">
+          <input type="hidden" name="crosspost_xiaohongshu" value="0">
+          <input type="checkbox" id="crosspost_xiaohongshu" name="crosspost_xiaohongshu" value="1" {{if index .Form.Crosspost "xiaohongshu"}}checked{{end}} {{if not .XiaohongshuEnabled}}disabled{{end}}>
+          <label for="crosspost_xiaohongshu">Xiaohongshu</label>
+          {{if not .XiaohongshuEnabled}}<small class="text-muted">(off)</small>{{end}}
+          <input type="text" name="social_url_xiaohongshu" value="{{index .Form.SocialURLs "xiaohongshu"}}" placeholder="Xiaohongshu URL" class="crosspost-url">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </div>
-  </div>
-
-  <div class="form-actions">
-    <input type="submit" value="Save">
   </div>
 </form>
 {{end}}

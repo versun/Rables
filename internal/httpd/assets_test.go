@@ -21,6 +21,7 @@ func TestAssetsRoutes(t *testing.T) {
 	}{
 		{"/assets/app.js", "text/javascript; charset=utf-8"},
 		{"/assets/app.css", "text/css; charset=utf-8"},
+		{"/assets/admin.css", "text/css; charset=utf-8"},
 		{"/assets/lexxy.min.js", "text/javascript; charset=utf-8"},
 		{"/assets/lexxy.css", "text/css; charset=utf-8"},
 	}

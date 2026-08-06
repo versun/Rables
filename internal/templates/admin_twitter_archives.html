@@ -1,117 +1,112 @@
 {{define "title"}}Twitter Archive|Admin{{end}}
 {{define "content"}}
-<div class="admin-container">
-  <h1>Twitter Archive</h1>
-  <div class="form-section compact">
-    <small>Upload a Twitter export ZIP to rebuild the public archive. A successful import replaces the current archive.</small>
-
-    <div class="field">
-      <strong>Total archived items:</strong>
-      {{.Counts.Total}}
-      ({{.Counts.Tweets}} original,
-      {{.Counts.Replies}} replies,
-      {{.Counts.RetweetQuote}} retweets / quotes,
-      {{.Counts.Followers}} followers,
-      {{.Counts.Following}} following,
-      {{.Counts.Likes}} likes)
-    </div>
-
-    {{if .HasLastImported}}
-    <div class="field">
-      <strong>Last imported:</strong>
-      {{formatTime .LastImportedAt .TimeZone "January 2, 2006 15:04"}}
-    </div>
-    {{end}}
-
-    <div class="field">
-      <a href="{{.PublicPath}}" class="btn btn-secondary">Open Public Archive</a>
-    </div>
-
-    <form method="post" action="/admin/twitter_archives" enctype="multipart/form-data">
-      <div class="field">
-        <label for="twitter_archive_file">Twitter Export ZIP</label>
-        <input type="file" name="twitter_archive[file]" id="twitter_archive_file" accept=".zip,application/zip">
-        <small>The archive is uploaded to the server first; the import then runs as a background job.</small>
-      </div>
-
-      <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Import Archive</button>
-      </div>
-    </form>
+<div class="page-head">
+  <h1 class="page-title">Twitter Archive</h1>
+  <div class="page-actions">
+    <a href="{{.PublicPath}}" class="btn">Open Public Archive</a>
   </div>
+</div>
 
-  <div class="form-section compact twitter-archive-import-history" data-twitter-archive-imports data-poll-url="/admin/twitter_archives">
-    <h3>Import History</h3>
+<div class="card">
+  <h2 class="card-title">Import Archive</h2>
+  <p class="card-desc">Upload a Twitter export ZIP to rebuild the public archive. A successful import replaces the current archive.</p>
 
-    {{if .Imports}}
-    <table class="admin-activity-table twitter-archive-import-table">
-      <thead>
-        <tr>
-          <th class="col-time">Queued</th>
-          <th>File</th>
-          <th>Status</th>
-          <th>Progress</th>
-          <th>Counts</th>
-          <th>Error</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Imports}}
-        <tr data-import-id="{{.ID}}" data-import-status="{{.Status}}" data-import-progress="{{.Progress}}">
-          <td class="col-time">
-            <code title="{{formatTime .QueuedAt $.TimeZone "2006-01-02T15:04:05Z07:00"}}">{{formatTime .QueuedAt $.TimeZone "2006-01-02 15:04:05"}}</code>
-          </td>
-          <td>
-            <span class="truncate" title="{{.SourceFilename}}">{{.SourceFilename}}</span>
-          </td>
-          <td>
-            <span class="twitter-archive-import-status twitter-archive-import-status--{{.Status}}">{{.StatusLabel}}</span>
-            {{if .StatusMessage.Valid}}
-            <div class="twitter-archive-import-note">{{.StatusMessage.String}}</div>
-            {{end}}
-          </td>
-          <td>
-            <strong>{{.Progress}}%</strong>
-            {{if or .StartedAt.Valid .FinishedAt.Valid}}
-            <div class="twitter-archive-import-note">
-              {{if .StartedAt.Valid}}
-              Started {{formatTime .StartedAt.Int64 $.TimeZone "2006-01-02 15:04:05"}}
-              {{end}}
-              {{if .FinishedAt.Valid}}
-              <br>
-              Finished {{formatTime .FinishedAt.Int64 $.TimeZone "2006-01-02 15:04:05"}}
-              {{end}}
-            </div>
-            {{end}}
-          </td>
-          <td>
-            {{if gt .TotalItemsCount 0}}
-            <div class="twitter-archive-import-note">
-              {{.TotalItemsCount}} total
-              <br>
-              {{.TweetsCount}} tweets,
-              {{.FollowersCount}} followers,
-              {{.FollowingCount}} following,
-              {{.LikesCount}} likes
-            </div>
-            {{else}}
-            <span class="twitter-archive-import-note">Pending</span>
-            {{end}}
-          </td>
-          <td>
-            {{if .ErrorMessage.Valid}}
-            <span class="twitter-archive-import-error">{{.ErrorMessage.String}}</span>
-            {{else}}
-            <span class="twitter-archive-import-note">None</span>
-            {{end}}
-          </td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-    {{else}}
-    <p class="twitter-archive-import-note">No imports have been queued yet.</p>
-    {{end}}
-  </div>
+  <p class="stat-line">
+    <strong>Total archived items:</strong>
+    {{.Counts.Total}}
+    <span class="text-muted">({{.Counts.Tweets}} original, {{.Counts.Replies}} replies, {{.Counts.RetweetQuote}} retweets / quotes, {{.Counts.Followers}} followers, {{.Counts.Following}} following, {{.Counts.Likes}} likes)</span>
+  </p>
+  {{if .HasLastImported}}
+  <p class="stat-line">
+    <strong>Last imported:</strong>
+    <span class="text-muted">{{formatTime .LastImportedAt .TimeZone "January 2, 2006 15:04"}}</span>
+  </p>
+  {{end}}
+
+  <form method="post" action="/admin/twitter_archives" enctype="multipart/form-data">
+    <div class="field">
+      <label for="twitter_archive_file">Twitter Export ZIP</label>
+      <input type="file" name="twitter_archive[file]" id="twitter_archive_file" accept=".zip,application/zip">
+      <small>The archive is uploaded to the server first; the import then runs as a background job.</small>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Import Archive</button>
+    </div>
+  </form>
+</div>
+
+<h2 class="section-title">Import History</h2>
+<div class="table-card" data-twitter-archive-imports data-poll-url="/admin/twitter_archives">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Queued</th>
+        <th>File</th>
+        <th>Status</th>
+        <th>Progress</th>
+        <th>Counts</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Imports}}
+      <tr data-import-id="{{.ID}}" data-import-status="{{.Status}}" data-import-progress="{{.Progress}}">
+        <td>
+          <code title="{{formatTime .QueuedAt $.TimeZone "2006-01-02T15:04:05Z07:00"}}">{{formatTime .QueuedAt $.TimeZone "2006-01-02 15:04:05"}}</code>
+        </td>
+        <td>
+          <span class="truncate" title="{{.SourceFilename}}">{{.SourceFilename}}</span>
+        </td>
+        <td>
+          {{if eq .Status "done"}}
+            <span class="badge badge-success">{{.StatusLabel}}</span>
+          {{else if eq .Status "failed"}}
+            <span class="badge badge-danger">{{.StatusLabel}}</span>
+          {{else if eq .Status "running"}}
+            <span class="badge badge-info">{{.StatusLabel}}</span>
+          {{else}}
+            <span class="badge">{{.StatusLabel}}</span>
+          {{end}}
+          {{if .StatusMessage.Valid}}
+          <div class="text-muted"><small>{{.StatusMessage.String}}</small></div>
+          {{end}}
+        </td>
+        <td>
+          <strong>{{.Progress}}%</strong>
+          {{if or .StartedAt.Valid .FinishedAt.Valid}}
+          <div class="text-muted">
+            <small>
+              {{if .StartedAt.Valid}}Started {{formatTime .StartedAt.Int64 $.TimeZone "2006-01-02 15:04:05"}}{{end}}
+              {{if .FinishedAt.Valid}}<br>Finished {{formatTime .FinishedAt.Int64 $.TimeZone "2006-01-02 15:04:05"}}{{end}}
+            </small>
+          </div>
+          {{end}}
+        </td>
+        <td>
+          {{if gt .TotalItemsCount 0}}
+          <small class="text-muted">
+            {{.TotalItemsCount}} total<br>
+            {{.TweetsCount}} tweets, {{.FollowersCount}} followers,<br>
+            {{.FollowingCount}} following, {{.LikesCount}} likes
+          </small>
+          {{else}}
+          <small class="text-muted">Pending</small>
+          {{end}}
+        </td>
+        <td>
+          {{if .ErrorMessage.Valid}}
+          <small class="text-danger">{{.ErrorMessage.String}}</small>
+          {{else}}
+          <small class="text-muted">None</small>
+          {{end}}
+        </td>
+      </tr>
+      {{else}}
+      <tr>
+        <td colspan="6" class="empty">No imports have been queued yet.</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
 </div>
 {{end}}
