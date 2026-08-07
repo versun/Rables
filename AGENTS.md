@@ -84,6 +84,7 @@ Key jobs in `app/jobs/`:
 - `FetchSocialCommentsJob`: Import comments from social posts
 - `PublishScheduledArticlesJob`: Auto-publish scheduled articles
 - `SyncTwitterJob`: Archive new tweets as articles (recurring wakes every 15 minutes; actual sync follows the `sync_schedule` configured in Admin → Twitter Sync)
+- `ExportJob`: Run admin-triggered exports in the background (backup ZIP via `SiteBackup`, Go migration package via `SiteExport`), recording status on the `Export` row
 
 ### Admin Interface
 All admin routes under `/admin/` namespace. Key controllers handle:
@@ -92,6 +93,8 @@ All admin routes under `/admin/` namespace. Key controllers handle:
 - Settings, newsletter config, crosspost config
 - Static file management, redirects
 - Backup/Restore (full SQLite + uploads ZIP via `SiteBackup`) and RSS import
+- One-way full-site export for the Go rewrite migration via `SiteExport` (`bin/rails site:export[output_dir]`); the output package contract is documented in `docs/go-migration-prompt.md`
+- Both exports run in the background via `ExportJob` when triggered from Admin → Migrate; artifacts are ZIPs in `tmp/exports/` (tracked by `Export` records; `CleanOldExportsJob` purges old artifacts and marks stuck pending/running rows failed) and download via `/admin/exports/:id/download`
 
 ### Key Models
 - `Setting`: Site-wide configuration (singleton pattern via `first_or_create`)

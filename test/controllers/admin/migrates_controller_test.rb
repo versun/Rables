@@ -35,18 +35,55 @@ class Admin::MigratesControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to new_session_path
   end
 
-  test "should handle export operation" do
+  test "should enqueue a backup export" do
     sign_in(@user)
-    zip_path = create_temp_zip_file
 
-    SiteBackup.stub(:export, Pathname.new(zip_path)) do
-      post admin_migrates_path, params: { operation_type: "export" }
+    assert_difference -> { Export.count }, 1 do
+      assert_enqueued_with(job: ExportJob) do
+        post admin_migrates_path, params: { operation_type: "export" }
+      end
     end
 
+    export = Export.last
+    assert_equal "backup", export.kind
+    assert export.pending?
+    assert_redirected_to admin_migrates_path(tab: "export")
+    assert_match "background", flash[:notice]
+  end
+
+  test "should enqueue a go migration export" do
+    sign_in(@user)
+
+    assert_enqueued_with(job: ExportJob) do
+      post admin_migrates_path, params: { operation_type: "site_export" }
+    end
+
+    assert_equal "site_export", Export.last.kind
+    assert_redirected_to admin_migrates_path(tab: "export")
+  end
+
+  test "export tab lists recent exports" do
+    sign_in(@user)
+    Export.create!(kind: "backup", status: :completed, filename: "done.zip", byte_size: 1024)
+
+    get admin_migrates_path(tab: "export")
+
     assert_response :success
-    assert_equal "application/zip", response.media_type
-    assert_match "attachment", response.headers["Content-Disposition"]
-    assert_match "test_backup.zip", response.headers["Content-Disposition"]
+    assert_select "td", text: "Full Backup"
+    assert_select "td", text: /completed/
+  end
+
+  test "export tab fails stuck pending/running exports on visit" do
+    sign_in(@user)
+    stuck = Export.create!(kind: "backup", status: :running)
+    stuck.update_column(:updated_at, (Export::STALE_AFTER + 1.minute).ago)
+    fresh = Export.create!(kind: "backup", status: :running)
+
+    get admin_migrates_path(tab: "export")
+
+    assert_response :success
+    assert stuck.reload.failed?
+    assert fresh.reload.running?
   end
 
   test "should restore from a backup file" do

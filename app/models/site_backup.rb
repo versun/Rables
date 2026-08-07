@@ -5,6 +5,12 @@ require "pathname"
 require "securerandom"
 require "zip"
 
+# Active Storage loads each service adapter on demand when building the
+# configured service, so the Disk adapter is not loaded at all on installs
+# that use a different service (e.g. S3). Require it explicitly: the constant
+# is referenced below to detect the local disk service.
+require "active_storage/service/disk_service"
+
 # Full-site backup: a ZIP archive holding a snapshot of the primary SQLite
 # database (database.sqlite3) plus every uploaded file from the local
 # ActiveStorage disk service (storage/).
@@ -61,7 +67,7 @@ class SiteBackup
 
     snapshot_database(work_dir.join(DATABASE_ENTRY))
     copy_storage(work_dir.join(STORAGE_ENTRY))
-    create_zip(work_dir, zip_path)
+    ZipArchiver.zip_directory(work_dir, zip_path)
     zip_path
   rescue StandardError
     FileUtils.rm_f(zip_path) if zip_path
@@ -118,21 +124,6 @@ class SiteBackup
       next if entry.file? && entry.basename.to_s.match?(SQLITE_FILE_PATTERN)
 
       FileUtils.cp_r(entry, destination, preserve: true)
-    end
-  end
-
-  def create_zip(source_dir, zip_path)
-    Zip::OutputStream.open(zip_path.to_s) do |zos|
-      Dir.glob(source_dir.join("**", "*")).sort.each do |file|
-        next unless File.file?(file)
-
-        relative_path = Pathname.new(file).relative_path_from(source_dir).to_s
-        relative_path = relative_path.tr("\\", "/")
-        relative_path = relative_path.encode("UTF-8", invalid: :replace, undef: :replace, replace: "_")
-
-        zos.put_next_entry(relative_path)
-        File.open(file, "rb") { |f| IO.copy_stream(f, zos) }
-      end
     end
   end
 

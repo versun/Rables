@@ -87,6 +87,11 @@ Rails.application.routes.draw do
       end
     end
     resources :migrates, only: [ :index, :create ]
+    resources :exports, only: [] do
+      member do
+        get :download
+      end
+    end
 
     resources :crossposts, only: [ :index, :update ] do
       member do

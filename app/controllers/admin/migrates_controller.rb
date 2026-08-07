@@ -1,6 +1,12 @@
 class Admin::MigratesController < Admin::BaseController
   def index
     @active_tab = migrate_tab(params[:tab])
+    if @active_tab == "export"
+      # Fail stuck pending/running rows right away (CleanOldExportsJob only
+      # runs daily); otherwise the tab would keep auto-refreshing for hours.
+      Export.fail_stale!
+      @exports = Export.order(created_at: :desc).limit(10)
+    end
   end
 
   def create
@@ -8,7 +14,9 @@ class Admin::MigratesController < Admin::BaseController
 
     case operation_type
     when "export"
-      handle_export
+      enqueue_export(:backup)
+    when "site_export"
+      enqueue_export(:site_export)
     when "import"
       handle_import
     else
@@ -27,21 +35,22 @@ class Admin::MigratesController < Admin::BaseController
 
   private
 
-  def handle_export
-    zip_path = SiteBackup.export
+  # Both exports run in the background (see ExportJob); the artifact shows up
+  # in the list on the export tab when it completes.
+  def enqueue_export(kind)
+    export = Export.create!(kind: kind)
+    ExportJob.perform_later(export.id)
 
     ActivityLog.log!(
-      action: :completed,
+      action: :started,
       target: :export,
       level: :info,
-      format: "sqlite",
-      filename: zip_path.basename.to_s
+      format: kind
     )
 
-    send_file zip_path,
-              filename: zip_path.basename.to_s,
-              type: "application/zip",
-              disposition: "attachment"
+    label = kind.to_sym == :backup ? "Backup" : "Go migration"
+    redirect_to admin_migrates_path(tab: "export"),
+      notice: "#{label} export started in the background. This page refreshes automatically while it runs."
   end
 
   def handle_import

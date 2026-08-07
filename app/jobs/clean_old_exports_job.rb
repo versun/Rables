@@ -19,6 +19,9 @@ class CleanOldExportsJob < ApplicationJob
 
     result = cleanup_old_files(dirs, days: days)
 
+    # Fail Export rows stuck in pending/running (worker died mid-export)
+    stale_exports_failed = Export.fail_stale!
+
     # Also purge activity logs older than 90 days
     activity_logs_deleted = ActivityLog.where("created_at < ?", 90.days.ago).delete_all
 
@@ -28,6 +31,7 @@ class CleanOldExportsJob < ApplicationJob
       target: :export_cleanup,
       level: result[:errors] > 0 ? :warn : :info,
       error_count: result[:errors],
+      stale_exports_failed: stale_exports_failed,
       activity_logs_deleted: activity_logs_deleted,
       message: result[:message]
     )

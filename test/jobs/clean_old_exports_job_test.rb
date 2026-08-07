@@ -99,6 +99,17 @@ class CleanOldExportsJobTest < ActiveJob::TestCase
     assert_equal 2, event[1][:activity_logs_deleted]
   end
 
+  test "marks exports stuck in pending/running as failed" do
+    stuck = Export.create!(kind: "backup", status: :running)
+    stuck.update_column(:updated_at, (Export::STALE_AFTER + 1.minute).ago)
+    fresh = Export.create!(kind: "backup", status: :running)
+
+    CleanOldExportsJob.perform_now(days: 7, dirs: @dirs)
+
+    assert stuck.reload.failed?
+    assert fresh.reload.running?
+  end
+
   private
 
   def write_file(dir, name)

@@ -15,6 +15,16 @@ class SiteBackupTest < ActiveSupport::TestCase
     FileUtils.rm_rf(@tmp)
   end
 
+  test "default_storage_root returns the disk service root" do
+    assert_equal ActiveStorage::Blob.service.root, SiteBackup.default_storage_root
+  end
+
+  test "default_storage_root returns nil when the service is not the local disk service" do
+    ActiveStorage::Blob.stub(:service, Object.new) do
+      assert_nil SiteBackup.default_storage_root
+    end
+  end
+
   test "export creates a zip containing the database snapshot and storage files" do
     zip_path = SiteBackup.export(db_path: @source_db, storage_root: @storage_root, tmp_dir: @tmp)
 

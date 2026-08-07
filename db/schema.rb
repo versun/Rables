@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_02_081800) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_06_110115) do
   create_table "action_text_rich_texts", force: :cascade do |t|
     t.text "body"
     t.datetime "created_at", null: false
@@ -143,6 +143,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_02_081800) do
     t.datetime "updated_at", null: false
     t.string "username"
     t.index ["platform"], name: "index_crossposts_on_platform", unique: true
+  end
+
+  create_table "exports", force: :cascade do |t|
+    t.bigint "byte_size"
+    t.datetime "created_at", null: false
+    t.text "error"
+    t.string "filename"
+    t.string "kind", null: false
+    t.integer "status", default: 0, null: false
+    t.datetime "updated_at", null: false
   end
 
   create_table "listmonks", force: :cascade do |t|

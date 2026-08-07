@@ -9,18 +9,70 @@
   </div>
 
   <% if @active_tab == "export" %>
+  <% if @exports.any? { |export| export.pending? || export.running? } %>
+    <% content_for :head do %><meta http-equiv="refresh" content="5"><% end %>
+  <% end %>
   <div class="form-section compact">
     <h3>Export Data</h3>
 
-    <div>
-      <h4>Full Backup</h4>
-      <p>Download a ZIP archive containing a snapshot of the SQLite database and all uploaded files.</p>
-      <p><small>The backup is generated during the request; on large sites this can take a while, so don't close the page until the download starts.</small></p>
-      <%= form_with url: admin_migrates_path, method: :post, data: { turbo: false } do |f| %>
-        <%= hidden_field_tag :operation_type, 'export' %>
-        <%= f.submit "Download Backup", class: "btn btn-primary" %>
-      <% end %>
+    <div class="form-grid form-grid-2">
+      <div>
+        <h4>Full Backup</h4>
+        <p>Create a ZIP archive containing a snapshot of the SQLite database and all uploaded files.</p>
+        <p><small>The export runs in the background; the ZIP appears in the list below when it is ready to download.</small></p>
+        <%= form_with url: admin_migrates_path, method: :post, data: { turbo: false } do |f| %>
+          <%= hidden_field_tag :operation_type, 'export' %>
+          <%= f.submit "Create Backup", class: "btn btn-primary" %>
+        <% end %>
+      </div>
+
+      <div>
+        <h4>Go Migration Package</h4>
+        <p>Create the one-way migration package (rendered HTML, images, JSONL metadata) for the Go rewrite.</p>
+        <p><small>Also available on the server via <code>bin/rails "site:export"</code>. See docs/go-migration-prompt.md for the package format.</small></p>
+        <%= form_with url: admin_migrates_path, method: :post, data: { turbo: false } do |f| %>
+          <%= hidden_field_tag :operation_type, 'site_export' %>
+          <%= f.submit "Export for Go Migration", class: "btn btn-primary" %>
+        <% end %>
+      </div>
     </div>
+
+    <% if @exports.any? %>
+    <h4>Recent Exports</h4>
+    <div class="table-container">
+      <table class="admin-table compact-table">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Size</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <% @exports.each do |export| %>
+            <tr>
+              <td><%= export.backup? ? "Full Backup" : "Go Migration" %></td>
+              <td>
+                <%= export.status %>
+                <% if export.failed? && export.error.present? %>
+                  <br><small><%= export.error %></small>
+                <% end %>
+              </td>
+              <td><%= export.created_at.strftime("%Y-%m-%d %H:%M") %></td>
+              <td><%= export.byte_size ? number_to_human_size(export.byte_size) : "—" %></td>
+              <td>
+                <% if export.file_available? %>
+                  <%= link_to "Download", download_admin_export_path(export), data: { turbo: false } %>
+                <% end %>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+    <% end %>
   </div>
   <% end %>
 
