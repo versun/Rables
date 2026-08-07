@@ -1,10 +1,12 @@
 package httpd
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -309,6 +311,50 @@ func TestSubscriptionCreateJSON(t *testing.T) {
 	}
 	if body.Success || body.Message != "Email is invalid" {
 		t.Errorf("json = %+v", body)
+	}
+}
+
+// TestSubscriptionCreateMultipart posts the way the inline navbar/tag forms
+// do: fetch(FormData) sends multipart/form-data. ParseForm alone never
+// parses a multipart body, so a regression made every async subscribe fail
+// with "请输入有效的邮箱地址。".
+func TestSubscriptionCreateMultipart(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for key, values := range validSubscriptionForm(t, "multi@example.com", nil) {
+		for _, v := range values {
+			if err := mw.WriteField(key, v); err != nil {
+				t.Fatalf("write multipart field: %v", err)
+			}
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/subscriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode json: %v", err)
+	}
+	if !body.Success {
+		t.Errorf("json = %+v, want success", body)
+	}
+	if _, err := s.Q.GetSubscriberByEmail(t.Context(), "multi@example.com"); err != nil {
+		t.Errorf("subscriber not stored from multipart submission: %v", err)
 	}
 }
 

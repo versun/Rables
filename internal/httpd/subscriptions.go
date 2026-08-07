@@ -156,15 +156,27 @@ func (s *Server) subscriptionsIndex(w http.ResponseWriter, r *http.Request) {
 // find-or-initialize by email, resubscribe reset, tag assignment, and the
 // confirmation-email job.
 func (s *Server) subscriptionsCreate(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
+	// The inline navbar/tag forms submit via fetch(FormData) (multipart),
+	// the /subscriptions page posts urlencoded. ParseMultipartForm covers
+	// both, falling back to ParseForm for non-multipart bodies — calling
+	// ParseForm alone never parses a multipart body, which was the
+	// regression. Reads below use r.Form because it merges query string and
+	// body params like Rails' params (r.PostForm would also work here:
+	// ParseMultipartForm populates it too, per Go issue 9305).
+	if err := r.ParseMultipartForm(10 << 20); err != nil && !errors.Is(err, http.ErrNotMultipart) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
+	}
+	// File parts in a crafted multipart request spill to disk above
+	// maxMemory; this form has no file inputs, but clean up regardless.
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 	// params.dig(:subscription, :email) || params[:email]; Ruby's || falls
 	// back on nil (key absent), not on an empty string.
 	email := r.FormValue("email")
-	if _, ok := r.PostForm["subscription[email]"]; ok {
-		email = r.PostForm.Get("subscription[email]")
+	if _, ok := r.Form["subscription[email]"]; ok {
+		email = r.Form.Get("subscription[email]")
 	}
 	wantsJSON := strings.Contains(r.Header.Get("Accept"), "application/json")
 	fail := func(message string) {
@@ -259,7 +271,7 @@ func (s *Server) subscriptionsCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Tag.where(id: tag_ids): blank entries dropped, dangling ids ignored;
 	// no selection subscribes to all content (empty tag set).
-	tagIDs := s.existingTagIDs(ctx, r.PostForm["subscription[tag_ids][]"])
+	tagIDs := s.existingTagIDs(ctx, r.Form["subscription[tag_ids][]"])
 	if err := subscribersvc.ReplaceTags(ctx, s.Q, sub.ID, tagIDs); err != nil {
 		s.Log.Error("replace subscriber tags", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

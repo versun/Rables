@@ -316,7 +316,10 @@
     if (customElements.get("lexxy-editor")) return Promise.resolve(true);
     if (!lexxyLoading) {
       lexxyLoading = import("/assets/lexxy.min.js")
-        .then(() => customElements.get("lexxy-editor") != null)
+        // lexxy registers its elements in a setTimeout(0) after module
+        // evaluation, so a microtask-based .then() would check too early.
+        .then(() => customElements.whenDefined("lexxy-editor"))
+        .then(() => true)
         .catch(() => false);
     }
     return lexxyLoading;

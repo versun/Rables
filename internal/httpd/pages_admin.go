@@ -149,7 +149,7 @@ func (s *Server) adminPagesIndex(w http.ResponseWriter, r *http.Request) {
 type adminPageFormData struct {
 	Flash            templates.Flash
 	Page             query.Page
-	PathSlug         string // persisted slug for the edit form actions; Page.Slug may hold an unsaved submitted value
+	PathSlug         string   // persisted slug for the edit form actions; Page.Slug may hold an unsaved submitted value
 	Errors           []string // validation messages, shown like the Rails form-errors block
 	IsNew            bool
 	StatusName       string // "" for new records (the prompt stays selected)

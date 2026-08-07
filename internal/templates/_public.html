@@ -1,6 +1,7 @@
 {{/* Public-site chrome (plan T12), mirroring the Rails application layout:
    head extras (RSS link, head_code, custom_css), the sidebar (site title,
-   description, social links, nav with search/Home/Tags/pages) and the
+   description, social links, nav with search/Home/Tags/pages plus the
+   newsletter subscription form at the end of the nav) and the
    will_paginate markup. Data contracts:
    - "public_head" and "public_sidebar": httpd.siteChrome (passed as .Chrome)
    - "pagination": httpd.pagination (passed as .Page) */}}
@@ -65,6 +66,7 @@
       {{if .HasTags}}<li><a href="/tags" class="nav-link">Tags</a></li>{{end}}
       {{range .NavPages}}<li><a href="{{.URL}}" class="nav-link"{{if .External}} target="_blank" rel="noopener"{{end}}>{{.Title}}</a></li>{{end}}
     </ul>
+    {{template "subscribe_form" .Subscribe}}
   </nav>
   <div class="sidebar-footer">
     <div class="theme-toggle">

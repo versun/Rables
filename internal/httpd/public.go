@@ -250,7 +250,8 @@ type siteChrome struct {
 	SocialLinks []socialLink
 	NavPages    []navPage
 	HasTags     bool
-	Query       string // current ?q= term, prefilled in the nav search box
+	Query       string            // current ?q= term, prefilled in the nav search box
+	Subscribe   subscribeFormData // navbar newsletter form; populated on "/" only (T16)
 }
 
 type socialLink struct {
