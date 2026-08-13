@@ -3,7 +3,8 @@
 // Replies and pure retweets are excluded. API credentials come from the
 // crossposts "twitter" row. The scheduler hook decides when a run is due
 // (T13); Run itself always performs a sync when enabled, so the admin
-// "Sync Now" button calls the same entry point (force semantics).
+// "Sync Now" button enqueues a job that calls the same entry point (force
+// semantics).
 package twittersync
 
 import (

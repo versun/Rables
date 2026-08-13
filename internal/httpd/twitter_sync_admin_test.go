@@ -17,6 +17,7 @@ import (
 	"rables/internal/config"
 	"rables/internal/db"
 	"rables/internal/db/query"
+	"rables/internal/jobs"
 	"rables/internal/service/twittersync"
 	"rables/internal/templates"
 )
@@ -325,8 +326,8 @@ func TestTwitterSyncNowRuns(t *testing.T) {
 		t.Fatalf("seed crossposts: %v", err)
 	}
 
-	// Fake X API; the shared syncer (same Ext key the integrator uses) points
-	// at it so the async sync_now run is observable.
+	// Fake X API; the syncer the worker handler runs points at it, so the
+	// job run is observable.
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -340,30 +341,70 @@ func TestTwitterSyncNowRuns(t *testing.T) {
 	syncer := twittersync.NewSyncer(s.DB, t.TempDir())
 	syncer.SetBaseURL(api.URL)
 	syncer.SetHTTPClient(api.Client())
-	s.Ext.Store(twitterSyncExtKey, syncer)
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/twitter_sync/sync_now", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusFound {
-		t.Fatalf("status = %d, want 302", rec.Code)
+	postNow := func() *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/admin/twitter_sync/sync_now", nil)
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		return rec
 	}
+	rec := postNow()
 	if flash := flashOf(t, rec); flash.Notice != "Twitter sync has been queued." {
 		t.Errorf("notice = %q", flash.Notice)
 	}
 
-	// The async run archives the tweet (perform_later semantics).
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var count int
-		if err := s.DB.QueryRow(`SELECT COUNT(*) FROM articles WHERE slug = 'tweet-7'`).Scan(&count); err != nil {
-			t.Fatalf("count articles: %v", err)
-		}
-		if count == 1 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	// sync_now enqueues a twitter_sync job (perform_later semantics) instead
+	// of running inline, so the run is visible under /admin/jobs.
+	var kind, status string
+	if err := s.DB.QueryRow(`SELECT kind, status FROM job_runs`).Scan(&kind, &status); err != nil {
+		t.Fatalf("query job_runs: %v", err)
 	}
-	t.Error("sync_now run did not archive tweet-7 within 5s")
+	if kind != jobs.KindTwitterSync || status != "queued" {
+		t.Errorf("job run = %q/%q, want %q/queued", kind, status, jobs.KindTwitterSync)
+	}
+
+	// A second sync_now while the first job is still queued does not stack a
+	// duplicate (the scheduler's 15-minute tick relies on the same dedup).
+	rec = postNow()
+	var count int
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM job_runs`).Scan(&count); err != nil {
+		t.Fatalf("count job_runs: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("job_runs count = %d, want 1 (repeat sync_now deduped)", count)
+	}
+
+	// The worker picks the job up and archives the tweet.
+	worker := jobs.NewWorker(s.DB)
+	twittersync.RegisterSyncHandler(worker, syncer)
+	claimed, err := worker.RunOnce(t.Context())
+	if err != nil || !claimed {
+		t.Fatalf("RunOnce = %v, %v; want claimed, no error", claimed, err)
+	}
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM articles WHERE slug = 'tweet-7'`).Scan(&count); err != nil {
+		t.Fatalf("count articles: %v", err)
+	}
+	if count != 1 {
+		t.Error("sync job did not archive tweet-7")
+	}
+	if err := s.DB.QueryRow(`SELECT status FROM job_runs`).Scan(&status); err != nil {
+		t.Fatalf("query job_runs: %v", err)
+	}
+	if status != "done" {
+		t.Errorf("job status = %q, want done", status)
+	}
+
+	// Once the previous run is done, sync_now enqueues a fresh job.
+	rec = postNow()
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM job_runs`).Scan(&count); err != nil {
+		t.Fatalf("count job_runs: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("job_runs count = %d, want 2 (sync_now after done re-enqueues)", count)
+	}
 }

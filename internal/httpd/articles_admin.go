@@ -18,6 +18,7 @@ import (
 	"rables/internal/domain"
 	"rables/internal/jobs"
 	articlesvc "rables/internal/service/articles"
+	"rables/internal/service/comments"
 	tagsvc "rables/internal/service/tags"
 	"rables/internal/templates"
 )
@@ -77,6 +78,7 @@ type adminArticlesIndexData struct {
 type adminArticleRow struct {
 	Article        query.Article
 	DisplayTitle   string
+	ViewURL        string // public article path
 	Tags           string
 	CommentCount   int64
 	FetchPlatforms []string // social posts with a URL on a fetchable platform
@@ -294,10 +296,12 @@ func (s *Server) buildArticleRows(ctx context.Context, articles []query.Article)
 		postsByArticle[post.ArticleID] = append(postsByArticle[post.ArticleID], post.Platform)
 	}
 
+	routePrefix := s.routePrefix(ctx)
 	for _, a := range articles {
 		rows = append(rows, adminArticleRow{
 			Article:        a,
 			DisplayTitle:   articleDisplayTitle(a),
+			ViewURL:        comments.ArticlePath(routePrefix, a.Slug.String),
 			Tags:           strings.Join(tagsByArticle[a.ID], ", "),
 			CommentCount:   commentsByArticle[a.ID],
 			FetchPlatforms: postsByArticle[a.ID],

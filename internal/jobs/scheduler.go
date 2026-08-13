@@ -78,6 +78,11 @@ func (s *Scheduler) RegisterHook(name string, fn Hook) {
 	s.hooks[name] = fn
 }
 
+// SetWake installs the worker nudge on the scheduler's own enqueuer, so a due
+// comment fetch enqueued by the hourly tick starts immediately instead of up
+// to one worker poll interval late.
+func (s *Scheduler) SetWake(wake func()) { s.enq.SetWake(wake) }
+
 // Start launches the cron goroutine.
 func (s *Scheduler) Start() { s.cron.Start() }
 

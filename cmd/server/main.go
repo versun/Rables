@@ -75,6 +75,16 @@ func run() int {
 	transfer.RegisterImportHandlers(worker, database, cfg.DataDir, server.Settings().Invalidate)
 	crosspost.RegisterFetchCommentsHandlers(worker, database, cfg.DataDir)
 
+	// One syncer instance backs the twitter_sync job handler, so every run
+	// (recurring or "Sync Now") is serialized by its concurrency mutex.
+	syncer := twittersync.NewSyncer(database, cfg.DataDir)
+	twittersync.RegisterSyncHandler(worker, syncer)
+
+	// Nudge the worker on every admin enqueue (sync_now, crosspost on
+	// publish, ...) so a due job starts immediately instead of up to one
+	// poll interval (30s) late.
+	server.Enqueuer().SetWake(worker.Wake)
+
 	// Startup recovery, before the worker starts polling: requeue jobs a dead
 	// process left running, and fail twitter archive imports stuck active so
 	// they stop blocking new imports. The 5 minute cutoff protects rows
@@ -115,11 +125,17 @@ func run() int {
 		close(workerDone)
 	}()
 
-	syncer := twittersync.NewSyncer(database, cfg.DataDir)
-	server.Ext.Store("twittersync", syncer)
-
 	scheduler := jobs.NewScheduler(ctx, database, cfg.DataDir)
-	scheduler.RegisterHook("sync_twitter", syncer.Run)
+	scheduler.SetWake(worker.Wake)
+	// The due check lives in the scheduler; the hook only enqueues the job so
+	// every recurring sync is visible under /admin/jobs like a manual one.
+	// EnqueueUnlessActive dedups: last_synced_at only advances after a
+	// successful run, so a 15-minute tick while the previous job is still
+	// queued would otherwise pile up duplicates.
+	scheduler.RegisterHook("sync_twitter", func(ctx context.Context) error {
+		_, err := server.Enqueuer().EnqueueUnlessActive(ctx, jobs.KindTwitterSync, time.Now())
+		return err
+	})
 	scheduler.Start()
 	defer scheduler.Stop()
 

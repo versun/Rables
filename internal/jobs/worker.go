@@ -32,6 +32,9 @@ type Worker struct {
 	handlers map[string]Handler
 	now      func() time.Time
 	logger   *slog.Logger
+	// wake carries Wake nudges: a pending value makes Start poll immediately
+	// instead of waiting out PollInterval.
+	wake chan struct{}
 }
 
 // NewWorker returns a Worker with a 30s poll interval (plan §5).
@@ -42,6 +45,7 @@ func NewWorker(db *sql.DB) *Worker {
 		handlers:     map[string]Handler{},
 		now:          time.Now,
 		logger:       slog.Default(),
+		wake:         make(chan struct{}, 1),
 	}
 }
 
@@ -50,7 +54,23 @@ func (w *Worker) Register(kind string, fn Handler) {
 	w.handlers[kind] = fn
 }
 
-// Start polls for due jobs until ctx is cancelled.
+// Wake nudges Start to drain due jobs immediately instead of waiting out
+// the poll interval, so freshly enqueued due jobs (admin "Sync Now",
+// crossposts on publish) start right away. Non-blocking; wakes coalesce
+// while one is pending, which loses nothing: one wakeup drains every due
+// job.
+func (w *Worker) Wake() {
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Start polls for due jobs until ctx is cancelled. A wakeup happens on every
+// PollInterval tick and every Wake nudge, and each wakeup drains every due
+// job — not just the oldest — so a burst of enqueues whose wakes coalesced
+// (crossposts on publish fan out one job per platform) does not trickle out
+// one job per tick.
 func (w *Worker) Start(ctx context.Context) {
 	t := time.NewTicker(w.PollInterval)
 	defer t.Stop()
@@ -59,8 +79,25 @@ func (w *Worker) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if _, err := w.RunOnce(ctx); err != nil {
+		case <-w.wake:
+		}
+		// A tick/wake racing with shutdown wins the select as often as
+		// ctx.Done; skip the drain rather than run it (and log a spurious
+		// "job run failed: context canceled") with an already-cancelled ctx.
+		if ctx.Err() != nil {
+			return
+		}
+		for {
+			claimed, err := w.RunOnce(ctx)
+			if err != nil {
 				w.logger.Error("job run failed", "error", err)
+			}
+			// The ctx.Err() guard is load-bearing, not cosmetic: a handler
+			// aborted by shutdown is requeued due-immediately (RunOnce's
+			// free-requeue path), so draining on a cancelled ctx would
+			// reclaim that row forever.
+			if !claimed || ctx.Err() != nil {
+				break
 			}
 		}
 	}

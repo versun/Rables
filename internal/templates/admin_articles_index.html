@@ -106,6 +106,7 @@
                 <small class="text-muted">{{formatTime .Article.UpdatedAt $.TimeZone "01/02 15:04"}}</small>
               </td>
               <td class="row-actions">
+                <a href="{{.ViewURL}}" class="row-btn" target="_blank" rel="noopener">View</a>
                 <a href="/admin/posts/{{$slug}}/edit" class="row-btn">Edit</a>
                 {{if .IsTrash}}
                   <form method="post" action="/admin/posts/{{$slug}}/destroy"

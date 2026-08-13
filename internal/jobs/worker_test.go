@@ -332,3 +332,105 @@ func TestRunOnceBookkeepingSurvivesCancellation(t *testing.T) {
 		})
 	}
 }
+
+// An enqueued due job must not wait out the poll interval when the worker
+// was nudged: Enqueue with SetWake triggers an immediate Start poll.
+func TestWorkerWakePollsImmediately(t *testing.T) {
+	d := openDB(t)
+	w := NewWorker(d)
+	w.PollInterval = time.Hour // the tick must not fire during the test
+
+	ran := make(chan struct{})
+	w.Register(KindExport, func(context.Context, json.RawMessage) error {
+		close(ran)
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go w.Start(ctx)
+
+	enq := NewEnqueuer(d)
+	enq.SetWake(w.Wake)
+	if _, err := enq.Enqueue(t.Context(), KindExport, nil, time.Now()); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Error("job did not run within 5s of the wake nudge")
+	}
+}
+
+// One wake drains every due job, so a burst of enqueues whose nudges
+// coalesced (crossposts on publish fan out one job per platform) does not
+// trickle out one job per poll.
+func TestWorkerWakeDrainsDueJobs(t *testing.T) {
+	d := openDB(t)
+	w := NewWorker(d)
+	w.PollInterval = time.Hour // the tick must not fire during the test
+
+	ran := make(chan struct{}, 2)
+	w.Register(KindCrosspost, func(context.Context, json.RawMessage) error {
+		ran <- struct{}{}
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go w.Start(ctx)
+
+	enq := NewEnqueuer(d)
+	enq.SetWake(w.Wake)
+	for i := 0; i < 2; i++ {
+		if _, err := enq.Enqueue(t.Context(), KindCrosspost, nil, time.Now()); err != nil {
+			t.Fatalf("Enqueue: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ran:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of 2 due jobs ran within 5s of the wake", i)
+		}
+	}
+}
+
+// A handler aborted mid-drain by shutdown is requeued due-immediately; the
+// drain must notice the cancelled ctx and stop instead of reclaiming that
+// row in a loop.
+func TestWorkerDrainStopsOnShutdown(t *testing.T) {
+	d := openDB(t)
+	w := NewWorker(d)
+	w.PollInterval = time.Hour // the tick must not fire during the test
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	stopped := make(chan struct{})
+	w.Register(KindExport, func(context.Context, json.RawMessage) error {
+		cancel() // SIGTERM lands while the handler runs
+		return context.Canceled
+	})
+	go func() {
+		w.Start(ctx)
+		close(stopped)
+	}()
+
+	if _, err := NewEnqueuer(d).Enqueue(t.Context(), KindExport, nil, time.Now()); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	w.Wake()
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after shutdown during a drain")
+	}
+	var status string
+	if err := d.QueryRow(`SELECT status FROM job_runs`).Scan(&status); err != nil {
+		t.Fatalf("query job_runs: %v", err)
+	}
+	if status != "queued" {
+		t.Errorf("status = %q, want queued (free requeue after shutdown)", status)
+	}
+}

@@ -11,21 +11,10 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"rables/internal/db/query"
+	"rables/internal/jobs"
 	"rables/internal/service/activity"
-	"rables/internal/service/twittersync"
 	"rables/internal/templates"
 )
-
-// twitterSyncExtKey is the Server.Ext key holding the shared *twittersync.Syncer
-// (the same instance the scheduler hook runs, so the mutex is shared).
-const twitterSyncExtKey = "twittersync"
-
-// TwitterSyncer returns the shared syncer, creating it on first use. main.go
-// stores the scheduler-wired instance under the same key.
-func (s *Server) TwitterSyncer() *twittersync.Syncer {
-	v, _ := s.Ext.LoadOrStore(twitterSyncExtKey, twittersync.NewSyncer(s.DB, s.Cfg.DataDir))
-	return v.(*twittersync.Syncer)
-}
 
 // RegisterTwitterSyncRoutes mounts the Twitter sync admin page (Rails:
 // resource :twitter_sync, only: [:show, :update] + member post :sync_now;
@@ -199,7 +188,8 @@ func (s *Server) twitterSyncUpdate(w http.ResponseWriter, r *http.Request) {
 
 // twitterSyncNow handles POST /admin/twitter_sync/sync_now, mirroring
 // #sync_now: the guard message matches the Rails alert; a valid configuration
-// runs the sync asynchronously (SyncTwitterJob.perform_later(force: true)).
+// enqueues a twitter_sync job (SyncTwitterJob.perform_later(force: true)),
+// which the worker picks up on its next poll.
 func (s *Server) twitterSyncNow(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	syncRow, err := s.loadTwitterSync(ctx)
@@ -220,18 +210,13 @@ func (s *Server) twitterSyncNow(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/twitter_sync", http.StatusFound)
 		return
 	}
-	syncer := s.TwitterSyncer()
-	// The bare goroutine has no recovery (unlike scheduler.run and the job
-	// worker, which recover around the same Run), so an unrecovered panic
-	// would crash the whole process. Convert it to a log line.
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				s.Log.Error("twitter sync panicked", "panic", r)
-			}
-		}()
-		_ = syncer.Run(context.Background())
-	}()
+	// A repeat click while the previous job is still queued/running is a no-op
+	// (the notice below stays accurate either way).
+	if _, err := s.Enqueuer().EnqueueUnlessActive(ctx, jobs.KindTwitterSync, time.Now()); err != nil {
+		s.Log.Error("enqueue twitter sync", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	s.SetFlash(w, templates.Flash{Notice: "Twitter sync has been queued."})
 	http.Redirect(w, r, "/admin/twitter_sync", http.StatusFound)
 }

@@ -95,6 +95,41 @@ func (q *Queries) EnqueueJobRun(ctx context.Context, arg EnqueueJobRunParams) (i
 	return result.LastInsertId()
 }
 
+const enqueueJobRunUnlessActive = `-- name: EnqueueJobRunUnlessActive :execrows
+INSERT INTO job_runs (kind, payload, run_at, status, attempts, created_at, updated_at)
+SELECT ?1, ?2, ?3, 'queued', 0, ?4, ?5
+WHERE NOT EXISTS (
+  SELECT 1 FROM job_runs WHERE kind = ?1 AND status IN ('queued', 'running')
+)
+`
+
+type EnqueueJobRunUnlessActiveParams struct {
+	Kind      string
+	Payload   sql.NullString
+	RunAt     int64
+	CreatedAt int64
+	UpdatedAt int64
+}
+
+// Dedup variant of EnqueueJobRun for singleton jobs (twitter_sync): inserts
+// only when no queued/running row of the same kind exists. The scheduler
+// re-fires on a fixed cadence while the due timestamp (last_synced_at) only
+// advances after a successful run, so without this a backed-up worker would
+// accumulate duplicate rows. Rows affected: 1 = enqueued, 0 = skipped.
+func (q *Queries) EnqueueJobRunUnlessActive(ctx context.Context, arg EnqueueJobRunUnlessActiveParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, enqueueJobRunUnlessActive,
+		arg.Kind,
+		arg.Payload,
+		arg.RunAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const failJobRun = `-- name: FailJobRun :exec
 UPDATE job_runs SET status = 'failed', attempts = ?, last_error = ?, updated_at = ?
 WHERE id = ?

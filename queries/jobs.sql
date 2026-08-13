@@ -2,6 +2,18 @@
 INSERT INTO job_runs (kind, payload, run_at, status, attempts, created_at, updated_at)
 VALUES (?, ?, ?, 'queued', 0, ?, ?);
 
+-- name: EnqueueJobRunUnlessActive :execrows
+-- Dedup variant of EnqueueJobRun for singleton jobs (twitter_sync): inserts
+-- only when no queued/running row of the same kind exists. The scheduler
+-- re-fires on a fixed cadence while the due timestamp (last_synced_at) only
+-- advances after a successful run, so without this a backed-up worker would
+-- accumulate duplicate rows. Rows affected: 1 = enqueued, 0 = skipped.
+INSERT INTO job_runs (kind, payload, run_at, status, attempts, created_at, updated_at)
+SELECT :kind, :payload, :run_at, 'queued', 0, :created_at, :updated_at
+WHERE NOT EXISTS (
+  SELECT 1 FROM job_runs WHERE kind = :kind AND status IN ('queued', 'running')
+);
+
 -- name: GetDueJobRun :one
 SELECT * FROM job_runs
 WHERE status = 'queued' AND run_at <= ?

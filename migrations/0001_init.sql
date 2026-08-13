@@ -251,7 +251,7 @@ CREATE TABLE static_files (
 
 CREATE TABLE job_runs (
   id INTEGER PRIMARY KEY,
-  kind TEXT NOT NULL,                            -- publish_article|publish_page|send_newsletter|crosspost|fetch_social_comments|export|import_db|import_rails|import_rss|twitter_archive_import|comment_reply_notification|newsletter_confirmation|password_reset
+  kind TEXT NOT NULL,                            -- publish_article|publish_page|send_newsletter|crosspost|fetch_social_comments|export|import_db|import_rails|import_rss|twitter_archive_import|comment_reply_notification|newsletter_confirmation|password_reset|twitter_sync
   payload TEXT,                                  -- JSON
   run_at INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'queued',         -- queued|running|done|failed
