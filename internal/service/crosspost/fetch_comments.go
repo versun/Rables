@@ -210,7 +210,13 @@ func (f *CommentFetcher) fetchForArticle(ctx context.Context, articleID int64, p
 	}
 
 	for _, post := range posts {
-		fetch, cfg, ok := f.platformFetcher(ctx, post.Platform)
+		if err := ctx.Err(); err != nil {
+			return err // canceled (SIGTERM): abort so the job is retried, not marked done
+		}
+		fetch, cfg, ok, err := f.platformFetcher(ctx, post.Platform)
+		if err != nil {
+			return err // real DB failure: abort so the job is retried, like the cron path
+		}
 		if !ok {
 			continue // no fetcher for this platform, like the Rails case/else
 		}
@@ -267,6 +273,9 @@ func (f *CommentFetcher) fetchForPlatform(ctx context.Context, platform string) 
 	successCount, errorCount, totalComments := 0, 0, 0
 	stopped := false
 	for _, target := range targets {
+		if err := ctx.Err(); err != nil {
+			return err // canceled (SIGTERM): abort so the job is retried, not marked done
+		}
 		result := fetch(ctx, cfg, target.Url)
 
 		if rl := result.rateLimit; rl != nil {
@@ -309,8 +318,11 @@ func (f *CommentFetcher) fetchForPlatform(ctx context.Context, platform string) 
 
 // platformFetcher resolves the fetch method and config for one platform,
 // mirroring the controller's case/when. ok is false for platforms without a
-// fetcher.
-func (f *CommentFetcher) platformFetcher(ctx context.Context, platform string) (func(context.Context, query.Crosspost, string) fetchCommentsResult, query.Crosspost, bool) {
+// fetcher. A missing config row keeps the placeholder (Crosspost.for creates a
+// disabled row; the services then return the default (empty) response); any
+// other load failure is returned so the job is retried instead of being
+// recorded as a successful count=0 fetch.
+func (f *CommentFetcher) platformFetcher(ctx context.Context, platform string) (func(context.Context, query.Crosspost, string) fetchCommentsResult, query.Crosspost, bool, error) {
 	var fetch func(context.Context, query.Crosspost, string) fetchCommentsResult
 	switch platform {
 	case "mastodon":
@@ -320,19 +332,16 @@ func (f *CommentFetcher) platformFetcher(ctx context.Context, platform string) (
 	case "twitter":
 		fetch = f.twitter.fetchComments
 	default:
-		return nil, query.Crosspost{}, false
+		return nil, query.Crosspost{}, false, nil
 	}
 	cfg, err := f.q.GetCrosspostByPlatform(ctx, platform)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Crosspost.for(platform) creates a disabled row; the services then
-		// return the default (empty) response.
-		return fetch, query.Crosspost{Platform: platform}, true
+		return fetch, query.Crosspost{Platform: platform}, true, nil
 	}
 	if err != nil {
-		f.Log.Warn("fetch comments: load config", "platform", platform, "error", err)
-		return fetch, query.Crosspost{Platform: platform}, true
+		return nil, query.Crosspost{}, false, fmt.Errorf("load crosspost config %q: %w", platform, err)
 	}
-	return fetch, cfg, true
+	return fetch, cfg, true, nil
 }
 
 // upsertBatch ports the controller's two passes: upsert every comment with
@@ -341,14 +350,16 @@ func (f *CommentFetcher) platformFetcher(ctx context.Context, platform string) (
 // earlier batches). It returns the number of created comments. Blank content
 // is skipped like the controller's `next if comment_data[:content].blank?`
 // (the cron job lets the model validation fail the whole article instead —
-// skipping is the union of both behaviors and never loses valid comments).
+// skipping is the union of both behaviors and never loses valid comments), and
+// so is an empty external id: it stores NULL, which no upsert lookup or
+// partial unique index matches, so it would re-import on every fetch.
 func (f *CommentFetcher) upsertBatch(ctx context.Context, articleID int64, platform string, batch []commentData, status *domain.CommentStatus) (int, error) {
 	byExternalID := map[string]query.Comment{}
 	parentOf := map[string]string{}
 	created := 0
 	for _, d := range batch {
-		if strings.TrimSpace(d.Content) == "" {
-			continue
+		if strings.TrimSpace(d.Content) == "" || d.ExternalID == "" {
+			continue // no external id: GetExternalComment's external_id = ? never matches NULL, so the row would duplicate every fetch
 		}
 		c, result, err := comments.UpsertExternal(ctx, f.q, "Article", articleID, platform, comments.ExternalData{
 			ExternalID:      d.ExternalID,
@@ -664,9 +675,8 @@ func (p twitterPlatform) fetchComments(ctx context.Context, cfg query.Crosspost,
 	if err != nil {
 		return fetchCommentsResult{comments: out}
 	}
-	quoteComments := quotes.comments(tweetID)
-	out = append(out, quoteComments...)
-	for i, tweet := range quotes.Data {
+	out = append(out, quotes.comments(tweetID)...)
+	for _, tweet := range quotes.Data {
 		if tweet.ConversationID == "" {
 			continue // fetch_quote_tweet_replies returns early
 		}
@@ -674,7 +684,11 @@ func (p twitterPlatform) fetchComments(ctx context.Context, cfg query.Crosspost,
 		if err != nil {
 			continue
 		}
-		out = append(out, quoteReplies.comments(quoteComments[i].ExternalID)...)
+		// comments() skips tweets whose author is missing from includes, so
+		// the quote comment list is not index-aligned with quotes.Data; the
+		// default parent of a quote's replies is the quote tweet's own ID
+		// (the comment's ExternalID when the quote was converted).
+		out = append(out, quoteReplies.comments(tweet.ID)...)
 	}
 	return fetchCommentsResult{comments: out}
 }

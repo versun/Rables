@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -43,6 +45,7 @@ type fakeMastodon struct {
 
 	statusCode int // override for /api/v1/statuses; 0 → 200
 	mediaCode  int // override for /api/v2/media; 0 → 200
+	mediaNoID  bool
 	rateReset  string
 }
 
@@ -81,6 +84,10 @@ func (f *fakeMastodon) handler() http.Handler {
 		f.mediaTypes = append(f.mediaTypes, header.Header.Get("Content-Type"))
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if f.mediaNoID {
+			fmt.Fprint(w, `{}`)
+			return
+		}
 		fmt.Fprintf(w, `{"id":"m%d"}`, f.mediaCalls)
 	})
 	mux.HandleFunc("/api/v1/statuses", func(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +188,69 @@ func TestMastodonPost(t *testing.T) {
 	}
 }
 
+// TestMastodonPostSkipsEmptyMediaID: a 2xx media response without an id must
+// not produce an empty media_ids[]= form value (Mastodon answers 422).
+func TestMastodonPostSkipsEmptyMediaID(t *testing.T) {
+	f, srv := newFakeMastodon(t)
+	f.mediaNoID = true
+	p := mastodonPlatform{client: srv.Client()}
+
+	in := PostInput{Text: "x", Images: []Image{{Filename: "a.png", ContentType: "image/png", Data: []byte("d")}}}
+	if _, err := p.Post(t.Context(), mastodonCfg(srv.URL, "tok"), in); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if f.mediaCalls != 1 {
+		t.Fatalf("media uploads = %d, want 1", f.mediaCalls)
+	}
+	if got := f.statusForm["media_ids[]"]; len(got) != 0 {
+		t.Errorf("media_ids[] = %v, want none (empty ids are skipped)", got)
+	}
+}
+
+// TestMastodonEscapeQuotes: the multipart filename escaping follows
+// mime/multipart — backslashes double first, then quotes — so a trailing
+// backslash cannot escape the closing quote and break the receiver's parse.
+func TestMastodonEscapeQuotes(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"a.png", `a.png`},
+		{`a\`, `a\\`},
+		{`quo"te.png`, `quo\"te.png`},
+		{`a\"`, `a\\\"`}, // backslash first: the quote stays escaped
+		{"a\r\nb.png", "ab.png"},
+	}
+	for _, tt := range tests {
+		if got := escapeQuotes(tt.in); got != tt.want {
+			t.Errorf("escapeQuotes(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestMastodonPostEscapesFilenames: a filename with a backslash or quote must
+// survive the multipart round trip — an unescaped trailing backslash swallows
+// the closing quote and the server rejects the whole upload (image silently
+// skipped).
+func TestMastodonPostEscapesFilenames(t *testing.T) {
+	f, srv := newFakeMastodon(t)
+	p := mastodonPlatform{client: srv.Client()}
+
+	in := PostInput{
+		Text: "x",
+		Images: []Image{
+			{Filename: `trailing\`, ContentType: "image/png", Data: []byte("d")},
+			{Filename: `quo"te.png`, ContentType: "image/png", Data: []byte("d")},
+		},
+	}
+	if _, err := p.Post(t.Context(), mastodonCfg(srv.URL, "tok"), in); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if len(f.mediaNames) != 2 || f.mediaNames[0] != `trailing\` || f.mediaNames[1] != `quo"te.png` {
+		t.Errorf("uploaded filenames = %q, want the originals parsed back", f.mediaNames)
+	}
+	if got := f.statusForm["media_ids[]"]; len(got) != 2 {
+		t.Errorf("media_ids[] = %v, want both uploads attached", got)
+	}
+}
+
 func TestMastodonPostRateLimited(t *testing.T) {
 	f, srv := newFakeMastodon(t)
 	f.statusCode = http.StatusTooManyRequests
@@ -236,6 +306,9 @@ func TestMastodonAPIURL(t *testing.T) {
 		{"https://mastodon.social/", "/api/v1/statuses", "https://mastodon.social/api/v1/statuses", false},
 		{"https://m.c:443", "/api/v2/media", "https://m.c/api/v2/media", false},
 		{"http://localhost:3000", "/api/v1/statuses", "http://localhost:3000/api/v1/statuses", false},
+		{"http://[::1]:3000", "/api/v1/statuses", "http://[::1]:3000/api/v1/statuses", false},
+		{"https://[2001:db8::1]", "/api/v1/statuses", "https://[2001:db8::1]/api/v1/statuses", false},
+		{"https://[2001:db8::1]:443", "/api/v1/statuses", "https://[2001:db8::1]/api/v1/statuses", false},
 		{"https://m.c/instance/", "/api/v1/statuses", "https://m.c/instance/api/v1/statuses", false},
 		{"  https://m.c  ", "/api/v1/statuses", "https://m.c/api/v1/statuses", false},
 		{"", "/api/v1/statuses", "", true},
@@ -458,6 +531,24 @@ func TestBlueskyPostFlow(t *testing.T) {
 	}
 }
 
+// TestBlueskyPostWithoutLinksOmitsFacets: the lexicon forbids "facets": null,
+// so a link-less post must omit the key entirely.
+func TestBlueskyPostWithoutLinksOmitsFacets(t *testing.T) {
+	f, srv := newFakeBluesky(t)
+	p := blueskyPlatform{client: srv.Client(), tokens: newFakeTokenCache()}
+
+	if _, err := p.Post(t.Context(), blueskyCfg(srv.URL), PostInput{Text: "no links here"}); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if len(f.createRecordBody) != 1 {
+		t.Fatalf("createRecord calls = %d", len(f.createRecordBody))
+	}
+	record := f.createRecordBody[0]["record"].(map[string]any)
+	if _, ok := record["facets"]; ok {
+		t.Errorf("facets = %v, want the key omitted (null is rejected by the PDS)", record["facets"])
+	}
+}
+
 // TestBlueskySessionCacheReuse: a second platform instance with the same
 // cache must not log in again (JWT 缓存 1h).
 func TestBlueskySessionCacheReuse(t *testing.T) {
@@ -629,6 +720,36 @@ func TestBlueskyBlobCompression(t *testing.T) {
 	}
 }
 
+// hugePNGHeader returns PNG bytes whose IHDR declares a w×h image without
+// any pixel data: enough for image.DecodeConfig to report the dimensions,
+// so the pixel-budget path can be tested without decoding gigabytes.
+// Mirrors the helper in internal/service/media.
+func hugePNGHeader(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var ihdr bytes.Buffer
+	if err := binary.Write(&ihdr, binary.BigEndian, int32(w)); err != nil {
+		t.Fatal(err)
+	}
+	if err := binary.Write(&ihdr, binary.BigEndian, int32(h)); err != nil {
+		t.Fatal(err)
+	}
+	ihdr.Write([]byte{8, 2, 0, 0, 0}) // 8-bit truecolor, deflate, no interlace
+	chunk := ihdr.Bytes()
+
+	var buf bytes.Buffer
+	buf.Write([]byte("\x89PNG\r\n\x1a\n"))
+	if err := binary.Write(&buf, binary.BigEndian, int32(len(chunk))); err != nil {
+		t.Fatal(err)
+	}
+	buf.WriteString("IHDR")
+	buf.Write(chunk)
+	crc := crc32.ChecksumIEEE(append([]byte("IHDR"), chunk...))
+	if err := binary.Write(&buf, binary.BigEndian, crc); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
 func TestCompressImage(t *testing.T) {
 	if _, ok := compressImage([]byte("not an image"), 1000); ok {
 		t.Error("undecodable input must fail")
@@ -636,6 +757,11 @@ func TestCompressImage(t *testing.T) {
 	// Impossibly small limit: the dimension floor (100px) forces a give-up.
 	if _, ok := compressImage(bigNoisePNG(t), 16); ok {
 		t.Error("tiny limit must give up (MIN_IMAGE_DIMENSION)")
+	}
+	// Over maxCompressPixels: refused before decoding (decoding 25000x25000
+	// would allocate ~2.5GB).
+	if _, ok := compressImage(hugePNGHeader(t, 25000, 25000), 1000); ok {
+		t.Error("image over the pixel budget must be skipped")
 	}
 }
 

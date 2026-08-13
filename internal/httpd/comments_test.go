@@ -1,14 +1,17 @@
 package httpd
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -112,7 +115,8 @@ func readFlash(t *testing.T, rec *httptest.ResponseRecorder) templates.Flash {
 	if c == nil || c.Value == "" {
 		return templates.Flash{}
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
+	body, _, _ := strings.Cut(c.Value, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(body)
 	if err != nil {
 		t.Fatalf("decode flash cookie: %v", err)
 	}
@@ -140,8 +144,14 @@ func TestCommentSubmitToArticle(t *testing.T) {
 		"article_id":            {"hello-world"},
 		"comment[author_email]": {"ann@example.com"},
 	}))
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/hello-world" {
+	if rec.Code != http.StatusFound || locationPath(t, rec) != "/hello-world" {
 		t.Fatalf("status = %d location = %q, want 302 /hello-world", rec.Code, rec.Header().Get("Location"))
+	}
+	// The redirect target carries the cache-busting parameter so a browser
+	// holding a fresh cached copy of the article page cannot serve the
+	// redirect from its cache and swallow the flash.
+	if loc := rec.Header().Get("Location"); !strings.HasPrefix(loc, "/hello-world?_=") {
+		t.Errorf("location = %q, want the cache-busting ?_= parameter", loc)
 	}
 	if flash := readFlash(t, rec); flash.Notice == "" || flash.Alert != "" {
 		t.Errorf("flash = %+v, want a notice", flash)
@@ -258,7 +268,7 @@ func TestCommentSubmitGates(t *testing.T) {
 			tt.setup(t, s)
 			before := commentCount(t, s)
 			rec := doRequest(t, h, http.MethodPost, "/comments", validCommentForm(t, tt.extra))
-			if rec.Code != http.StatusFound || rec.Header().Get("Location") != tt.wantLocation {
+			if rec.Code != http.StatusFound || locationPath(t, rec) != tt.wantLocation {
 				t.Fatalf("status = %d location = %q, want 302 %s", rec.Code, rec.Header().Get("Location"), tt.wantLocation)
 			}
 			accepted := tt.wantLocation != "/"
@@ -304,7 +314,7 @@ func TestCommentSubmitCaptchaFailures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			before := commentCount(t, s)
 			rec := doRequest(t, h, http.MethodPost, "/comments", tt.form)
-			if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/hello-world" {
+			if rec.Code != http.StatusFound || locationPath(t, rec) != "/hello-world" {
 				t.Fatalf("status = %d location = %q, want 302 /hello-world", rec.Code, rec.Header().Get("Location"))
 			}
 			if flash := readFlash(t, rec); flash.Alert != tt.wantAlert {
@@ -385,7 +395,7 @@ func TestCommentSubmitValidation(t *testing.T) {
 			s, h, otherComment := newServer(t)
 			before := commentCount(t, s)
 			rec := doRequest(t, h, http.MethodPost, "/comments", validCommentForm(t, tt.extra(otherComment)))
-			if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/hello-world" {
+			if rec.Code != http.StatusFound || locationPath(t, rec) != "/hello-world" {
 				t.Fatalf("status = %d location = %q, want 302 /hello-world", rec.Code, rec.Header().Get("Location"))
 			}
 			if flash := readFlash(t, rec); !strings.Contains(flash.Alert, tt.wantAlert) {
@@ -414,5 +424,92 @@ func TestCommentSubmitRateLimited(t *testing.T) {
 	}
 	if got := commentCount(t, s); got != 5 {
 		t.Errorf("comments = %d, want 5", got)
+	}
+}
+
+// TestCommentSubmitDBError: a failing commentable lookup (e.g. the DB is
+// gone) is an internal error, not a "not found" redirect.
+func TestCommentSubmitDBError(t *testing.T) {
+	s, h := newCommentTestServer(t)
+	if err := s.DB.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	rec := doRequest(t, h, http.MethodPost, "/comments", validCommentForm(t, url.Values{"article_id": {"hello-world"}}))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+// TestCommentSubmitParentDBError: a failing parent lookup (here the comments
+// table is gone) is an internal error, not a "Parent does not exist" flash.
+func TestCommentSubmitParentDBError(t *testing.T) {
+	s, h := newCommentTestServer(t)
+	insertArticle(t, s, "hello-world", 1, 1)
+	if _, err := s.DB.Exec("DROP TABLE comments"); err != nil {
+		t.Fatalf("drop comments table: %v", err)
+	}
+
+	rec := doRequest(t, h, http.MethodPost, "/comments", validCommentForm(t, url.Values{
+		"article_id":         {"hello-world"},
+		"comment[parent_id]": {"1"},
+	}))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+// TestCommentCreateBodyTooLarge: the comment form carries only text fields,
+// so the whole request body is capped. An oversized multipart body is
+// rejected with 413 and spills nothing into os.TempDir().
+func TestCommentCreateBodyTooLarge(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+	_, h := newCommentTestServer(t)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("comment[author_name]", "Ann"); err != nil {
+		t.Fatalf("write multipart field: %v", err)
+	}
+	fw, err := mw.CreateFormFile("file", "big.bin")
+	if err != nil {
+		t.Fatalf("create multipart file: %v", err)
+	}
+	if _, err := fw.Write(bytes.Repeat([]byte("a"), 2<<20)); err != nil {
+		t.Fatalf("write multipart file: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/comments", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("read temp dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("temp files left behind: %v", entries)
+	}
+}
+
+// TestCommentCreateUrlencodedBodyTooLarge: same cap for the urlencoded
+// comment form (the multipart variant is TestCommentCreateBodyTooLarge).
+func TestCommentCreateUrlencodedBodyTooLarge(t *testing.T) {
+	_, h := newCommentTestServer(t)
+
+	rec := doRequest(t, h, http.MethodPost, "/comments", url.Values{
+		"comment[author_name]": {"Ann"},
+		"comment[content]":     {strings.Repeat("a", 2<<20)},
+	})
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
 	}
 }

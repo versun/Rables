@@ -13,12 +13,18 @@ Environment=DATA_DIR=/var/lib/rables
 Environment=HMAC_SECRET=CHANGE_ME
 # Environment=LOG_LEVEL=info
 # Environment=ARTICLE_ROUTE_PREFIX=
+# Behind an HTTPS reverse proxy, enable both of these:
+# Environment=TRUST_X_FORWARDED_FOR=true
+# Environment=SECURE_COOKIES=true
 ExecStart=/usr/local/bin/rables-server
 Restart=always
 RestartSec=3
 LimitNOFILE=65536
 
 # Hardening: the service only ever writes under DATA_DIR.
+# UMask=0077: rables.db (session tokens, API keys) and export ZIPs land
+# owner-only; the DB file is also chmod 0600 by the app itself.
+UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

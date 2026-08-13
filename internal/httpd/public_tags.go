@@ -61,7 +61,15 @@ func (s *Server) publicTagsIndex(w http.ResponseWriter, r *http.Request) {
 	for _, row := range counts {
 		byTag[row.TagID] = row.PublishedCount
 	}
-	data := publicTagsData{Flash: PopFlash(r, w), Chrome: chrome, Tags: make([]tagCount, 0, len(tags))}
+	// A present flash cookie means the page renders a one-time flash, so the
+	// response must not be cached (same check as publicArticleIndex).
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	cacheControl := "public, max-age=300, s-maxage=900"
+	if flashCookieErr == nil {
+		cacheControl = "private, no-cache"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
+	data := publicTagsData{Flash: s.PopFlash(r, w), Chrome: chrome, Tags: make([]tagCount, 0, len(tags))}
 	for _, t := range tags {
 		data.Tags = append(data.Tags, tagCount{Tag: t, Count: byTag[t.ID]})
 	}
@@ -82,7 +90,7 @@ type publicTagData struct {
 // format): the tag's published articles, 20 per page.
 func (s *Server) publicTagShow(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	tag, err := s.Q.GetPublicTagBySlug(ctx, slugParam(r))
+	tag, err := s.Q.GetPublicTagBySlug(ctx, slugParam(r, "slug"))
 	if errors.Is(err, sql.ErrNoRows) {
 		s.publicNotFound(w)
 		return
@@ -120,8 +128,16 @@ func (s *Server) publicTagShow(w http.ResponseWriter, r *http.Request) {
 		s.listError(w, "list article tags", err)
 		return
 	}
+	// A present flash cookie means the page renders a one-time flash, so the
+	// response must not be cached (same check as publicArticleIndex).
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	cacheControl := "public, max-age=300, s-maxage=900"
+	if flashCookieErr == nil {
+		cacheControl = "private, no-cache"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
 	s.render(w, http.StatusOK, "public_tag", publicTagData{
-		Flash:  PopFlash(r, w),
+		Flash:  s.PopFlash(r, w),
 		Chrome: chrome,
 		Tag:    tag,
 		Total:  total,

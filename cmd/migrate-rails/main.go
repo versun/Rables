@@ -13,7 +13,9 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite"
 
@@ -42,8 +44,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// read-only: the old database must never be modified
-	oldDB, err := sql.Open("sqlite", "file:"+*oldPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	// read-only: the old database must never be modified. The DSN goes
+	// through net/url so a "?" or "%" in the path cannot leak into the
+	// query string (sqlite percent-decodes the path after splitting).
+	absOld, err := filepath.Abs(*oldPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "open old database:", err)
+		os.Exit(1)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: absOld, RawQuery: "mode=ro&_pragma=busy_timeout(5000)"}).String()
+	oldDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open old database:", err)
 		os.Exit(1)

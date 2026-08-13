@@ -202,20 +202,30 @@ func BuildPostURL(siteURL, routePrefix, slug string) string {
 		siteURL = "https://" + siteURL
 	}
 
+	// Build the article path before parsing so the parse-failure fallback
+	// below keeps the route prefix too.
+	path := "/" + slug
+	if prefix := strings.Trim(routePrefix, "/"); prefix != "" {
+		path = "/" + prefix + path
+	}
+
 	u, err := url.Parse(siteURL)
 	if err != nil || u.Hostname() == "" {
-		return siteURL + "/" + slug
+		return siteURL + path
 	}
 
 	host := u.Hostname()
 	if port := u.Port(); port != "" && !isDefaultPort(u.Scheme, port) {
 		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		// IPv6 literal with a default (or no) port: url.URL.Host needs
+		// brackets to stay parseable (net.JoinHostPort adds them above).
+		host = "[" + host + "]"
 	}
 
-	path := "/" + slug
-	if prefix := strings.Trim(routePrefix, "/"); prefix != "" {
-		path = "/" + prefix + path
-	}
+	// Keep any path component of the site URL (normalizeSiteURL keeps it, so
+	// a site mounted under https://example.com/blog lives below that path).
+	path = strings.TrimSuffix(u.Path, "/") + path
 	return (&url.URL{Scheme: u.Scheme, Host: host, Path: path}).String()
 }
 

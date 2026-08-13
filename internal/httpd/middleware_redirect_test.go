@@ -115,9 +115,34 @@ func TestRedirectMiddleware(t *testing.T) {
 			wantStatus: http.StatusFound, wantLocation: "/articles/42",
 		},
 		{
+			name: "named capture group substituted", method: http.MethodGet, path: "/posts/42",
+			rules:      []query.Redirect{{Regex: "^/posts/(?<id>.+)$", Replacement: "/articles/\\k<id>", Enabled: 1}},
+			wantStatus: http.StatusFound, wantLocation: "/articles/42",
+		},
+		{
+			name: "named capture quote form substituted", method: http.MethodGet, path: "/posts/42",
+			rules:      []query.Redirect{{Regex: "^/posts/(?<id>.+)$", Replacement: "/articles/\\k'id'", Enabled: 1}},
+			wantStatus: http.StatusFound, wantLocation: "/articles/42",
+		},
+		{
+			name: "whole match substituted", method: http.MethodGet, path: "/a/old/b",
+			rules:      []query.Redirect{{Regex: "old", Replacement: "[\\&]", Enabled: 1}},
+			wantStatus: http.StatusFound, wantLocation: "/a/[old]/b",
+		},
+		{
 			name: "partial match substitutes span", method: http.MethodGet, path: "/a/old/b",
 			rules:      []query.Redirect{{Regex: "old", Replacement: "new", Enabled: 1}},
 			wantStatus: http.StatusFound, wantLocation: "/a/new/b",
+		},
+		{
+			name: "slug sharing skip prefix redirected", method: http.MethodGet, path: "/updates-2024",
+			rules:      []query.Redirect{{Regex: "^/updates-2024$", Replacement: "/articles/updates-2024", Enabled: 1}},
+			wantStatus: http.StatusFound, wantLocation: "/articles/updates-2024",
+		},
+		{
+			name: "exact skip prefix still skipped", method: http.MethodGet, path: "/admin",
+			rules:      []query.Redirect{{Regex: "admin", Replacement: "new", Enabled: 1}},
+			wantStatus: http.StatusOK,
 		},
 	}
 	for _, prefix := range []string{"/admin", "/assets", "/files", "/static", "/up"} {

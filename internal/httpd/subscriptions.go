@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,7 +43,7 @@ type newsletterConfirmationPayload struct {
 func RegisterSubscriptionRoutes(r chi.Router, s *Server) {
 	limiter := NewIPRateLimiter(rate.Every(12*time.Minute), subscriptionCreateBurst)
 	r.Get("/subscriptions", s.subscriptionsIndex)
-	r.With(RateLimit(limiter, ClientIP)).Post("/subscriptions", s.subscriptionsCreate)
+	r.With(RateLimit(limiter, s.rateLimitKey)).Post("/subscriptions", s.subscriptionsCreate)
 	r.Get("/confirm", s.subscriptionConfirm)
 	r.Get("/unsubscribe", s.subscriptionUnsubscribeForm)
 	r.Post("/unsubscribe", s.subscriptionUnsubscribe)
@@ -144,8 +145,17 @@ func (s *Server) subscriptionsIndex(w http.ResponseWriter, r *http.Request) {
 		s.listError(w, "list tags", err)
 		return
 	}
+	// Must stay private: the form embeds a per-request captcha token. A
+	// present flash cookie means the page renders a one-time flash, so the
+	// response must not be cached (same check as publicArticleIndex).
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	cacheControl := "private, max-age=60"
+	if flashCookieErr == nil {
+		cacheControl = "private, no-cache"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
 	s.render(w, http.StatusOK, "public_subscriptions", subscriptionsPageData{
-		Flash:  PopFlash(r, w),
+		Flash:  s.PopFlash(r, w),
 		Chrome: chrome,
 		Form:   form,
 	})
@@ -157,14 +167,11 @@ func (s *Server) subscriptionsIndex(w http.ResponseWriter, r *http.Request) {
 // confirmation-email job.
 func (s *Server) subscriptionsCreate(w http.ResponseWriter, r *http.Request) {
 	// The inline navbar/tag forms submit via fetch(FormData) (multipart),
-	// the /subscriptions page posts urlencoded. ParseMultipartForm covers
-	// both, falling back to ParseForm for non-multipart bodies — calling
-	// ParseForm alone never parses a multipart body, which was the
-	// regression. Reads below use r.Form because it merges query string and
-	// body params like Rails' params (r.PostForm would also work here:
+	// the /subscriptions page posts urlencoded — parseCappedForm covers
+	// both. Reads below use r.Form because it merges query string and body
+	// params like Rails' params (r.PostForm would also work here:
 	// ParseMultipartForm populates it too, per Go issue 9305).
-	if err := r.ParseMultipartForm(10 << 20); err != nil && !errors.Is(err, http.ErrNotMultipart) {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if !parseCappedForm(w, r) {
 		return
 	}
 	// File parts in a crafted multipart request spill to disk above
@@ -178,22 +185,23 @@ func (s *Server) subscriptionsCreate(w http.ResponseWriter, r *http.Request) {
 	if _, ok := r.Form["subscription[email]"]; ok {
 		email = r.Form.Get("subscription[email]")
 	}
+	// Normalize so a case variant lands on the existing row: the lookup
+	// below and UNIQUE(email) are both case-sensitive (see NormalizeEmail).
+	email = subscribersvc.NormalizeEmail(email)
 	wantsJSON := strings.Contains(r.Header.Get("Accept"), "application/json")
 	fail := func(message string) {
 		if wantsJSON {
 			writeSubscriptionJSON(w, http.StatusUnprocessableEntity, false, message)
 			return
 		}
-		SetFlash(w, templates.Flash{Alert: message})
-		http.Redirect(w, r, "/", http.StatusFound)
+		s.redirectWithFlash(w, r, "/", templates.Flash{Alert: message})
 	}
 	succeed := func(message string) {
 		if wantsJSON {
 			writeSubscriptionJSON(w, http.StatusOK, true, message)
 			return
 		}
-		SetFlash(w, templates.Flash{Notice: message})
-		http.Redirect(w, r, "/", http.StatusFound)
+		s.redirectWithFlash(w, r, "/", templates.Flash{Notice: message})
 	}
 
 	if domain.IsBlank(email) {
@@ -239,10 +247,28 @@ func (s *Server) subscriptionsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if found && sub.UnsubscribedAt.Valid {
-		// Re-subscribe of an unsubscribed address: reset the confirmation
+	if !found {
+		sub, err = s.createSubscriber(ctx, email)
+		if err != nil {
+			s.Log.Error("create subscriber", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		// The row may already exist (and even be confirmed) when a
+		// concurrent request won the insert race; mirror the
+		// already_subscribed? guard for that case.
+		if subscribersvc.Confirmed(sub) && !sub.UnsubscribedAt.Valid {
+			succeed("您已经订阅了我们的邮件列表。")
+			return
+		}
+	}
+
+	if sub.UnsubscribedAt.Valid {
+		// Re-subscribe of an unsubscribed address (found directly, or
+		// recovered from the insert race above): reset the confirmation
 		// state and issue a fresh confirmation token (a new confirmation
-		// email is enqueued below).
+		// email is enqueued below). Without the reset the confirmation link
+		// would only set confirmed_at, leaving the address unsubscribed.
 		newToken, err := subscribersvc.NewToken()
 		if err != nil {
 			s.Log.Error("generate token", "error", err)
@@ -258,12 +284,23 @@ func (s *Server) subscriptionsCreate(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-	}
-
-	if !found {
-		sub, err = subscribersvc.Create(ctx, s.Q, email, "", "")
+	} else if !subscribersvc.Confirmed(sub) && sub.ConfirmationToken.String == "" {
+		// Re-subscribe of a legacy imported row with a blank confirmation
+		// token (Subscriber#generate_tokens fills blanks on every save):
+		// the confirmation email enqueued below must link a usable token —
+		// /confirm deliberately rejects blank ones.
+		newToken, err := subscribersvc.NewToken()
 		if err != nil {
-			s.Log.Error("create subscriber", "error", err)
+			s.Log.Error("generate token", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if err := s.Q.SetSubscriberConfirmationToken(ctx, query.SetSubscriberConfirmationTokenParams{
+			ConfirmationToken: sql.NullString{String: newToken, Valid: true},
+			UpdatedAt:         time.Now().UTC().Unix(),
+			ID:                sub.ID,
+		}); err != nil {
+			s.Log.Error("set confirmation token", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -271,8 +308,13 @@ func (s *Server) subscriptionsCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Tag.where(id: tag_ids): blank entries dropped, dangling ids ignored;
 	// no selection subscribes to all content (empty tag set).
-	tagIDs := s.existingTagIDs(ctx, r.Form["subscription[tag_ids][]"])
-	if err := subscribersvc.ReplaceTags(ctx, s.Q, sub.ID, tagIDs); err != nil {
+	tagIDs, err := s.existingTagIDs(ctx, r.Form["subscription[tag_ids][]"])
+	if err != nil {
+		s.Log.Error("resolve subscriber tags", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := subscribersvc.ReplaceTags(ctx, s.DB, sub.ID, tagIDs); err != nil {
 		s.Log.Error("replace subscriber tags", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -290,10 +332,29 @@ func (s *Server) subscriptionsCreate(w http.ResponseWriter, r *http.Request) {
 	succeed("订阅成功！请检查您的邮箱并点击确认链接。")
 }
 
+// createSubscriber inserts a new subscriber row. When a concurrent request
+// already inserted the same address (TOCTOU against the UNIQUE email
+// column: both requests saw found=false), it reloads and returns the
+// existing row instead of failing with a bare 500.
+func (s *Server) createSubscriber(ctx context.Context, email string) (query.Subscriber, error) {
+	sub, err := subscribersvc.Create(ctx, s.Q, email, "", "")
+	if err == nil {
+		return sub, nil
+	}
+	if !isUniqueViolation(err) {
+		return query.Subscriber{}, err
+	}
+	return s.Q.GetSubscriberByEmail(ctx, email)
+}
+
 // existingTagIDs resolves raw tag_id form values to existing tag ids,
 // mirroring Tag.where(id: tag_ids): blanks are rejected first, non-numeric
-// values cast to 0 (no match), and dangling ids are dropped.
-func (s *Server) existingTagIDs(ctx context.Context, raw []string) []int64 {
+// values cast to 0 (no match), dangling ids are dropped, and duplicates
+// collapse — a repeated id would make ReplaceTags' second AddSubscriberTag
+// hit UNIQUE(subscriber_id, tag_id) and roll the transaction back. A lookup
+// failure other than ErrNoRows (a real DB error) aborts the request rather
+// than silently dropping a selected tag.
+func (s *Server) existingTagIDs(ctx context.Context, raw []string) ([]int64, error) {
 	var ids []int64
 	for _, v := range raw {
 		if domain.IsBlank(v) {
@@ -303,11 +364,18 @@ func (s *Server) existingTagIDs(ctx context.Context, raw []string) []int64 {
 		if id <= 0 {
 			continue
 		}
-		if _, err := s.Q.GetTagByID(ctx, id); err == nil {
-			ids = append(ids, id)
+		if slices.Contains(ids, id) {
+			continue
 		}
+		if _, err := s.Q.GetTagByID(ctx, id); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
+			continue
+		}
+		ids = append(ids, id)
 	}
-	return ids
+	return ids, nil
 }
 
 // writeSubscriptionJSON renders the {success, message} contract consumed by
@@ -345,9 +413,16 @@ func (s *Server) subscriptionConfirm(w http.ResponseWriter, r *http.Request) {
 		s.listError(w, "load site settings", err)
 		return
 	}
-	data := subscriptionConfirmData{Flash: PopFlash(r, w), Chrome: chrome}
+	data := subscriptionConfirmData{Chrome: chrome}
 	token := r.URL.Query().Get("token")
-	sub, err := s.Q.GetSubscriberByConfirmationToken(ctx, sql.NullString{String: token, Valid: true})
+	// A tokenless request must never resolve a subscriber: imports preserve
+	// legacy token columns verbatim, so a row whose stored token is the empty
+	// string would otherwise match. Generated tokens are always non-empty.
+	var sub query.Subscriber
+	err = sql.ErrNoRows
+	if token != "" {
+		sub, err = s.Q.GetSubscriberByConfirmationToken(ctx, sql.NullString{String: token, Valid: true})
+	}
 	switch {
 	case err == nil:
 		data.Success = true
@@ -373,6 +448,19 @@ func (s *Server) subscriptionConfirm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Token-bound result page: keep it private and short-lived. A present
+	// flash cookie means the page renders a one-time flash, so the response
+	// must not be cached (same check as publicArticleIndex). Set only after
+	// every fallible query, or http.Error would send a cached 500.
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	cacheControl := "private, max-age=60"
+	if flashCookieErr == nil {
+		cacheControl = "private, no-cache"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
+	// PopFlash runs only after every fallible query: its clearing Set-Cookie
+	// would otherwise go out with a 500 and destroy the unseen flash.
+	data.Flash = s.PopFlash(r, w)
 	s.render(w, http.StatusOK, "public_subscribe_confirm", data)
 }
 
@@ -394,8 +482,13 @@ func (s *Server) subscriptionUnsubscribeForm(w http.ResponseWriter, r *http.Requ
 		s.listError(w, "load site settings", err)
 		return
 	}
-	data := unsubscribeConfirmData{Flash: PopFlash(r, w), Chrome: chrome, Token: r.URL.Query().Get("token")}
-	sub, err := s.Q.GetSubscriberByUnsubscribeToken(ctx, sql.NullString{String: data.Token, Valid: true})
+	data := unsubscribeConfirmData{Chrome: chrome, Token: r.URL.Query().Get("token")}
+	// See subscriptionConfirm: a tokenless request must not resolve a row.
+	var sub query.Subscriber
+	err = sql.ErrNoRows
+	if data.Token != "" {
+		sub, err = s.Q.GetSubscriberByUnsubscribeToken(ctx, sql.NullString{String: data.Token, Valid: true})
+	}
 	switch {
 	case err == nil:
 		data.Found, data.Email = true, sub.Email
@@ -405,6 +498,19 @@ func (s *Server) subscriptionUnsubscribeForm(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Token-bound result page: keep it private and short-lived. A present
+	// flash cookie means the page renders a one-time flash, so the response
+	// must not be cached (same check as publicArticleIndex). Set only after
+	// every fallible query, or http.Error would send a cached 500.
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	cacheControl := "private, max-age=60"
+	if flashCookieErr == nil {
+		cacheControl = "private, no-cache"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
+	// PopFlash runs only after every fallible query: its clearing Set-Cookie
+	// would otherwise go out with a 500 and destroy the unseen flash.
+	data.Flash = s.PopFlash(r, w)
 	s.render(w, http.StatusOK, "public_unsubscribe_confirm", data)
 }
 
@@ -418,9 +524,13 @@ type unsubscribeResultData struct {
 // subscriptionUnsubscribe handles POST /unsubscribe, mirroring the POST
 // branch of SubscriptionsController#unsubscribe.
 func (s *Server) subscriptionUnsubscribe(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	// Same capped form parse as subscriptionsCreate (the form has only text
+	// fields).
+	if !parseCappedForm(w, r) {
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 	ctx := r.Context()
 	chrome, err := s.chrome(ctx, "")
@@ -428,8 +538,14 @@ func (s *Server) subscriptionUnsubscribe(w http.ResponseWriter, r *http.Request)
 		s.listError(w, "load site settings", err)
 		return
 	}
-	data := unsubscribeResultData{Flash: PopFlash(r, w), Chrome: chrome}
-	sub, err := s.Q.GetSubscriberByUnsubscribeToken(ctx, sql.NullString{String: r.FormValue("token"), Valid: true})
+	data := unsubscribeResultData{Chrome: chrome}
+	// See subscriptionConfirm: a tokenless request must not resolve a row.
+	token := r.FormValue("token")
+	var sub query.Subscriber
+	err = sql.ErrNoRows
+	if token != "" {
+		sub, err = s.Q.GetSubscriberByUnsubscribeToken(ctx, sql.NullString{String: token, Valid: true})
+	}
 	switch {
 	case err == nil:
 		// Subscriber#unsubscribe! is a no-op when already unsubscribed.
@@ -452,6 +568,19 @@ func (s *Server) subscriptionUnsubscribe(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Token-bound result page: keep it private and short-lived. A present
+	// flash cookie means the page renders a one-time flash, so the response
+	// must not be cached (same check as publicArticleIndex). Set only after
+	// every fallible query, or http.Error would send a cached 500.
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	cacheControl := "private, max-age=60"
+	if flashCookieErr == nil {
+		cacheControl = "private, no-cache"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
+	// PopFlash runs only after every fallible query: its clearing Set-Cookie
+	// would otherwise go out with a 500 and destroy the unseen flash.
+	data.Flash = s.PopFlash(r, w)
 	s.render(w, http.StatusOK, "public_unsubscribe", data)
 }
 

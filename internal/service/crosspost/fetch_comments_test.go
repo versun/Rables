@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -307,6 +308,33 @@ func TestFetchMastodonRateLimitFlow(t *testing.T) {
 	}
 }
 
+// TestFetchCommentsContextCanceled: a ctx canceled mid-scan (SIGTERM) aborts
+// the run with context.Canceled so the job is retried, not marked done with
+// the remaining articles silently skipped.
+func TestFetchCommentsContextCanceled(t *testing.T) {
+	f, database := newTestCommentFetcher(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel() // the shutdown lands during the first fetch
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, mastodonContextFixture)
+	}))
+	t.Cleanup(srv.Close)
+	f.mastodon = mastodonPlatform{client: srv.Client()}
+
+	insertFetchCrosspost(t, database, "mastodon", srv.URL, 1, 1)
+	for i, slug := range []string{"c1", "c2"} {
+		id := insertArticleWithStatus(t, database, slug, 1)
+		recordSocialURL(t, database, id, "mastodon", fmt.Sprintf("https://mastodon.social/@me/%d", i+1), 1000)
+	}
+
+	err := f.Handle(ctx, json.RawMessage(`{"platform":"mastodon"}`))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Handle = %v, want context.Canceled", err)
+	}
+}
+
 // --- bluesky ---
 
 // blueskyThreadFixture mirrors app.bsky.feed.getPostThread: one nested reply
@@ -497,6 +525,76 @@ func TestFetchTwitterCommentsManual(t *testing.T) {
 	}
 }
 
+// TestFetchTwitterCommentsQuoteSkippedAuthor is a regression test for the
+// quote-tweet index misalignment: comments() drops quotes whose author is
+// missing from includes.users, so the replies of a later quote must attach
+// to that quote's own tweet ID, not to the position in quotes.Data (which
+// used to panic / mis-parent once an earlier quote was skipped).
+func TestFetchTwitterCommentsQuoteSkippedAuthor(t *testing.T) {
+	f, database := newTestCommentFetcher(t)
+	search := func(query string) string {
+		switch query {
+		case "conversation_id:123 is:reply":
+			return `{"data": []}`
+		case "url:https://x.com/me/status/123 is:quote":
+			// q1's author is absent from includes.users, so comments()
+			// skips it; only q2 becomes a comment.
+			return `{"data": [{
+			    "id": "9001", "text": "ghost quote", "author_id": "u-missing",
+			    "conversation_id": "456", "created_at": "2026-03-04T05:06:07.000Z",
+			    "referenced_tweets": [{"type": "quoted", "id": "123"}]
+			  }, {
+			    "id": "9002", "text": "look at this", "author_id": "u2",
+			    "conversation_id": "789", "created_at": "2026-03-04T06:07:08.000Z",
+			    "referenced_tweets": [{"type": "quoted", "id": "123"}]
+			  }],
+			  "includes": {"users": [{"id": "u2", "username": "dan", "name": "Dan D", "profile_image_url": "https://img/dan.png"}]}}`
+		case "conversation_id:456 is:reply":
+			return `{"data": []}`
+		case "conversation_id:789 is:reply":
+			return `{"data": [{
+			    "id": "9003", "text": "agreed", "author_id": "u2",
+			    "conversation_id": "789", "created_at": "2026-03-04T07:08:09.000Z",
+			    "referenced_tweets": [{"type": "replied_to", "id": "9002"}]
+			  }],
+			  "includes": {"users": [{"id": "u2", "username": "dan", "name": "Dan D", "profile_image_url": "https://img/dan.png"}]}}`
+		}
+		t.Errorf("unexpected search query %q", query)
+		return `{"data": []}`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/2/tweets/123":
+			fmt.Fprint(w, `{"data": {"id": "123", "conversation_id": "123", "created_at": "2026-03-04T01:02:03.000Z"}}`)
+		case "/2/tweets/search/recent":
+			fmt.Fprint(w, search(r.URL.Query().Get("query")))
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	f.twitter = twitterPlatform{baseURL: srv.URL + "/2", client: srv.Client()}
+
+	insertFetchCrosspost(t, database, "twitter", "", 1, 0)
+	articleID := insertArticleWithStatus(t, database, "tweet-post", 1)
+	recordSocialURL(t, database, articleID, "twitter", "https://x.com/me/status/123", 1000)
+
+	runFetch(t, f, fmt.Sprintf(`{"article_id":%d,"platform":"twitter"}`, articleID))
+
+	got := loadComments(t, database, articleID)
+	if len(got) != 2 { // skipped ghost quote, kept quote + its reply
+		t.Fatalf("comments = %+v", got)
+	}
+	quote, quoteReply := got[0], got[1]
+	if quote.externalID != "9002" {
+		t.Errorf("quote = %+v, want 9002", quote)
+	}
+	if quoteReply.externalID != "9003" || !quoteReply.parentID.Valid {
+		t.Errorf("quoteReply = %+v, want parent set to the quote tweet comment", quoteReply)
+	}
+}
+
 // --- handler dispatch ---
 
 func TestFetchCommentsCronSkipsTwitter(t *testing.T) {
@@ -573,6 +671,36 @@ func TestFetchCommentsUnknownPlatformAndBadPayload(t *testing.T) {
 	runFetch(t, f, `{"article_id":99999,"platform":"mastodon"}`)
 }
 
+// TestFetchForArticleConfigLoadError: a real DB failure loading the crosspost
+// config (not sql.ErrNoRows) must abort the manual fetch with an error so the
+// job is retried, like the cron path — instead of fetching with a disabled
+// placeholder config and recording a successful count=0 activity row.
+func TestFetchForArticleConfigLoadError(t *testing.T) {
+	f, database := newTestCommentFetcher(t)
+
+	articleID := insertArticleWithStatus(t, database, "post", 1)
+	recordSocialURL(t, database, articleID, "mastodon", "https://mastodon.social/@me/123", 1000)
+
+	if _, err := database.ExecContext(t.Context(), `DROP TABLE crossposts`); err != nil {
+		t.Fatalf("drop crossposts: %v", err)
+	}
+
+	err := f.Handle(t.Context(), json.RawMessage(
+		fmt.Sprintf(`{"article_id":%d,"platform":"mastodon"}`, articleID)))
+	if err == nil {
+		t.Fatal("Handle = nil error, want the config load failure")
+	}
+
+	var fetched int
+	if err := database.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM activity_logs WHERE action = 'fetched' AND target = 'fetch_comments'`).Scan(&fetched); err != nil {
+		t.Fatalf("count fetched: %v", err)
+	}
+	if fetched != 0 {
+		t.Errorf("fetched activity rows = %d, want 0", fetched)
+	}
+}
+
 // --- idempotent upsert ---
 
 func TestFetchCommentsIdempotent(t *testing.T) {
@@ -622,5 +750,29 @@ func TestFetchCommentsIdempotent(t *testing.T) {
 	}
 	if got[0].status != 1 { // ... but never overwrites the moderation decision
 		t.Errorf("status = %d, want approved(1) preserved", got[0].status)
+	}
+}
+
+// TestUpsertBatchSkipsEmptyExternalID: a comment without an external id stores
+// NULL, which `external_id = ?` never matches and the partial unique index
+// (WHERE external_id IS NOT NULL) does not cover — it would re-import on every
+// fetch — so upsertBatch skips it like blank content.
+func TestUpsertBatchSkipsEmptyExternalID(t *testing.T) {
+	f, database := newTestCommentFetcher(t)
+	articleID := insertArticleWithStatus(t, database, "post", 1)
+
+	created, err := f.upsertBatch(t.Context(), articleID, "mastodon", []commentData{
+		{ExternalID: "", Content: "<p>no id</p>"},
+		{ExternalID: "1001", Content: "<p>has id</p>"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("upsertBatch: %v", err)
+	}
+	if created != 1 {
+		t.Errorf("created = %d, want 1 (empty external id skipped)", created)
+	}
+	got := loadComments(t, database, articleID)
+	if len(got) != 1 || got[0].externalID != "1001" {
+		t.Errorf("comments = %+v, want only the 1001 comment", got)
 	}
 }

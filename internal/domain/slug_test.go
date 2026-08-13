@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -30,6 +31,10 @@ func TestGenerateSlug(t *testing.T) {
 		{name: "underscore kept", title: "a_b-c d", want: "a_b-c-d"},
 		{name: "blank title falls back to timestamp", title: "  ", want: "2026-08-03-02-03"},
 		{name: "no title falls back to timestamp", want: "2026-08-03-02-03"},
+		{name: "url-unsafe chars removed from manual slug", slug: "a/b?c#d%e\\f", want: "abcdef"},
+		{name: "control chars removed from manual slug", slug: "a\tb\x00c", want: "abc"},
+		{name: "url-unsafe chars removed from fallback slug", title: "你好?世界", want: "你好世界"},
+		{name: "cleaned fallback conflict gets unique suffix", title: "你好?世界", exists: exists, want: "你好世界-2"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -38,6 +43,44 @@ func TestGenerateSlug(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsValidSlug(t *testing.T) {
+	for _, ok := range []string{"my-post", "你好世界", "a_b", "hello world", ""} {
+		if !IsValidSlug(ok) {
+			t.Errorf("IsValidSlug(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"a.b", "a/b", "a?b", "a#b", "a%b", `a\b`, "a\tb", "a\x00b"} {
+		if IsValidSlug(bad) {
+			t.Errorf("IsValidSlug(%q) = true, want false", bad)
+		}
+	}
+}
+
+// TestParameterizeConcurrent hammers Parameterize from many goroutines; the
+// transliterator chain buffers per-call state on the struct, so a shared
+// chain would race and corrupt output (run with -race).
+func TestParameterizeConcurrent(t *testing.T) {
+	inputs := map[string]string{
+		"Café":         "cafe",
+		"naïve façade": "naive-facade",
+		"你好 World":    "world",
+		"Hello--World": "hello-world",
+	}
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for in, want := range inputs {
+				if got := Parameterize(in); got != want {
+					t.Errorf("Parameterize(%q) = %q, want %q", in, got, want)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestIsReservedSlug(t *testing.T) {

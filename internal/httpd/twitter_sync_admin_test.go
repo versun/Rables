@@ -205,6 +205,85 @@ func TestTwitterSyncUpdateResetsCursor(t *testing.T) {
 	}
 }
 
+// TestTwitterSyncUpdateLeavesSyncerFieldsAlone: a config-only save must not
+// issue any write to the syncer-owned columns (since_id/last_synced_at/
+// last_error/user_id). The old full-overlay UPDATE wrote back the values read
+// before the save, rolling back a sync run that committed in between; the
+// trigger below fails any such write, so the save succeeds only when those
+// columns are never written at all.
+func TestTwitterSyncUpdateLeavesSyncerFieldsAlone(t *testing.T) {
+	s, h := newTwitterSyncTestServer(t)
+	cookie := twitterSyncSessionCookie(t, s)
+
+	now := time.Now().Unix()
+	if _, err := s.DB.Exec(`INSERT INTO twitter_syncs
+		(id, enabled, username, user_id, since_id, start_date, sync_schedule, last_synced_at, last_error, created_at, updated_at)
+		VALUES (1, 1, 'alice', '42', '100', NULL, 'hourly', ?, 'boom', ?, ?)`, now-3600, now, now); err != nil {
+		t.Fatalf("seed twitter_syncs: %v", err)
+	}
+	if _, err := s.DB.Exec(`CREATE TRIGGER forbid_syncer_field_writes BEFORE UPDATE OF user_id, since_id, last_synced_at, last_error ON twitter_syncs
+		BEGIN SELECT RAISE(ABORT, 'syncer-owned column write'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/twitter_sync", strings.NewReader(twitterSyncForm(map[string]string{
+		"enabled": "1", "username": "alice", "sync_schedule": "daily",
+	}).Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 (a config-only save must not write syncer-owned columns)", rec.Code)
+	}
+	row := getTwitterSyncRow(t, s)
+	if row.SyncSchedule != "daily" {
+		t.Errorf("sync_schedule = %q, want daily", row.SyncSchedule)
+	}
+	if row.SinceID.String != "100" || row.UserID.String != "42" || !row.LastSyncedAt.Valid || row.LastError.String != "boom" {
+		t.Errorf("config-only save touched syncer-owned fields: %+v", row)
+	}
+}
+
+// TestTwitterSyncUpdateAtomic: when the cursor reset fails after the config
+// update, the whole save must roll back — otherwise a retry would read the
+// already-saved username, skip the reset, and the new account would keep
+// syncing from the old account's cursor. The trigger below fails the reset;
+// the save must return 500 and leave the config untouched.
+func TestTwitterSyncUpdateAtomic(t *testing.T) {
+	s, h := newTwitterSyncTestServer(t)
+	cookie := twitterSyncSessionCookie(t, s)
+
+	now := time.Now().Unix()
+	if _, err := s.DB.Exec(`INSERT INTO twitter_syncs
+		(id, enabled, username, user_id, since_id, start_date, sync_schedule, last_synced_at, last_error, created_at, updated_at)
+		VALUES (1, 1, 'alice', '42', '100', NULL, 'hourly', ?, 'boom', ?, ?)`, now-3600, now, now); err != nil {
+		t.Fatalf("seed twitter_syncs: %v", err)
+	}
+	if _, err := s.DB.Exec(`CREATE TRIGGER forbid_cursor_reset BEFORE UPDATE OF since_id ON twitter_syncs
+		BEGIN SELECT RAISE(ABORT, 'cursor reset failed'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/twitter_sync", strings.NewReader(twitterSyncForm(map[string]string{
+		"enabled": "1", "username": "bob", "sync_schedule": "daily",
+	}).Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	row := getTwitterSyncRow(t, s)
+	if row.Username.String != "alice" || row.SyncSchedule != "hourly" {
+		t.Errorf("failed save leaked the config update: %+v", row)
+	}
+	if row.SinceID.String != "100" || row.UserID.String != "42" {
+		t.Errorf("failed save touched the cursor: %+v", row)
+	}
+}
+
 func TestTwitterSyncNowGuard(t *testing.T) {
 	s, h := newTwitterSyncTestServer(t)
 	cookie := twitterSyncSessionCookie(t, s)

@@ -84,7 +84,7 @@ func (s *Server) newsletterShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := s.newsletterShowData(r, newsletterTab(r.URL.Query().Get("tab")), st, lm)
-	data.Flash = PopFlash(r, w)
+	data.Flash = s.PopFlash(r, w)
 	s.render(w, http.StatusOK, "admin_newsletter", data)
 }
 
@@ -192,7 +192,7 @@ func (s *Server) updateNewsletterSetting(w http.ResponseWriter, r *http.Request,
 	}
 	if v, ok := last("newsletter_setting[smtp_password]"); ok {
 		// The masked placeholder (or a blank field) keeps the stored password.
-		if (v != "••••••••" && v != "") || st.SmtpPassword.String == "" {
+		if v != "••••••••" && v != "" {
 			st.SmtpPassword = str(v)
 		}
 	}
@@ -239,7 +239,7 @@ func (s *Server) updateNewsletterSetting(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	SetFlash(w, templates.Flash{Notice: "Newsletter settings updated successfully."})
+	s.SetFlash(w, templates.Flash{Notice: "Newsletter settings updated successfully."})
 	http.Redirect(w, r, "/admin/newsletter?tab="+tab, http.StatusFound)
 }
 
@@ -301,7 +301,7 @@ func (s *Server) updateListmonk(w http.ResponseWriter, r *http.Request, tab stri
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	SetFlash(w, templates.Flash{Notice: "Newsletter settings updated successfully."})
+	s.SetFlash(w, templates.Flash{Notice: "Newsletter settings updated successfully."})
 	http.Redirect(w, r, "/admin/newsletter?tab="+tab, http.StatusFound)
 }
 
@@ -340,6 +340,11 @@ func newsletterVerifyParams(r *http.Request) (map[string]string, error) {
 		"username", "api_key", "url", "list_id", "template_id",
 	} {
 		params[key] = r.FormValue(key)
+	}
+	// A Rails check_box posts the hidden "0" before the checked "1" and the
+	// last value wins (see formCheckbox); FormValue would return the "0".
+	if values := r.PostForm["smtp_enable_starttls"]; len(values) > 0 {
+		params["smtp_enable_starttls"] = values[len(values)-1]
 	}
 	return params, nil
 }

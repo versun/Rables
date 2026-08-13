@@ -10,6 +10,20 @@ import (
 	"database/sql"
 )
 
+const countStaticFilesForFile = `-- name: CountStaticFilesForFile :one
+SELECT COUNT(*) FROM static_files WHERE file_id = ?
+`
+
+// Record cleanup (articles.Destroy, twitter archive replace) deletes files
+// rows left without references; static_files.file_id references files(id)
+// under foreign_keys enforcement, so these references count too.
+func (q *Queries) CountStaticFilesForFile(ctx context.Context, fileID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countStaticFilesForFile, fileID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createStaticFile = `-- name: CreateStaticFile :one
 INSERT INTO static_files (filename, description, file_id, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?)
@@ -53,13 +67,15 @@ func (q *Queries) DeleteFileByID(ctx context.Context, id int64) error {
 	return err
 }
 
-const deleteStaticFile = `-- name: DeleteStaticFile :exec
-DELETE FROM static_files WHERE id = ?
+const deleteStaticFile = `-- name: DeleteStaticFile :one
+DELETE FROM static_files WHERE id = ? RETURNING file_id
 `
 
-func (q *Queries) DeleteStaticFile(ctx context.Context, id int64) error {
-	_, err := q.db.ExecContext(ctx, deleteStaticFile, id)
-	return err
+func (q *Queries) DeleteStaticFile(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, deleteStaticFile, id)
+	var file_id int64
+	err := row.Scan(&file_id)
+	return file_id, err
 }
 
 const getFileForStaticFilename = `-- name: GetFileForStaticFilename :one
@@ -173,25 +189,30 @@ func (q *Queries) ListStaticFiles(ctx context.Context) ([]ListStaticFilesRow, er
 	return items, nil
 }
 
-const updateStaticFile = `-- name: UpdateStaticFile :exec
+const updateStaticFile = `-- name: UpdateStaticFile :execrows
 UPDATE static_files
 SET description = ?, file_id = ?, updated_at = ?
-WHERE id = ?
+WHERE id = ? AND file_id = ?5
 `
 
 type UpdateStaticFileParams struct {
-	Description sql.NullString
-	FileID      int64
-	UpdatedAt   int64
-	ID          int64
+	Description    sql.NullString
+	FileID         int64
+	UpdatedAt      int64
+	ID             int64
+	ExpectedFileID int64
 }
 
-func (q *Queries) UpdateStaticFile(ctx context.Context, arg UpdateStaticFileParams) error {
-	_, err := q.db.ExecContext(ctx, updateStaticFile,
+func (q *Queries) UpdateStaticFile(ctx context.Context, arg UpdateStaticFileParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateStaticFile,
 		arg.Description,
 		arg.FileID,
 		arg.UpdatedAt,
 		arg.ID,
+		arg.ExpectedFileID,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

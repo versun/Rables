@@ -14,6 +14,7 @@ import (
 	"rables/internal/db"
 	"rables/internal/db/query"
 	"rables/internal/jobs"
+	"rables/internal/testutil/zipfake"
 )
 
 // testJPEG carries JPEG magic bytes so content sniffing yields image/jpeg.
@@ -82,6 +83,23 @@ func buildZipOrdered(t *testing.T, dir string, entries []zipEntry) string {
 		t.Fatalf("close zip file: %v", err)
 	}
 	return path
+}
+
+// buildUploadZip writes the archive where a real upload lands
+// (storeTwitterArchiveUpload): <dataDir>/imports with the twitter_archive_
+// prefix, so the job handler's source cleanup accepts the path.
+func buildUploadZip(t *testing.T, dataDir string, files map[string]string) string {
+	t.Helper()
+	dir := filepath.Join(dataDir, "imports")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create imports dir: %v", err)
+	}
+	path := buildZip(t, dir, files)
+	uploadPath := filepath.Join(dir, "twitter_archive_test.zip")
+	if err := os.Rename(path, uploadPath); err != nil {
+		t.Fatalf("rename upload zip: %v", err)
+	}
+	return uploadPath
 }
 
 // jsPayload mirrors the window.YTD.<key>.part0 wrapper of official archives.
@@ -596,7 +614,7 @@ func TestImportJobHandler(t *testing.T) {
 	ctx := context.Background()
 	q := query.New(database)
 
-	zipPath := buildZip(t, dataDir, map[string]string{
+	zipPath := buildUploadZip(t, dataDir, map[string]string{
 		"data/account.js": jsPayload("account", `[{"account":{"username":"archive_owner"}}]`),
 		"data/tweets.js":  jsPayload("tweets", `[{"tweet":{"id":"200","id_str":"200","created_at":"Wed Oct 10 20:19:24 +0000 2018","full_text":"Original tweet"}}]`),
 		"data/like.js":    jsPayload("like", `[{"like":{"tweetId":"777","fullText":"Liked","expandedUrl":"https://twitter.com/s/status/777"}}]`),
@@ -712,6 +730,86 @@ func TestImportJobHandlerFailure(t *testing.T) {
 	}
 }
 
+// TestImportJobHandlerKeepsSourceWhenCompleteFails: when the import itself
+// succeeds but the terminal Complete write fails (forced here by a trigger),
+// the source zip and source_path must survive — deleting them first would
+// strand the row running with the zip gone, and the re-executed job would
+// then fail on the missing source and clobber the finished import to failed.
+func TestImportJobHandlerKeepsSourceWhenCompleteFails(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	q := query.New(database)
+
+	zipPath := buildUploadZip(t, dataDir, map[string]string{
+		"data/tweets.js": jsPayload("tweets", `[{"tweet":{"id":"200","id_str":"200","created_at":"Wed Oct 10 20:19:24 +0000 2018","full_text":"Original tweet"}}]`),
+	})
+	now := time.Now().Unix()
+	imp, err := q.CreateTwitterArchiveImport(ctx, query.CreateTwitterArchiveImportParams{
+		SourceFilename: "archive.zip",
+		SourcePath:     sql.NullString{String: zipPath, Valid: true},
+		QueuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create import: %v", err)
+	}
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindTwitterArchiveImport, map[string]any{"import_id": imp.ID}, time.Now()); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	// Force the terminal Complete write to fail.
+	if _, err := database.Exec(`CREATE TRIGGER fail_complete BEFORE UPDATE ON twitter_archive_imports
+		WHEN NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'forced complete failure'); END;`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	worker := jobs.NewWorker(database)
+	RegisterImportHandler(worker, database, dataDir)
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+
+	reloaded, err := q.GetTwitterArchiveImport(ctx, imp.ID)
+	if err != nil {
+		t.Fatalf("reload import: %v", err)
+	}
+	if reloaded.Status != "running" {
+		t.Fatalf("status = %s, want running (not clobbered to failed)", reloaded.Status)
+	}
+	if !reloaded.SourcePath.Valid || reloaded.SourcePath.String != zipPath {
+		t.Fatalf("source_path = %+v, want %q kept", reloaded.SourcePath, zipPath)
+	}
+	if _, err := os.Stat(zipPath); err != nil {
+		t.Fatalf("source zip removed after the failed Complete: %v", err)
+	}
+
+	// Once the Complete write works again, the re-executed job self-heals:
+	// the import completes and the source is cleaned up.
+	if _, err := database.Exec(`DROP TRIGGER fail_complete`); err != nil {
+		t.Fatalf("drop trigger: %v", err)
+	}
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindTwitterArchiveImport, map[string]any{"import_id": imp.ID}, time.Now()); err != nil {
+		t.Fatalf("re-enqueue: %v", err)
+	}
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatalf("second run once: %v", err)
+	}
+	done, err := q.GetTwitterArchiveImport(ctx, imp.ID)
+	if err != nil {
+		t.Fatalf("reload import: %v", err)
+	}
+	if done.Status != "completed" {
+		t.Fatalf("status = %s, want completed", done.Status)
+	}
+	if done.SourcePath.Valid {
+		t.Fatalf("source_path not cleared: %v", done.SourcePath)
+	}
+	if _, err := os.Stat(zipPath); !os.IsNotExist(err) {
+		t.Fatalf("source zip not removed")
+	}
+}
+
 // TestImportRealFixtureZip imports a small archive produced by the Rails
 // test suite (read-only fixture, copied to a temp dir first).
 func TestImportRealFixtureZip(t *testing.T) {
@@ -747,5 +845,1024 @@ func TestImportRealFixtureZip(t *testing.T) {
 	}
 	if entryType != EntryTypeReply || screenName != "archive_owner" {
 		t.Fatalf("tweet 201 = %s / %s", entryType, screenName)
+	}
+}
+
+// TestFlushTweetsFailureReclaimsOrphanMedia: media rows and blobs are stored
+// outside the tweet batch transaction, so a failed batch must reclaim the
+// media it newly stored — while keeping media an earlier committed batch
+// still references.
+func TestFlushTweetsFailureReclaimsOrphanMedia(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	zipPath := buildZip(t, t.TempDir(), map[string]string{
+		"data/tweets_media/100-photo.jpg": string(testJPEG),
+		"data/tweets_media/200-photo.jpg": string(testJPEG),
+	})
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	defer zr.Close()
+	mediaFiles := map[string]*zip.File{}
+	for _, f := range zr.File {
+		mediaFiles[f.Name] = f
+	}
+
+	im := newImporter(database, dataDir, zipPath)
+	im.q = query.New(database)
+	sink := &dbSink{im: im, mediaFiles: mediaFiles, mediaIDs: map[string]int64{}}
+	ctx := context.Background()
+
+	// Batch 1 commits with the shared media entry.
+	sink.tweets = []candidate{{tweetID: "100", entryType: EntryTypeTweet, screenName: "owner", fullText: "one", tweetedAt: 1, media: []string{"data/tweets_media/100-photo.jpg"}}}
+	if err := sink.flushTweets(ctx); err != nil {
+		t.Fatalf("flush batch 1: %v", err)
+	}
+
+	// From here on every attachment insert fails, so batch 2 rolls back after
+	// its new media was already stored outside the transaction.
+	if _, err := database.Exec(`CREATE TRIGGER fail_attach BEFORE INSERT ON attachments BEGIN SELECT RAISE(ABORT, 'boom'); END;`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	// Batch 2 reuses the committed media (cache hit) and stores one new entry.
+	sink.tweets = []candidate{{tweetID: "200", entryType: EntryTypeTweet, screenName: "owner", fullText: "two", tweetedAt: 2, media: []string{"data/tweets_media/100-photo.jpg", "data/tweets_media/200-photo.jpg"}}}
+	if err := sink.flushTweets(ctx); err == nil {
+		t.Fatal("flush batch 2 should fail")
+	}
+
+	// The failed batch's tweet is gone (rolled back).
+	var tweetCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM twitter_archive_tweets WHERE tweet_id = '200'`).Scan(&tweetCount); err != nil {
+		t.Fatalf("count tweets: %v", err)
+	}
+	if tweetCount != 0 {
+		t.Fatalf("tweet 200 rows = %d, want 0", tweetCount)
+	}
+
+	// Exactly one files row survives: the media committed with batch 1. The
+	// row stored for the failed batch was reclaimed.
+	rows, err := database.Query(`SELECT key FROM files`)
+	if err != nil {
+		t.Fatalf("list files: %v", err)
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			t.Fatalf("scan key: %v", err)
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("files rows = %d (%v), want 1", len(keys), keys)
+	}
+	// Its blob is on disk, and it is the only blob under files/.
+	if _, err := os.Stat(im.mediaPath(keys[0])); err != nil {
+		t.Fatalf("committed media blob missing: %v", err)
+	}
+	var blobCount int
+	err = filepath.Walk(filepath.Join(dataDir, "files"), func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			blobCount++
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("walk files dir: %v", err)
+	}
+	if blobCount != 1 {
+		t.Fatalf("blobs on disk = %d, want 1", blobCount)
+	}
+}
+
+// TestDiscardNewMediaReclaimsWithCanceledContext: a batch failure caused by
+// worker shutdown arrives with a canceled ctx; the reclaim must still run,
+// or the freshly stored files rows and disk blobs would stay orphaned.
+func TestDiscardNewMediaReclaimsWithCanceledContext(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	im := newImporter(database, dataDir, "")
+	im.q = query.New(database)
+	ctx := context.Background()
+
+	// One stored media ref as a failed batch leaves it behind: a files row
+	// plus its blob on disk, referenced by no attachment.
+	row, err := im.q.CreateFile(ctx, query.CreateFileParams{
+		Key:       "0123456789abcdef0123456789abcdef",
+		Filename:  "photo.jpg",
+		ByteSize:  int64(len(testJPEG)),
+		CreatedAt: 1,
+	})
+	if err != nil {
+		t.Fatalf("create file row: %v", err)
+	}
+	blob := im.mediaPath(row.Key)
+	if err := os.MkdirAll(filepath.Dir(blob), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(blob, testJPEG, 0o644); err != nil {
+		t.Fatalf("write blob: %v", err)
+	}
+
+	sink := &dbSink{im: im, newMedia: []storedMediaRef{{id: row.ID, key: row.Key}}}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	// Sanity: plain queries no longer run on this ctx, so a reclaim tied to
+	// it would silently skip everything.
+	if err := im.q.DeleteFile(canceled, row.ID); err == nil {
+		t.Fatal("canceled ctx should fail queries")
+	}
+
+	sink.discardNewMedia(canceled)
+
+	var n int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM files WHERE id = ?`, row.ID).Scan(&n); err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("files row survived the reclaim, want it deleted")
+	}
+	if _, err := os.Stat(blob); !os.IsNotExist(err) {
+		t.Errorf("blob survived the reclaim, stat err = %v", err)
+	}
+	if sink.newMedia != nil {
+		t.Errorf("newMedia = %v, want nil after the reclaim", sink.newMedia)
+	}
+}
+
+// TestClearStoredArchiveNeverRemovesUnsafeKeys: files rows can arrive with
+// arbitrary keys through a database import (the bundle's files/attachments
+// tables are upserted verbatim). The replace must still delete such rows,
+// but must never resolve their keys into disk paths: a traversal key would
+// remove files outside the data dir, and a key shorter than 4 chars would
+// panic mediaPath's xx/yy slicing.
+func TestClearStoredArchiveNeverRemovesUnsafeKeys(t *testing.T) {
+	database := newTestDB(t)
+	// Nest the data dir so the traversal key below lands inside the test's
+	// temp tree (mediaPath(key) == <root>/victim.txt).
+	dataDir := filepath.Join(t.TempDir(), "a", "b", "c")
+	im := newImporter(database, dataDir, "")
+	im.q = query.New(database)
+	ctx := context.Background()
+
+	mkFile := func(key string) query.File {
+		t.Helper()
+		row, err := im.q.CreateFile(ctx, query.CreateFileParams{
+			Key:       key,
+			Filename:  "photo.jpg",
+			ByteSize:  int64(len(testJPEG)),
+			CreatedAt: 1,
+		})
+		if err != nil {
+			t.Fatalf("create file row %q: %v", key, err)
+		}
+		if err := im.q.CreateAttachment(ctx, query.CreateAttachmentParams{
+			FileID:     row.ID,
+			RecordType: "TwitterArchiveTweet",
+			RecordID:   1,
+			Name:       "media",
+			CreatedAt:  1,
+		}); err != nil {
+			t.Fatalf("attach file row %q: %v", key, err)
+		}
+		return row
+	}
+
+	// A well-formed key with a real blob: removed as before.
+	good := mkFile("0123456789abcdef0123456789abcdef")
+	goodBlob := im.mediaPath(good.Key)
+	if err := os.MkdirAll(filepath.Dir(goodBlob), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(goodBlob, testJPEG, 0o644); err != nil {
+		t.Fatalf("write blob: %v", err)
+	}
+
+	// A traversal key: mediaPath resolves two levels above the data dir.
+	evil := mkFile("../../victim.txt")
+	victim := filepath.Clean(filepath.Join(dataDir, "..", "..", "victim.txt"))
+	if got := im.mediaPath(evil.Key); got != victim {
+		t.Fatalf("test premise broken: mediaPath(%q) = %q, want %q", evil.Key, got, victim)
+	}
+	if err := os.WriteFile(victim, []byte("keep me"), 0o644); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+
+	// A short key: panics the xx/yy slicing when resolved.
+	mkFile("ab")
+
+	if err := im.clearStoredArchive(ctx); err != nil {
+		t.Fatalf("clearStoredArchive: %v", err)
+	}
+
+	if _, err := os.Stat(goodBlob); !os.IsNotExist(err) {
+		t.Errorf("well-formed blob survived the clear, stat err = %v", err)
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("file outside the data dir was removed via a traversal key: %v", err)
+	}
+	var rows int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&rows); err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("files rows = %d, want 0 (rows are deleted even when the blob is left alone)", rows)
+	}
+}
+
+// TestImportRejectsOversizedArchive: a small zip declaring >10GB of
+// uncompressed media must fail validation before any replace starts
+// (mirrors the extractImportZip bound on database bundles). The entries are
+// never opened by the scan: the declared total alone must refuse the archive
+// before anything is streamed to disk.
+func TestImportRejectsOversizedArchive(t *testing.T) {
+	database := newTestDB(t)
+	zipPath := filepath.Join(t.TempDir(), "archive.zip")
+	// 3 x 4GB > MaxArchiveExtractBytes; kept under 0xFFFFFFFF so the plain
+	// 32-bit size fields hold it without a zip64 extra record.
+	zipfake.Write(t, zipPath, []zipfake.Entry{
+		{Name: "data/tweets_media/100-a.jpg", Payload: []byte("x"), Declared: 4_000_000_000},
+		{Name: "data/tweets_media/100-b.jpg", Payload: []byte("x"), Declared: 4_000_000_000},
+		{Name: "data/tweets_media/100-c.jpg", Payload: []byte("x"), Declared: 4_000_000_000},
+	})
+	im := newImporter(database, t.TempDir(), zipPath)
+	if _, err := im.Import(context.Background()); err == nil || !strings.Contains(err.Error(), "over the") {
+		t.Fatalf("Import err = %v, want an over-the-limit error", err)
+	}
+}
+
+// TestImportRejectsZip64DeclaredOverflow: the first entry declares exactly
+// the 10GB limit (allowed; the boundary is inclusive) and the second declares
+// 2^64-1 via a zip64 extra record. A guard that sums first and compares after
+// would wrap the running total back below the limit and wave the bomb
+// through; the compare-before-add ordering must refuse it instead.
+func TestImportRejectsZip64DeclaredOverflow(t *testing.T) {
+	database := newTestDB(t)
+	zipPath := filepath.Join(t.TempDir(), "archive.zip")
+	zipfake.Write(t, zipPath, []zipfake.Entry{
+		{Name: "data/tweets_media/100-0.jpg", Payload: []byte("x"), Declared: MaxArchiveExtractBytes, Zip64: true},
+		{Name: "data/tweets_media/101-1.jpg", Payload: []byte("x"), Declared: 0xFFFFFFFFFFFFFFFF, Zip64: true},
+	})
+	im := newImporter(database, t.TempDir(), zipPath)
+	if _, err := im.Import(context.Background()); err == nil || !strings.Contains(err.Error(), "over the") {
+		t.Fatalf("Import err = %v, want an over-the-limit error", err)
+	}
+}
+
+// TestImportRejectsTooManyEntries: an archive with more file entries than
+// MaxArchiveExtractEntries is refused up front, even though every entry is a
+// one-byte file far under the byte limit — millions of tiny entries would
+// exhaust inodes when the media entries are streamed to disk.
+func TestImportRejectsTooManyEntries(t *testing.T) {
+	database := newTestDB(t)
+	entries := make([]zipfake.Entry, 0, MaxArchiveExtractEntries+1)
+	for i := 0; i <= MaxArchiveExtractEntries; i++ {
+		entries = append(entries, zipfake.Entry{
+			Name:     fmt.Sprintf("data/tweets_media/%07d-0.jpg", i),
+			Payload:  []byte("x"),
+			Declared: 1,
+		})
+	}
+	zipPath := filepath.Join(t.TempDir(), "archive.zip")
+	zipfake.Write(t, zipPath, entries)
+	im := newImporter(database, t.TempDir(), zipPath)
+	if _, err := im.Import(context.Background()); err == nil || !strings.Contains(err.Error(), fmt.Sprint(MaxArchiveExtractEntries)) {
+		t.Fatalf("Import err = %v, want an entry-count-limit error", err)
+	}
+}
+
+// TestImportRejectsOversizedItem: one item decoding past maxArchiveItemBytes
+// fails the import instead of being materialized in memory — a multi-GB
+// "full_text" deflates to a few MB on disk but would OOM a small VPS on
+// decode. A large item under the cap still imports normally.
+func TestImportRejectsOversizedItem(t *testing.T) {
+	tweetsEntry := func(text string) string {
+		return jsPayload("tweets", `[{"tweet":{"id":"1","id_str":"1","created_at":"Wed Oct 10 20:19:24 +0000 2018","full_text":"`+text+`"}}]`)
+	}
+	over := newImporter(newTestDB(t), t.TempDir(), buildZip(t, t.TempDir(), map[string]string{
+		// 1MB past the cap: the decoder's buffered read-ahead (charged to the
+		// previous token's budget) must not absorb the overage.
+		"data/tweets.js": tweetsEntry(strings.Repeat("A", maxArchiveItemBytes+(1<<20))),
+	}))
+	if _, err := over.Import(context.Background()); err == nil || !strings.Contains(err.Error(), "exceeds the 64MB") {
+		t.Fatalf("Import err = %v, want a per-item size limit error", err)
+	}
+	under := newImporter(newTestDB(t), t.TempDir(), buildZip(t, t.TempDir(), map[string]string{
+		"data/tweets.js": tweetsEntry(strings.Repeat("A", 1<<20)),
+	}))
+	summary, err := under.Import(context.Background())
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if summary.Tweets != 1 {
+		t.Fatalf("tweets = %d, want 1", summary.Tweets)
+	}
+}
+
+// TestImportJobHandlerCancellationKeepsSourceAndRequeues: a SIGTERM landing
+// mid-import cancels the job ctx; the handler must propagate the cancellation
+// instead of recording a failure, so the worker requeues the job for free and
+// the import — source zip and running row untouched — resumes after the
+// restart via the mark-running self-heal.
+func TestImportJobHandlerCancellationKeepsSourceAndRequeues(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	q := query.New(database)
+
+	// Enough items that the import cannot finish between the mark-running
+	// write and the poller below noticing it.
+	var items []string
+	for i := 0; i < 5000; i++ {
+		items = append(items, fmt.Sprintf(`{"tweet":{"id":"%d","id_str":"%d","created_at":"Wed Oct 10 20:19:24 +0000 2018","full_text":"Cancel tweet %d with some body text to pad the entry"}}`, 100+i, 100+i, i))
+	}
+	zipPath := buildZip(t, dataDir, map[string]string{
+		"data/tweets.js": jsPayload("tweets", "["+strings.Join(items, ",")+"]"),
+	})
+	now := time.Now().Unix()
+	imp, err := q.CreateTwitterArchiveImport(ctx, query.CreateTwitterArchiveImportParams{
+		SourceFilename: "archive.zip",
+		SourcePath:     sql.NullString{String: zipPath, Valid: true},
+		QueuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create import: %v", err)
+	}
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindTwitterArchiveImport, map[string]any{"import_id": imp.ID}, time.Now()); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Cancel the worker ctx (the SIGTERM) once the import is running.
+	jobCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			var status string
+			if err := database.QueryRow(`SELECT status FROM twitter_archive_imports WHERE id = ?`, imp.ID).Scan(&status); err == nil && status == "running" {
+				cancel()
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	worker := jobs.NewWorker(database)
+	RegisterImportHandler(worker, database, dataDir)
+	claimed, err := worker.RunOnce(jobCtx)
+	if err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if !claimed {
+		t.Fatalf("job was not claimed")
+	}
+
+	// The job was requeued for free: immediately due, no attempt consumed.
+	var jobStatus string
+	var attempts int64
+	if err := database.QueryRow(`SELECT status, attempts FROM job_runs WHERE kind = ?`, jobs.KindTwitterArchiveImport).Scan(&jobStatus, &attempts); err != nil {
+		t.Fatalf("load job run: %v", err)
+	}
+	if jobStatus != "queued" || attempts != 0 {
+		t.Fatalf("job = %s/%d attempts, want queued/0", jobStatus, attempts)
+	}
+
+	// The import row is untouched by the failure path and the source zip is
+	// still there, so the re-executed job can resume the import.
+	reloaded, err := q.GetTwitterArchiveImport(ctx, imp.ID)
+	if err != nil {
+		t.Fatalf("reload import: %v", err)
+	}
+	if reloaded.Status != "running" {
+		t.Fatalf("status = %s, want running", reloaded.Status)
+	}
+	if reloaded.ErrorMessage.Valid {
+		t.Fatalf("error message recorded for a cancelled import: %q", reloaded.ErrorMessage.String)
+	}
+	if !reloaded.SourcePath.Valid || reloaded.SourcePath.String != zipPath {
+		t.Fatalf("source_path = %+v, want %q kept", reloaded.SourcePath, zipPath)
+	}
+	if _, err := os.Stat(zipPath); err != nil {
+		t.Fatalf("source zip removed on cancellation: %v", err)
+	}
+}
+
+// TestImportJobHandlerSkipsTerminallyFailedImport: a job re-executed after
+// its import already failed (a crash between FailTwitterArchiveImport and
+// CompleteJobRun leaves the job queued) must not re-run the import: the
+// terminal run already deleted the source zip, so re-marking running would
+// only overwrite the original error with "Archive file not found".
+func TestImportJobHandlerSkipsTerminallyFailedImport(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	q := query.New(database)
+
+	now := time.Now().Unix()
+	imp, err := q.CreateTwitterArchiveImport(ctx, query.CreateTwitterArchiveImportParams{
+		SourceFilename: "broken.zip",
+		SourcePath:     sql.NullString{String: filepath.Join(dataDir, "broken.zip"), Valid: true},
+		QueuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create import: %v", err)
+	}
+	// Terminal failure state: failed with the original error, source cleared.
+	if err := q.FailTwitterArchiveImport(ctx, query.FailTwitterArchiveImportParams{
+		ErrorMessage: sql.NullString{String: "broken archive payload", Valid: true},
+		FinishedAt:   sql.NullInt64{Int64: now, Valid: true},
+		UpdatedAt:    now,
+		ID:           imp.ID,
+	}); err != nil {
+		t.Fatalf("fail import: %v", err)
+	}
+	if err := q.ClearTwitterArchiveImportSource(ctx, query.ClearTwitterArchiveImportSourceParams{UpdatedAt: now, ID: imp.ID}); err != nil {
+		t.Fatalf("clear source: %v", err)
+	}
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindTwitterArchiveImport, map[string]any{"import_id": imp.ID}, time.Now()); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	worker := jobs.NewWorker(database)
+	RegisterImportHandler(worker, database, dataDir)
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+
+	reloaded, err := q.GetTwitterArchiveImport(ctx, imp.ID)
+	if err != nil {
+		t.Fatalf("reload import: %v", err)
+	}
+	if reloaded.Status != "failed" {
+		t.Fatalf("status = %s, want failed", reloaded.Status)
+	}
+	if !reloaded.ErrorMessage.Valid || reloaded.ErrorMessage.String != "broken archive payload" {
+		t.Fatalf("error message = %+v, want the original failure preserved", reloaded.ErrorMessage)
+	}
+	if reloaded.StartedAt.Valid {
+		t.Fatalf("started_at set: the terminally failed import was re-run")
+	}
+	var jobStatus string
+	if err := database.QueryRow(`SELECT status FROM job_runs WHERE kind = ?`, jobs.KindTwitterArchiveImport).Scan(&jobStatus); err != nil {
+		t.Fatalf("load job run: %v", err)
+	}
+	if jobStatus != "done" {
+		t.Fatalf("job status = %s, want done", jobStatus)
+	}
+}
+
+// TestImportJobHandlerSkipsFailedImportWithDeletedSource: a crash between the
+// terminal source removal and ClearTwitterArchiveImportSource leaves a failed
+// row whose source_path still points at the deleted file. A re-executed job
+// must skip it just like a cleared source_path: re-marking running would only
+// fail on the missing file and overwrite the original error with "Archive
+// file not found".
+func TestImportJobHandlerSkipsFailedImportWithDeletedSource(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	q := query.New(database)
+
+	now := time.Now().Unix()
+	imp, err := q.CreateTwitterArchiveImport(ctx, query.CreateTwitterArchiveImportParams{
+		SourceFilename: "broken.zip",
+		SourcePath:     sql.NullString{String: filepath.Join(dataDir, "broken.zip"), Valid: true},
+		QueuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create import: %v", err)
+	}
+	// Terminal failure state, but the crash hit before source_path was
+	// cleared: it still points at the already-deleted zip.
+	if err := q.FailTwitterArchiveImport(ctx, query.FailTwitterArchiveImportParams{
+		ErrorMessage: sql.NullString{String: "broken archive payload", Valid: true},
+		FinishedAt:   sql.NullInt64{Int64: now, Valid: true},
+		UpdatedAt:    now,
+		ID:           imp.ID,
+	}); err != nil {
+		t.Fatalf("fail import: %v", err)
+	}
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindTwitterArchiveImport, map[string]any{"import_id": imp.ID}, time.Now()); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	worker := jobs.NewWorker(database)
+	RegisterImportHandler(worker, database, dataDir)
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+
+	reloaded, err := q.GetTwitterArchiveImport(ctx, imp.ID)
+	if err != nil {
+		t.Fatalf("reload import: %v", err)
+	}
+	if reloaded.Status != "failed" {
+		t.Fatalf("status = %s, want failed", reloaded.Status)
+	}
+	if !reloaded.ErrorMessage.Valid || reloaded.ErrorMessage.String != "broken archive payload" {
+		t.Fatalf("error message = %+v, want the original failure preserved", reloaded.ErrorMessage)
+	}
+	if reloaded.StartedAt.Valid {
+		t.Fatalf("started_at set: the terminally failed import was re-run")
+	}
+	var jobStatus string
+	if err := database.QueryRow(`SELECT status FROM job_runs WHERE kind = ?`, jobs.KindTwitterArchiveImport).Scan(&jobStatus); err != nil {
+		t.Fatalf("load job run: %v", err)
+	}
+	if jobStatus != "done" {
+		t.Fatalf("job status = %s, want done", jobStatus)
+	}
+}
+
+// TestImportJobHandlerRemovesLeftoverSourceAfterCompletedImport: a crash
+// between the terminal Complete write and the source cleanup leaves a
+// completed row with the source zip still on disk. A re-executed job must not
+// re-run the import, but it must remove the leftover zip.
+func TestImportJobHandlerRemovesLeftoverSourceAfterCompletedImport(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	q := query.New(database)
+
+	zipPath := buildUploadZip(t, dataDir, map[string]string{
+		"data/tweets.js": jsPayload("tweets", `[{"tweet":{"id":"200","id_str":"200","created_at":"Wed Oct 10 20:19:24 +0000 2018","full_text":"Original tweet"}}]`),
+	})
+	now := time.Now().Unix()
+	imp, err := q.CreateTwitterArchiveImport(ctx, query.CreateTwitterArchiveImportParams{
+		SourceFilename: "archive.zip",
+		SourcePath:     sql.NullString{String: zipPath, Valid: true},
+		QueuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create import: %v", err)
+	}
+	// Completed state, but the crash hit before the source cleanup ran.
+	if err := q.CompleteTwitterArchiveImport(ctx, query.CompleteTwitterArchiveImportParams{
+		TweetsCount:     1,
+		FollowersCount:  0,
+		FollowingCount:  0,
+		LikesCount:      0,
+		TotalItemsCount: 1,
+		FinishedAt:      sql.NullInt64{Int64: now, Valid: true},
+		UpdatedAt:       now,
+		ID:              imp.ID,
+	}); err != nil {
+		t.Fatalf("complete import: %v", err)
+	}
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindTwitterArchiveImport, map[string]any{"import_id": imp.ID}, time.Now()); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	worker := jobs.NewWorker(database)
+	RegisterImportHandler(worker, database, dataDir)
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+
+	reloaded, err := q.GetTwitterArchiveImport(ctx, imp.ID)
+	if err != nil {
+		t.Fatalf("reload import: %v", err)
+	}
+	if reloaded.Status != "completed" {
+		t.Fatalf("status = %s, want completed", reloaded.Status)
+	}
+	if got := importTweetIDs(t, database); len(got) != 0 {
+		t.Fatalf("tweets = %v, want none (the completed import must not re-run)", got)
+	}
+	if _, err := os.Stat(zipPath); !os.IsNotExist(err) {
+		t.Fatalf("leftover source zip not removed")
+	}
+	var jobStatus string
+	if err := database.QueryRow(`SELECT status FROM job_runs WHERE kind = ?`, jobs.KindTwitterArchiveImport).Scan(&jobStatus); err != nil {
+		t.Fatalf("load job run: %v", err)
+	}
+	if jobStatus != "done" {
+		t.Fatalf("job status = %s, want done", jobStatus)
+	}
+}
+
+// TestImportJobHandlerKeepsSourceOutsideImportsDir: a crafted transfer bundle
+// can plant a twitter_archive_imports row whose source_path points at an
+// arbitrary server file. When the surviving queued job re-executes, the
+// import fails on the fake path and the terminal source cleanup runs — it
+// must not delete the victim: only paths inside <dataDir>/imports with the
+// twitter_archive_ prefix (what storeTwitterArchiveUpload writes) are removed.
+func TestImportJobHandlerKeepsSourceOutsideImportsDir(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	q := query.New(database)
+
+	victim := filepath.Join(dataDir, "victim.txt")
+	if err := os.WriteFile(victim, []byte("keep me"), 0o644); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+	now := time.Now().Unix()
+	imp, err := q.CreateTwitterArchiveImport(ctx, query.CreateTwitterArchiveImportParams{
+		SourceFilename: "victim.txt",
+		SourcePath:     sql.NullString{String: victim, Valid: true},
+		QueuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create import: %v", err)
+	}
+	// The planted row looks like a recovered failure whose job is still
+	// queued, so the handler re-marks it running and re-reads the source.
+	if err := q.FailTwitterArchiveImport(ctx, query.FailTwitterArchiveImportParams{
+		ErrorMessage: sql.NullString{String: "Process restarted before the import finished", Valid: true},
+		FinishedAt:   sql.NullInt64{Int64: now, Valid: true},
+		UpdatedAt:    now,
+		ID:           imp.ID,
+	}); err != nil {
+		t.Fatalf("fail import: %v", err)
+	}
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindTwitterArchiveImport, map[string]any{"import_id": imp.ID}, time.Now()); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	worker := jobs.NewWorker(database)
+	RegisterImportHandler(worker, database, dataDir)
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+
+	reloaded, err := q.GetTwitterArchiveImport(ctx, imp.ID)
+	if err != nil {
+		t.Fatalf("reload import: %v", err)
+	}
+	if reloaded.Status != "failed" {
+		t.Fatalf("status = %s, want failed (the import must fail on the fake source)", reloaded.Status)
+	}
+	content, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatalf("victim file removed: %v", err)
+	}
+	if string(content) != "keep me" {
+		t.Fatalf("victim content = %q, want untouched", content)
+	}
+}
+
+// TestImportJobHandlerSelfHealsRecoveredFailedImport: startup recovery fails
+// imports stuck queued/running but keeps their source_path, and their job may
+// still be queued. Re-executing such a job must resume the import, so the
+// terminally-failed skip above keys on the source file being gone, not on
+// the failed status alone.
+func TestImportJobHandlerSelfHealsRecoveredFailedImport(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	q := query.New(database)
+
+	zipPath := buildZip(t, dataDir, map[string]string{
+		"data/tweets.js": jsPayload("tweets", `[{"tweet":{"id":"200","id_str":"200","created_at":"Wed Oct 10 20:19:24 +0000 2018","full_text":"Resumed tweet"}}]`),
+	})
+	now := time.Now().Unix()
+	imp, err := q.CreateTwitterArchiveImport(ctx, query.CreateTwitterArchiveImportParams{
+		SourceFilename: "archive.zip",
+		SourcePath:     sql.NullString{String: zipPath, Valid: true},
+		QueuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create import: %v", err)
+	}
+	// Startup recovery failed the row but left source_path in place.
+	if err := q.FailTwitterArchiveImport(ctx, query.FailTwitterArchiveImportParams{
+		ErrorMessage: sql.NullString{String: "Process restarted before the import finished", Valid: true},
+		FinishedAt:   sql.NullInt64{Int64: now, Valid: true},
+		UpdatedAt:    now,
+		ID:           imp.ID,
+	}); err != nil {
+		t.Fatalf("fail import: %v", err)
+	}
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindTwitterArchiveImport, map[string]any{"import_id": imp.ID}, time.Now()); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	worker := jobs.NewWorker(database)
+	RegisterImportHandler(worker, database, dataDir)
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+
+	reloaded, err := q.GetTwitterArchiveImport(ctx, imp.ID)
+	if err != nil {
+		t.Fatalf("reload import: %v", err)
+	}
+	if reloaded.Status != "completed" || reloaded.TweetsCount != 1 {
+		t.Fatalf("import = %s/%d tweets, want completed/1", reloaded.Status, reloaded.TweetsCount)
+	}
+	if got := importTweetIDs(t, database); len(got) != 1 || got[0] != "200" {
+		t.Fatalf("tweets = %v", got)
+	}
+}
+
+// TestImportJobHandlerSkipsRecoveredImportWithNewerImport: startup recovery
+// fails an import while its job stays queued, and the admin then uploads a
+// newer archive whose import runs first. Re-executing the stale job must not
+// roll the stored archive back to the older upload: the newer non-failed
+// import row supersedes it, so the job completes without re-running.
+func TestImportJobHandlerSkipsRecoveredImportWithNewerImport(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	q := query.New(database)
+
+	zipPath := buildZip(t, dataDir, map[string]string{
+		"data/tweets.js": jsPayload("tweets", `[{"tweet":{"id":"100","id_str":"100","created_at":"Wed Oct 10 20:19:24 +0000 2018","full_text":"Stale tweet"}}]`),
+	})
+	now := time.Now().Unix()
+	stale, err := q.CreateTwitterArchiveImport(ctx, query.CreateTwitterArchiveImportParams{
+		SourceFilename: "stale.zip",
+		SourcePath:     sql.NullString{String: zipPath, Valid: true},
+		QueuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create stale import: %v", err)
+	}
+	// Startup recovery failed the row but left the source zip in place.
+	if err := q.FailTwitterArchiveImport(ctx, query.FailTwitterArchiveImportParams{
+		ErrorMessage: sql.NullString{String: "Process restarted before the import finished", Valid: true},
+		FinishedAt:   sql.NullInt64{Int64: now, Valid: true},
+		UpdatedAt:    now,
+		ID:           stale.ID,
+	}); err != nil {
+		t.Fatalf("fail stale import: %v", err)
+	}
+	// A newer archive uploaded after the recovery already imported.
+	newer, err := q.CreateTwitterArchiveImport(ctx, query.CreateTwitterArchiveImportParams{
+		SourceFilename: "newer.zip",
+		SourcePath:     sql.NullString{},
+		QueuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create newer import: %v", err)
+	}
+	if err := q.CompleteTwitterArchiveImport(ctx, query.CompleteTwitterArchiveImportParams{
+		TweetsCount:     1,
+		FollowersCount:  0,
+		FollowingCount:  0,
+		LikesCount:      0,
+		TotalItemsCount: 1,
+		FinishedAt:      sql.NullInt64{Int64: now, Valid: true},
+		UpdatedAt:       now,
+		ID:              newer.ID,
+	}); err != nil {
+		t.Fatalf("complete newer import: %v", err)
+	}
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindTwitterArchiveImport, map[string]any{"import_id": stale.ID}, time.Now()); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	worker := jobs.NewWorker(database)
+	RegisterImportHandler(worker, database, dataDir)
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+
+	reloaded, err := q.GetTwitterArchiveImport(ctx, stale.ID)
+	if err != nil {
+		t.Fatalf("reload stale import: %v", err)
+	}
+	if reloaded.Status != "failed" {
+		t.Fatalf("status = %s, want failed (the superseded import must not re-run)", reloaded.Status)
+	}
+	if reloaded.StartedAt.Valid {
+		t.Fatalf("started_at set: the superseded import was re-run")
+	}
+	if got := importTweetIDs(t, database); len(got) != 0 {
+		t.Fatalf("tweets = %v, want none (the stale archive must not replace the newer data)", got)
+	}
+	var jobStatus string
+	if err := database.QueryRow(`SELECT status FROM job_runs WHERE kind = ?`, jobs.KindTwitterArchiveImport).Scan(&jobStatus); err != nil {
+		t.Fatalf("load job run: %v", err)
+	}
+	if jobStatus != "done" {
+		t.Fatalf("job status = %s, want done", jobStatus)
+	}
+}
+
+// TestClearStoredArchiveKeepsStaticFileReferencedMedia: a database import can
+// merge a static_files entry onto a files row that archive media also uses.
+// The pre-replace cleanup must keep such a file — static_files.file_id
+// references files(id) under foreign_keys enforcement, so deleting it would
+// fail the whole replace. A reference landing on a variant keeps the whole
+// family, because files.variant_of pins the original.
+func TestClearStoredArchiveKeepsStaticFileReferencedMedia(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	im := newImporter(database, dataDir, "")
+	im.q = query.New(database)
+	ctx := context.Background()
+
+	mkFile := func(key string, variantOf int64) query.File {
+		t.Helper()
+		vo := sql.NullInt64{}
+		if variantOf > 0 {
+			vo = sql.NullInt64{Int64: variantOf, Valid: true}
+		}
+		row, err := im.q.CreateFile(ctx, query.CreateFileParams{
+			Key:       key,
+			Filename:  "photo.jpg",
+			ByteSize:  int64(len(testJPEG)),
+			VariantOf: vo,
+			CreatedAt: 1,
+		})
+		if err != nil {
+			t.Fatalf("create file row %q: %v", key, err)
+		}
+		return row
+	}
+	attachMedia := func(id int64) {
+		t.Helper()
+		if err := im.q.CreateAttachment(ctx, query.CreateAttachmentParams{
+			FileID:     id,
+			RecordType: "TwitterArchiveTweet",
+			RecordID:   1,
+			Name:       "media",
+			CreatedAt:  1,
+		}); err != nil {
+			t.Fatalf("attach file row %d: %v", id, err)
+		}
+	}
+	linkStatic := func(filename string, id int64) {
+		t.Helper()
+		if _, err := im.q.CreateStaticFile(ctx, query.CreateStaticFileParams{
+			Filename: filename, FileID: id, CreatedAt: 1, UpdatedAt: 1,
+		}); err != nil {
+			t.Fatalf("create static file: %v", err)
+		}
+	}
+	writeBlob := func(key string) {
+		t.Helper()
+		path := im.mediaPath(key)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, testJPEG, 0o644); err != nil {
+			t.Fatalf("write blob: %v", err)
+		}
+	}
+
+	// Tweet media whose original is also a static file.
+	shared := mkFile("aaaa1111aaaa1111aaaa1111aaaa1111", 0)
+	attachMedia(shared.ID)
+	writeBlob(shared.Key)
+	linkStatic("shared.jpg", shared.ID)
+
+	// Tweet media whose variant is a static file: the referenced variant pins
+	// its original, so the whole family survives.
+	family := mkFile("bbbb2222bbbb2222bbbb2222bbbb2222", 0)
+	familyVariant := mkFile("cccc3333cccc3333cccc3333cccc3333", family.ID)
+	attachMedia(family.ID)
+	writeBlob(family.Key)
+	writeBlob(familyVariant.Key)
+	linkStatic("variant.jpg", familyVariant.ID)
+
+	// Plain tweet media: purged as before.
+	plain := mkFile("dddd4444dddd4444dddd4444dddd4444", 0)
+	attachMedia(plain.ID)
+	writeBlob(plain.Key)
+
+	if err := im.clearStoredArchive(ctx); err != nil {
+		t.Fatalf("clearStoredArchive: %v", err)
+	}
+
+	kept := map[string]bool{}
+	rows, err := database.Query(`SELECT key FROM files`)
+	if err != nil {
+		t.Fatalf("list files: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			t.Fatalf("scan file key: %v", err)
+		}
+		kept[key] = true
+	}
+	for _, f := range []query.File{shared, family, familyVariant} {
+		if !kept[f.Key] {
+			t.Errorf("files row %q purged, want kept (referenced by a static file)", f.Key)
+		}
+		if _, err := os.Stat(im.mediaPath(f.Key)); err != nil {
+			t.Errorf("blob %q removed while a static file references it: %v", f.Key, err)
+		}
+	}
+	if kept[plain.Key] {
+		t.Errorf("files row %q kept, want purged with the old archive", plain.Key)
+	}
+	if _, err := os.Stat(im.mediaPath(plain.Key)); !os.IsNotExist(err) {
+		t.Errorf("blob %q survived the clear, stat err = %v", plain.Key, err)
+	}
+	var attachments, staticFiles int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM attachments WHERE record_type = 'TwitterArchiveTweet'`).Scan(&attachments); err != nil {
+		t.Fatalf("count attachments: %v", err)
+	}
+	if attachments != 0 {
+		t.Errorf("tweet attachments = %d, want 0 (old archive cleared)", attachments)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM static_files`).Scan(&staticFiles); err != nil {
+		t.Fatalf("count static files: %v", err)
+	}
+	if staticFiles != 2 {
+		t.Errorf("static_files rows = %d, want 2 (untouched by the clear)", staticFiles)
+	}
+}
+
+// TestClearStoredArchiveKeepsContentReferencedMedia: a tweet media file whose
+// /files/<key> URL was hand-reused in an article body must survive the archive
+// clear — the attachment sweep would otherwise delete the row and blob and
+// leave the article's embed 404.
+func TestClearStoredArchiveKeepsContentReferencedMedia(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	im := newImporter(database, dataDir, "")
+	im.q = query.New(database)
+	ctx := context.Background()
+
+	mkMedia := func(key string) query.File {
+		t.Helper()
+		row, err := im.q.CreateFile(ctx, query.CreateFileParams{
+			Key:       key,
+			Filename:  "photo.jpg",
+			ByteSize:  int64(len(testJPEG)),
+			CreatedAt: 1,
+		})
+		if err != nil {
+			t.Fatalf("create file row %q: %v", key, err)
+		}
+		if err := im.q.CreateAttachment(ctx, query.CreateAttachmentParams{
+			FileID:     row.ID,
+			RecordType: "TwitterArchiveTweet",
+			RecordID:   1,
+			Name:       "media",
+			CreatedAt:  1,
+		}); err != nil {
+			t.Fatalf("attach file row %q: %v", key, err)
+		}
+		path := im.mediaPath(key)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, testJPEG, 0o644); err != nil {
+			t.Fatalf("write blob: %v", err)
+		}
+		return row
+	}
+
+	// Tweet media whose URL an article body reuses.
+	reused := mkMedia("aaaa1111aaaa1111aaaa1111aaaa1111")
+	if _, err := database.Exec(
+		`INSERT INTO articles (content_html, created_at, updated_at) VALUES (?, 0, 0)`,
+		`<p><img src="/files/`+reused.Key+`"></p>`,
+	); err != nil {
+		t.Fatalf("insert article: %v", err)
+	}
+
+	// Plain tweet media: purged as before.
+	plain := mkMedia("dddd4444dddd4444dddd4444dddd4444")
+
+	if err := im.clearStoredArchive(ctx); err != nil {
+		t.Fatalf("clearStoredArchive: %v", err)
+	}
+
+	var kept int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM files WHERE id = ?`, reused.ID).Scan(&kept); err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if kept != 1 {
+		t.Errorf("reused files row = %d, want 1 (still referenced by article content)", kept)
+	}
+	if _, err := os.Stat(im.mediaPath(reused.Key)); err != nil {
+		t.Errorf("reused blob removed while article content references it: %v", err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM files WHERE id = ?`, plain.ID).Scan(&kept); err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if kept != 0 {
+		t.Errorf("plain files row = %d, want 0 (purged with the old archive)", kept)
+	}
+	if _, err := os.Stat(im.mediaPath(plain.Key)); !os.IsNotExist(err) {
+		t.Errorf("plain blob survived the clear, stat err = %v", err)
 	}
 }

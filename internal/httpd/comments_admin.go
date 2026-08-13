@@ -3,6 +3,7 @@ package httpd
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -91,7 +92,8 @@ func truncateRunes(s string, n int) string {
 
 // adminCommentsIndex renders GET /admin/comments, mirroring
 // Admin::CommentsController#index: optional status filter,
-// COALESCE(published_at, created_at) DESC, 30 per page.
+// COALESCE(published_at, created_at) DESC, 30 per page. Invalid page params
+// 404 like WillPaginate::InvalidPage.
 func (s *Server) adminCommentsIndex(w http.ResponseWriter, r *http.Request) {
 	var statusFilter *domain.CommentStatus
 	statusName := ""
@@ -107,9 +109,14 @@ func (s *Server) adminCommentsIndex(w http.ResponseWriter, r *http.Request) {
 		statusFilter, statusName = &st, "rejected"
 	}
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
+	page := 1
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || int64(n) > maxAdminPageNumber {
+			http.NotFound(w, r)
+			return
+		}
+		page = n
 	}
 	offset := int64(page-1) * adminCommentsPerPage
 
@@ -156,7 +163,7 @@ func (s *Server) adminCommentsIndex(w http.ResponseWriter, r *http.Request) {
 
 	pages := int((total + adminCommentsPerPage - 1) / adminCommentsPerPage)
 	s.render(w, http.StatusOK, "admin_comments_index", adminCommentsPage{
-		Flash:      PopFlash(r, w),
+		Flash:      s.PopFlash(r, w),
 		Status:     statusName,
 		Comments:   rows,
 		Page:       page,
@@ -212,8 +219,8 @@ func commentIDParam(r *http.Request) int64 {
 }
 
 // backToAdminComments redirects to the moderation list with a flash.
-func backToAdminComments(w http.ResponseWriter, r *http.Request, flash templates.Flash) {
-	SetFlash(w, flash)
+func (s *Server) backToAdminComments(w http.ResponseWriter, r *http.Request, flash templates.Flash) {
+	s.SetFlash(w, flash)
 	http.Redirect(w, r, "/admin/comments", http.StatusFound)
 }
 
@@ -234,8 +241,13 @@ func (s *Server) moderateComment(w http.ResponseWriter, r *http.Request, st doma
 		verb = "reject"
 	}
 	c, err := s.Q.GetCommentByID(r.Context(), commentIDParam(r))
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.Log.Error("get comment", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	updated, err := s.Q.UpdateCommentStatus(r.Context(), query.UpdateCommentStatusParams{
@@ -245,14 +257,14 @@ func (s *Server) moderateComment(w http.ResponseWriter, r *http.Request, st doma
 	})
 	if err != nil {
 		s.Log.Error("moderate comment", "error", err)
-		backToAdminComments(w, r, templates.Flash{Alert: fmt.Sprintf("Failed to %s comment.", verb)})
+		s.backToAdminComments(w, r, templates.Flash{Alert: fmt.Sprintf("Failed to %s comment.", verb)})
 		return
 	}
 	s.notifyReplyApproved(r, c, updated)
 	if st == domain.CommentApproved {
-		backToAdminComments(w, r, templates.Flash{Notice: "Comment approved successfully."})
+		s.backToAdminComments(w, r, templates.Flash{Notice: "Comment approved successfully."})
 	} else {
-		backToAdminComments(w, r, templates.Flash{Notice: "Comment rejected."})
+		s.backToAdminComments(w, r, templates.Flash{Notice: "Comment rejected."})
 	}
 }
 
@@ -292,7 +304,11 @@ func (s *Server) batchModerateComments(w http.ResponseWriter, r *http.Request, s
 	count := 0
 	for _, id := range commentIDsFromForm(r) {
 		c, err := s.Q.GetCommentByID(r.Context(), id)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
 		if err != nil {
+			s.Log.Error("batch moderate comment", "id", id, "error", err)
 			continue
 		}
 		updated, err := s.Q.UpdateCommentStatus(r.Context(), query.UpdateCommentStatusParams{
@@ -307,7 +323,7 @@ func (s *Server) batchModerateComments(w http.ResponseWriter, r *http.Request, s
 		count++
 		s.notifyReplyApproved(r, c, updated)
 	}
-	backToAdminComments(w, r, templates.Flash{Notice: fmt.Sprintf("Successfully %s %d comment(s).", verb, count)})
+	s.backToAdminComments(w, r, templates.Flash{Notice: fmt.Sprintf("Successfully %s %d comment(s).", verb, count)})
 }
 
 // adminBatchDestroyComments mirrors batch_destroy: delete each found id
@@ -319,7 +335,12 @@ func (s *Server) adminBatchDestroyComments(w http.ResponseWriter, r *http.Reques
 	}
 	count := 0
 	for _, id := range commentIDsFromForm(r) {
-		if _, err := s.Q.GetCommentByID(r.Context(), id); err != nil {
+		_, err := s.Q.GetCommentByID(r.Context(), id)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			s.Log.Error("batch destroy comment", "id", id, "error", err)
 			continue
 		}
 		if err := s.Q.DeleteComment(r.Context(), id); err != nil {
@@ -328,7 +349,7 @@ func (s *Server) adminBatchDestroyComments(w http.ResponseWriter, r *http.Reques
 		}
 		count++
 	}
-	backToAdminComments(w, r, templates.Flash{Notice: fmt.Sprintf("Successfully deleted %d comment(s).", count)})
+	s.backToAdminComments(w, r, templates.Flash{Notice: fmt.Sprintf("Successfully deleted %d comment(s).", count)})
 }
 
 // commentIDsFromForm parses the ids[] checkbox values; malformed entries are
@@ -347,11 +368,16 @@ func commentIDsFromForm(r *http.Request) []int64 {
 // Admin::CommentsController#reply: an approved reply under the site author's
 // name; external or rejected comments cannot be answered.
 func (s *Server) adminReplyComment(w http.ResponseWriter, r *http.Request) {
-	fail := func(alert string) { backToAdminComments(w, r, templates.Flash{Alert: alert}) }
+	fail := func(alert string) { s.backToAdminComments(w, r, templates.Flash{Alert: alert}) }
 
 	c, err := s.Q.GetCommentByID(r.Context(), commentIDParam(r))
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.Log.Error("get comment", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if c.Platform.Valid {
@@ -362,7 +388,17 @@ func (s *Server) adminReplyComment(w http.ResponseWriter, r *http.Request) {
 		fail("Cannot reply to rejected comments.")
 		return
 	}
-	if !c.CommentableType.Valid || !c.CommentableID.Valid || !s.commentableExists(r, c) {
+	if !c.CommentableType.Valid || !c.CommentableID.Valid {
+		fail("Commentable not found.")
+		return
+	}
+	exists, err := s.commentableExists(r, c)
+	if err != nil {
+		s.Log.Error("check commentable", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !exists {
 		fail("Commentable not found.")
 		return
 	}
@@ -420,11 +456,12 @@ func (s *Server) adminReplyComment(w http.ResponseWriter, r *http.Request) {
 	if _, err := comments.EnqueueReplyNotification(r.Context(), s.Q, s.Enqueuer(), created); err != nil {
 		s.Log.Error("enqueue reply notification", "error", err)
 	}
-	backToAdminComments(w, r, templates.Flash{Notice: "Reply posted successfully."})
+	s.backToAdminComments(w, r, templates.Flash{Notice: "Reply posted successfully."})
 }
 
 // commentableExists reports whether the comment's commentable row is present.
-func (s *Server) commentableExists(r *http.Request, c query.Comment) bool {
+// A missing row is (false, nil); a real DB error is (false, err).
+func (s *Server) commentableExists(r *http.Request, c query.Comment) (bool, error) {
 	var err error
 	switch c.CommentableType.String {
 	case "Article":
@@ -432,9 +469,15 @@ func (s *Server) commentableExists(r *http.Request, c query.Comment) bool {
 	case "Page":
 		_, err = s.Q.GetCommentablePageByID(r.Context(), c.CommentableID.Int64)
 	default:
-		return false
+		return false, nil
 	}
-	return err == nil
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // replyAuthorURL mirrors reply_author_url: blank stays blank, otherwise the

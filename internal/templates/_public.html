@@ -52,7 +52,7 @@
   </header>
   {{if .SocialLinks}}
   <div class="social-links">
-    {{range .SocialLinks}}{{if .URL}}<a rel="me" href="{{.URL}}" target="_blank" class="social" title="{{.Name}}">{{if .Icon}}<i class="{{.Icon}}" style="font-size: 20px;"></i>{{end}}</a>{{end}}{{end}}
+    {{range .SocialLinks}}{{if .URL}}<a rel="me noopener" href="{{.URL}}" target="_blank" class="social" title="{{.Name}}">{{if .Icon}}<i class="{{.Icon}}" style="font-size: 20px;"></i>{{end}}</a>{{end}}{{end}}
   </div>
   {{end}}
   <nav class="sidebar-nav">

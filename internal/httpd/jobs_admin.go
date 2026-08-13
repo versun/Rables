@@ -55,7 +55,7 @@ func (s *Server) adminJobsIndex(w http.ResponseWriter, r *http.Request) {
 	page := 1
 	if raw := r.URL.Query().Get("page"); raw != "" {
 		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 {
+		if err != nil || n < 1 || int64(n) > maxAdminPageNumber {
 			http.NotFound(w, r)
 			return
 		}
@@ -105,7 +105,7 @@ func (s *Server) adminJobsIndex(w http.ResponseWriter, r *http.Request) {
 		status = "all"
 	}
 	s.render(w, http.StatusOK, "admin_jobs", adminJobsData{
-		Flash:  PopFlash(r, w),
+		Flash:  s.PopFlash(r, w),
 		Jobs:   jobs,
 		Status: status,
 		Page:   page,

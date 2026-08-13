@@ -161,6 +161,15 @@ func TestAdminCommentsPagination(t *testing.T) {
 	if got := strings.Count(rec.Body.String(), `type="checkbox" name="ids"`); got != 1 {
 		t.Errorf("page 2 rows = %d, want 1", got)
 	}
+
+	// The 19-digit page guards the int64 offset overflow (maxAdminPageNumber),
+	// same as the articles list.
+	for _, bad := range []string{"?page=0", "?page=-1", "?page=abc", "?page=1.5", "?page=9223372036854775807"} {
+		rec = doRequest(t, h, http.MethodGet, "/admin/comments"+bad, nil, session)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("index %q: status = %d, want 404", bad, rec.Code)
+		}
+	}
 }
 
 func TestAdminApproveReject(t *testing.T) {
@@ -388,4 +397,45 @@ func TestAdminReplyRejections(t *testing.T) {
 			t.Errorf("flash = %+v", flash)
 		}
 	})
+}
+
+// TestAdminCommentLookupDBError covers the sql.ErrNoRows/other-error split:
+// a missing comment 404s (Rails' Comment.find), while a real DB error logs
+// and 500s instead of posing as a 404.
+func TestAdminCommentLookupDBError(t *testing.T) {
+	s, h := newCommentTestServer(t)
+	session := commentSession(t, s)
+
+	// Break the comments table so lookups fail with a real DB error.
+	if _, err := s.DB.ExecContext(t.Context(), "ALTER TABLE comments RENAME TO comments_gone"); err != nil {
+		t.Fatalf("break comments table: %v", err)
+	}
+	for _, path := range []string{
+		"/admin/comments/1/approve",
+		"/admin/comments/1/reject",
+		"/admin/comments/1/reply",
+	} {
+		rec := doRequest(t, h, http.MethodPost, path, nil, session)
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("POST %s with broken table: status = %d, want 500", path, rec.Code)
+		}
+	}
+}
+
+// TestAdminReplyCommentableLookupError: a DB error while resolving the
+// comment's commentable is a 500, not the misleading "Commentable not
+// found." flash.
+func TestAdminReplyCommentableLookupError(t *testing.T) {
+	s, h := newCommentTestServer(t)
+	session := commentSession(t, s)
+	insertArticle(t, s, "post", 1, 1)
+	c := localComment(t, s, 1, "Ann", domain.CommentPending)
+	if _, err := s.DB.ExecContext(t.Context(), "ALTER TABLE articles RENAME TO articles_gone"); err != nil {
+		t.Fatalf("break articles table: %v", err)
+	}
+	rec := doRequest(t, h, http.MethodPost, "/admin/comments/"+strconv.FormatInt(c.ID, 10)+"/reply",
+		url.Values{"comment[content]": {"hi"}}, session)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("reply with broken articles table: status = %d, want 500", rec.Code)
+	}
 }

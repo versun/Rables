@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,6 +24,10 @@ import (
 
 // adminArticlesPerPage mirrors fetch_articles' will_paginate per_page.
 const adminArticlesPerPage = 100
+
+// maxAdminPageNumber caps admin list page numbers so (page-1)*per_page cannot
+// overflow int64, mirroring will_paginate's BIGINT offset guard (InvalidPage).
+const maxAdminPageNumber int64 = math.MaxInt64 / adminArticlesPerPage
 
 // RegisterArticlesAdminRoutes mounts the admin article UI, mirroring Rails
 // namespace :admin: the admin root is the article list and resources
@@ -128,7 +133,7 @@ func (s *Server) adminArticlesList(w http.ResponseWriter, r *http.Request, scope
 	page := 1
 	if raw := r.URL.Query().Get("page"); raw != "" {
 		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 {
+		if err != nil || n < 1 || int64(n) > maxAdminPageNumber {
 			http.NotFound(w, r)
 			return
 		}
@@ -203,7 +208,7 @@ func (s *Server) adminArticlesList(w http.ResponseWriter, r *http.Request, scope
 		statusName = "all"
 	}
 	s.render(w, http.StatusOK, "admin_articles_index", adminArticlesIndexData{
-		Flash:    PopFlash(r, w),
+		Flash:    s.PopFlash(r, w),
 		Rows:     listRows,
 		Q:        term,
 		Status:   statusName,
@@ -383,7 +388,7 @@ func (s *Server) newArticleFormData(w http.ResponseWriter, r *http.Request) (adm
 		return adminArticleFormData{}, false
 	}
 	data := adminArticleFormData{
-		Flash:      PopFlash(r, w),
+		Flash:      s.PopFlash(r, w),
 		TimeZone:   st.TimeZone,
 		FormAction: "/admin/posts",
 		Form: adminArticleForm{
@@ -442,7 +447,7 @@ func (s *Server) adminArticlesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logArticleActivity(r.Context(), "article", "created", 0,
 		fmt.Sprintf("title=%s slug=%s", activityQuote(article.Title.String), activityQuote(article.Slug.String)))
-	SetFlash(w, templates.Flash{Notice: "Article was successfully created."})
+	s.SetFlash(w, templates.Flash{Notice: "Article was successfully created."})
 	if r.PostFormValue("create_and_add_another") != "" {
 		http.Redirect(w, r, "/admin/posts/new", http.StatusFound)
 		return
@@ -452,7 +457,7 @@ func (s *Server) adminArticlesCreate(w http.ResponseWriter, r *http.Request) {
 
 // adminArticlesEdit renders GET /admin/posts/{id}/edit.
 func (s *Server) adminArticlesEdit(w http.ResponseWriter, r *http.Request) {
-	article, err := s.Q.GetAdminArticleBySlug(r.Context(), nullSlug(chi.URLParam(r, "id")))
+	article, err := s.Q.GetAdminArticleBySlug(r.Context(), nullSlug(slugParam(r, "id")))
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -481,7 +486,7 @@ func (s *Server) adminArticlesEdit(w http.ResponseWriter, r *http.Request) {
 // /admin/posts/:id), mirroring Admin::ArticlesController#update.
 func (s *Server) adminArticlesUpdate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	existing, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(chi.URLParam(r, "id")))
+	existing, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(slugParam(r, "id")))
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -495,7 +500,7 @@ func (s *Server) adminArticlesUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data.FormAction = "/admin/posts/" + chi.URLParam(r, "id")
+	data.FormAction = "/admin/posts/" + slugParam(r, "id")
 
 	params, err := s.parseArticleForm(r, &existing)
 	if err != nil {
@@ -518,7 +523,7 @@ func (s *Server) adminArticlesUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logArticleActivity(ctx, "article", "updated", 0,
 		fmt.Sprintf("title=%s slug=%s", activityQuote(article.Title.String), activityQuote(article.Slug.String)))
-	SetFlash(w, templates.Flash{Notice: "Article was successfully updated."})
+	s.SetFlash(w, templates.Flash{Notice: "Article was successfully updated."})
 	http.Redirect(w, r, "/admin/posts", http.StatusFound)
 }
 
@@ -527,7 +532,7 @@ func (s *Server) adminArticlesUpdate(w http.ResponseWriter, r *http.Request) {
 // to trash, trash is really deleted.
 func (s *Server) adminArticlesDestroy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(chi.URLParam(r, "id")))
+	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(slugParam(r, "id")))
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -543,24 +548,24 @@ func (s *Server) adminArticlesDestroy(w http.ResponseWriter, r *http.Request) {
 			s.Log.Error("trash article", "error", err)
 			s.logArticleActivity(ctx, "article", "failed", 2,
 				fmt.Sprintf("title=%s slug=%s errors=%s", activityQuote(title), activityQuote(article.Slug.String), activityQuote(err.Error())))
-			SetFlash(w, templates.Flash{Alert: "Failed to move article to trash."})
+			s.SetFlash(w, templates.Flash{Alert: "Failed to move article to trash."})
 			http.Redirect(w, r, "/admin/posts", http.StatusSeeOther)
 			return
 		}
 		s.logArticleActivity(ctx, "article", "trashed", 0,
 			fmt.Sprintf("title=%s slug=%s", activityQuote(title), activityQuote(article.Slug.String)))
-		SetFlash(w, templates.Flash{Notice: "Article was successfully moved to trash."})
+		s.SetFlash(w, templates.Flash{Notice: "Article was successfully moved to trash."})
 		http.Redirect(w, r, "/admin/posts", http.StatusSeeOther)
 		return
 	}
-	if err := articlesvc.Destroy(ctx, s.DB, article.ID); err != nil {
+	if err := articlesvc.Destroy(ctx, s.DB, article.ID, s.Cfg.DataDir); err != nil {
 		s.Log.Error("delete article", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	s.logArticleActivity(ctx, "article", "deleted", 0,
 		fmt.Sprintf("title=%s slug=%s", activityQuote(title), activityQuote(article.Slug.String)))
-	SetFlash(w, templates.Flash{Notice: "Article was successfully deleted."})
+	s.SetFlash(w, templates.Flash{Notice: "Article was successfully deleted."})
 	http.Redirect(w, r, "/admin/posts", http.StatusSeeOther)
 }
 
@@ -580,7 +585,7 @@ func (s *Server) adminArticlesUnpublish(w http.ResponseWriter, r *http.Request) 
 // the publish/unpublish member actions.
 func (s *Server) transitionArticleStatus(w http.ResponseWriter, r *http.Request, target domain.Status, action, notice, alert string) {
 	ctx := r.Context()
-	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(chi.URLParam(r, "id")))
+	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(slugParam(r, "id")))
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -594,13 +599,13 @@ func (s *Server) transitionArticleStatus(w http.ResponseWriter, r *http.Request,
 		s.Log.Error("transition article", "target", target.String(), "error", err)
 		s.logArticleActivity(ctx, "article", "failed", 2,
 			fmt.Sprintf("title=%s slug=%s errors=%s", activityQuote(article.Title.String), activityQuote(article.Slug.String), activityQuote(err.Error())))
-		SetFlash(w, templates.Flash{Alert: alert})
+		s.SetFlash(w, templates.Flash{Alert: alert})
 		http.Redirect(w, r, "/admin/posts", http.StatusFound)
 		return
 	}
 	s.logArticleActivity(ctx, "article", action, 0,
 		fmt.Sprintf("title=%s slug=%s", activityQuote(article.Title.String), activityQuote(article.Slug.String)))
-	SetFlash(w, templates.Flash{Notice: notice})
+	s.SetFlash(w, templates.Flash{Notice: notice})
 	http.Redirect(w, r, "/admin/posts", http.StatusFound)
 }
 
@@ -614,7 +619,7 @@ func (s *Server) adminArticlesBatchDestroy(w http.ResponseWriter, r *http.Reques
 	}
 	ids := batchIDs(r)
 	if len(ids) == 0 {
-		SetFlash(w, templates.Flash{Alert: "请至少选择一个文章。"})
+		s.SetFlash(w, templates.Flash{Alert: "请至少选择一个文章。"})
 		http.Redirect(w, r, "/admin/posts", http.StatusFound)
 		return
 	}
@@ -623,8 +628,12 @@ func (s *Server) adminArticlesBatchDestroy(w http.ResponseWriter, r *http.Reques
 	var errs []string
 	for _, slug := range ids {
 		article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(slug))
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			continue // find_by miss is skipped like Rails
+		}
+		if err != nil {
+			errs = append(errs, slug+": "+err.Error())
+			continue
 		}
 		label := batchArticleLabel(article)
 		if article.Status != int64(domain.StatusTrash) {
@@ -634,7 +643,7 @@ func (s *Server) adminArticlesBatchDestroy(w http.ResponseWriter, r *http.Reques
 			}
 			trashed++
 		} else {
-			if err := articlesvc.Destroy(ctx, s.DB, article.ID); err != nil {
+			if err := articlesvc.Destroy(ctx, s.DB, article.ID, s.Cfg.DataDir); err != nil {
 				errs = append(errs, label+": "+err.Error())
 				continue
 			}
@@ -652,11 +661,11 @@ func (s *Server) adminArticlesBatchDestroy(w http.ResponseWriter, r *http.Reques
 	if len(errs) > 0 {
 		s.logArticleActivity(ctx, "article", "deleted", 1,
 			fmt.Sprintf("trashed_count=%d deleted_count=%d error_count=%d errors=%s", trashed, deleted, len(errs), activityQuote(strings.Join(errs, "; "))))
-		SetFlash(w, templates.Flash{Alert: strings.Join(messages, " ") + "错误: " + strings.Join(errs, "; ")})
+		s.SetFlash(w, templates.Flash{Alert: strings.Join(messages, " ") + "错误: " + joinFlashErrors(errs)})
 	} else {
 		s.logArticleActivity(ctx, "article", "deleted", 0,
 			fmt.Sprintf("trashed_count=%d deleted_count=%d", trashed, deleted))
-		SetFlash(w, templates.Flash{Notice: strings.Join(messages, " ")})
+		s.SetFlash(w, templates.Flash{Notice: strings.Join(messages, " ")})
 	}
 	http.Redirect(w, r, "/admin/posts", http.StatusFound)
 }
@@ -685,17 +694,22 @@ func (s *Server) processBatchTransition(w http.ResponseWriter, r *http.Request, 
 	count := 0
 	for _, slug := range batchIDs(r) {
 		article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(slug))
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
+		if err != nil {
+			s.SetFlash(w, templates.Flash{Alert: fmt.Sprintf("Error processing %s for articles: %s", batchActionName(target), err)})
+			http.Redirect(w, r, "/admin/posts", http.StatusFound)
+			return
+		}
 		if _, err := articlesvc.TransitionStatus(ctx, s.DB, article.ID, target, time.Now()); err != nil {
-			SetFlash(w, templates.Flash{Alert: fmt.Sprintf("Error processing %s for articles: %s", batchActionName(target), err)})
+			s.SetFlash(w, templates.Flash{Alert: fmt.Sprintf("Error processing %s for articles: %s", batchActionName(target), err)})
 			http.Redirect(w, r, "/admin/posts", http.StatusFound)
 			return
 		}
 		count++
 	}
-	SetFlash(w, templates.Flash{Notice: fmt.Sprintf("Successfully %s %d article(s).", pastTense, count)})
+	s.SetFlash(w, templates.Flash{Notice: fmt.Sprintf("Successfully %s %d article(s).", pastTense, count)})
 	http.Redirect(w, r, "/admin/posts", http.StatusFound)
 }
 
@@ -717,13 +731,13 @@ func (s *Server) adminArticlesBatchAddTags(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	ids := batchIDs(r)
 	if len(ids) == 0 {
-		SetFlash(w, templates.Flash{Alert: "请至少选择一个文章。"})
+		s.SetFlash(w, templates.Flash{Alert: "请至少选择一个文章。"})
 		http.Redirect(w, r, "/admin/posts", http.StatusFound)
 		return
 	}
 	tagNames := r.PostFormValue("tag_names")
 	if domain.IsBlank(tagNames) {
-		SetFlash(w, templates.Flash{Alert: "请输入至少一个标签。"})
+		s.SetFlash(w, templates.Flash{Alert: "请输入至少一个标签。"})
 		http.Redirect(w, r, "/admin/posts", http.StatusFound)
 		return
 	}
@@ -734,7 +748,7 @@ func (s *Server) adminArticlesBatchAddTags(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if len(tagIDs) == 0 {
-		SetFlash(w, templates.Flash{Alert: "无法创建标签，请检查标签名称。"})
+		s.SetFlash(w, templates.Flash{Alert: "无法创建标签，请检查标签名称。"})
 		http.Redirect(w, r, "/admin/posts", http.StatusFound)
 		return
 	}
@@ -744,7 +758,11 @@ func (s *Server) adminArticlesBatchAddTags(w http.ResponseWriter, r *http.Reques
 	var errs []string
 	for _, slug := range ids {
 		article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(slug))
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
 		if err != nil {
+			errs = append(errs, slug+": "+err.Error())
 			continue
 		}
 		failed := false
@@ -765,11 +783,11 @@ func (s *Server) adminArticlesBatchAddTags(w http.ResponseWriter, r *http.Reques
 	if len(errs) > 0 {
 		s.logArticleActivity(ctx, "article", "updated", 1,
 			fmt.Sprintf("count=%d error_count=%d tags=%s errors=%s", count, len(errs), activityQuote(tagNames), activityQuote(strings.Join(errs, "; "))))
-		SetFlash(w, templates.Flash{Alert: fmt.Sprintf("成功添加标签到 %d 篇文章。错误: %s", count, strings.Join(errs, "; "))})
+		s.SetFlash(w, templates.Flash{Alert: fmt.Sprintf("成功添加标签到 %d 篇文章。错误: %s", count, joinFlashErrors(errs))})
 	} else {
 		s.logArticleActivity(ctx, "article", "updated", 0,
 			fmt.Sprintf("count=%d tags=%s", count, activityQuote(tagNames)))
-		SetFlash(w, templates.Flash{Notice: fmt.Sprintf("成功添加标签到 %d 篇文章。", count)})
+		s.SetFlash(w, templates.Flash{Notice: fmt.Sprintf("成功添加标签到 %d 篇文章。", count)})
 	}
 	http.Redirect(w, r, "/admin/posts", http.StatusFound)
 }
@@ -785,7 +803,7 @@ func (s *Server) adminArticlesBatchCrosspost(w http.ResponseWriter, r *http.Requ
 	ctx := r.Context()
 	ids := batchIDs(r)
 	if len(ids) == 0 {
-		SetFlash(w, templates.Flash{Alert: "请至少选择一个文章。"})
+		s.SetFlash(w, templates.Flash{Alert: "请至少选择一个文章。"})
 		http.Redirect(w, r, "/admin/posts", http.StatusFound)
 		return
 	}
@@ -794,7 +812,7 @@ func (s *Server) adminArticlesBatchCrosspost(w http.ResponseWriter, r *http.Requ
 		platforms = r.PostForm["platforms[]"]
 	}
 	if len(platforms) == 0 {
-		SetFlash(w, templates.Flash{Alert: "请至少选择一个平台。"})
+		s.SetFlash(w, templates.Flash{Alert: "请至少选择一个平台。"})
 		http.Redirect(w, r, "/admin/posts", http.StatusFound)
 		return
 	}
@@ -811,13 +829,22 @@ func (s *Server) adminArticlesBatchCrosspost(w http.ResponseWriter, r *http.Requ
 			enabledPlatforms = append(enabledPlatforms, platform)
 		}
 	}
+	if len(enabledPlatforms) == 0 {
+		s.SetFlash(w, templates.Flash{Alert: "所选平台均未启用。"})
+		http.Redirect(w, r, "/admin/posts", http.StatusFound)
+		return
+	}
 
 	now := time.Now().UTC()
 	count := 0
 	var errs []string
 	for _, slug := range ids {
 		article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(slug))
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
 		if err != nil {
+			errs = append(errs, slug+": "+err.Error())
 			continue
 		}
 		if article.Status != int64(domain.StatusPublish) {
@@ -842,11 +869,11 @@ func (s *Server) adminArticlesBatchCrosspost(w http.ResponseWriter, r *http.Requ
 	if len(errs) > 0 {
 		s.logArticleActivity(ctx, "crosspost", "queued", 1,
 			fmt.Sprintf("count=%d platforms=%s error_count=%d errors=%s", count, platformsListValue(platforms), len(errs), activityQuote(strings.Join(errs, "; "))))
-		SetFlash(w, templates.Flash{Alert: fmt.Sprintf("成功提交 %d 篇文章进行跨平台发布。错误: %s", count, strings.Join(errs, "; "))})
+		s.SetFlash(w, templates.Flash{Alert: fmt.Sprintf("成功提交 %d 篇文章进行跨平台发布。错误: %s", count, joinFlashErrors(errs))})
 	} else {
 		s.logArticleActivity(ctx, "crosspost", "queued", 0,
 			fmt.Sprintf("count=%d platforms=%s", count, platformsListValue(platforms)))
-		SetFlash(w, templates.Flash{Notice: fmt.Sprintf("成功提交 %d 篇文章进行跨平台发布。", count)})
+		s.SetFlash(w, templates.Flash{Notice: fmt.Sprintf("成功提交 %d 篇文章进行跨平台发布。", count)})
 	}
 	http.Redirect(w, r, "/admin/posts", http.StatusFound)
 }
@@ -862,7 +889,7 @@ func (s *Server) adminArticlesBatchNewsletter(w http.ResponseWriter, r *http.Req
 	ctx := r.Context()
 	ids := batchIDs(r)
 	if len(ids) == 0 {
-		SetFlash(w, templates.Flash{Alert: "请至少选择一个文章。"})
+		s.SetFlash(w, templates.Flash{Alert: "请至少选择一个文章。"})
 		http.Redirect(w, r, "/admin/posts", http.StatusFound)
 		return
 	}
@@ -878,7 +905,11 @@ func (s *Server) adminArticlesBatchNewsletter(w http.ResponseWriter, r *http.Req
 	var errs []string
 	for _, slug := range ids {
 		article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(slug))
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
 		if err != nil {
+			errs = append(errs, slug+": "+err.Error())
 			continue
 		}
 		if article.Status != int64(domain.StatusPublish) {
@@ -898,11 +929,11 @@ func (s *Server) adminArticlesBatchNewsletter(w http.ResponseWriter, r *http.Req
 	if len(errs) > 0 {
 		s.logArticleActivity(ctx, "newsletter", "queued", 1,
 			fmt.Sprintf("count=%d error_count=%d errors=%s", count, len(errs), activityQuote(strings.Join(errs, "; "))))
-		SetFlash(w, templates.Flash{Alert: fmt.Sprintf("成功提交 %d 篇文章发送邮件。错误: %s", count, strings.Join(errs, "; "))})
+		s.SetFlash(w, templates.Flash{Alert: fmt.Sprintf("成功提交 %d 篇文章发送邮件。错误: %s", count, joinFlashErrors(errs))})
 	} else {
 		s.logArticleActivity(ctx, "newsletter", "queued", 0,
 			fmt.Sprintf("count=%d", count))
-		SetFlash(w, templates.Flash{Notice: fmt.Sprintf("成功提交 %d 篇文章发送邮件。", count)})
+		s.SetFlash(w, templates.Flash{Notice: fmt.Sprintf("成功提交 %d 篇文章发送邮件。", count)})
 	}
 	http.Redirect(w, r, "/admin/posts", http.StatusFound)
 }
@@ -913,7 +944,7 @@ func (s *Server) adminArticlesBatchNewsletter(w http.ResponseWriter, r *http.Req
 // platform fetchers run in the job worker), narrowed to this article.
 func (s *Server) adminArticlesFetchComments(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(chi.URLParam(r, "id")))
+	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug(slugParam(r, "id")))
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return

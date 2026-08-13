@@ -9,9 +9,15 @@ import (
 
 // PlainText ports Article#plain_text_content for stored HTML, i.e.
 // ActionView::Base.full_sanitizer: all tags are stripped and the remaining
-// text nodes are concatenated with no separator.
+// text nodes are concatenated with no separator. Input over
+// maxHTMLParseBytes returns "": the same fallback as a parse error, which
+// every caller (excerpts, blank checks, plain-text mail parts) already
+// tolerates.
 func PlainText(rawHTML string) string {
 	if rawHTML == "" {
+		return ""
+	}
+	if len(rawHTML) > maxHTMLParseBytes {
 		return ""
 	}
 	nodes, err := html.ParseFragment(strings.NewReader(rawHTML), bodyContext)

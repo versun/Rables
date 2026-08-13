@@ -128,9 +128,14 @@ func (q *Queries) GetSubscriberByConfirmationToken(ctx context.Context, confirma
 }
 
 const getSubscriberByEmail = `-- name: GetSubscriberByEmail :one
-SELECT id, email, confirmation_token, unsubscribe_token, confirmed_at, unsubscribed_at, created_at, updated_at FROM subscribers WHERE email = ?
+SELECT id, email, confirmation_token, unsubscribe_token, confirmed_at, unsubscribed_at, created_at, updated_at FROM subscribers WHERE email = ?1 COLLATE NOCASE ORDER BY (email = ?1) DESC
 `
 
+// COLLATE NOCASE so legacy rows imported with mixed-case emails still match;
+// writes are normalized to lowercase by subscribersvc.NormalizeEmail. The
+// email UNIQUE index is BINARY, so case-variant duplicates can coexist;
+// ORDER BY (email = ?) DESC puts an exact-case match first instead of
+// returning an arbitrary row from the full scan.
 func (q *Queries) GetSubscriberByEmail(ctx context.Context, email string) (Subscriber, error) {
 	row := q.db.QueryRowContext(ctx, getSubscriberByEmail, email)
 	var i Subscriber
@@ -342,6 +347,25 @@ type ResetSubscriberForResubscribeParams struct {
 // confirmation state resets and a fresh confirmation token is issued.
 func (q *Queries) ResetSubscriberForResubscribe(ctx context.Context, arg ResetSubscriberForResubscribeParams) error {
 	_, err := q.db.ExecContext(ctx, resetSubscriberForResubscribe, arg.ConfirmationToken, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const setSubscriberConfirmationToken = `-- name: SetSubscriberConfirmationToken :exec
+UPDATE subscribers SET confirmation_token = ?, updated_at = ?
+WHERE id = ?
+`
+
+type SetSubscriberConfirmationTokenParams struct {
+	ConfirmationToken sql.NullString
+	UpdatedAt         int64
+	ID                int64
+}
+
+// Re-subscribe of a legacy imported row whose confirmation token is blank
+// (imports keep token columns verbatim): Subscriber#generate_tokens fills
+// blanks on every save, so mint the token the confirmation email links to.
+func (q *Queries) SetSubscriberConfirmationToken(ctx context.Context, arg SetSubscriberConfirmationTokenParams) error {
+	_, err := q.db.ExecContext(ctx, setSubscriberConfirmationToken, arg.ConfirmationToken, arg.UpdatedAt, arg.ID)
 	return err
 }
 

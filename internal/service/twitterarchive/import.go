@@ -40,6 +40,7 @@ import (
 	"rables/internal/domain"
 	"rables/internal/jobs"
 	"rables/internal/service/activity"
+	"rables/internal/service/media"
 )
 
 // Tweet entry types (TwitterArchiveTweet::ENTRY_TYPES).
@@ -55,6 +56,28 @@ var mediaDirectories = []string{"data/tweets_media/", "data/tweet_media/"}
 // DefaultTweetBatchSize mirrors TwitterArchiveImporter::TWEET_BATCH_SIZE:
 // tweet rows committed per transaction during the replace.
 const DefaultTweetBatchSize = 100
+
+// MaxArchiveExtractBytes caps the total declared uncompressed size of an
+// archive ZIP (10GB, the same bound extractImportZip applies to database
+// bundles). Media entries are streamed straight to disk, and Go's zip reader
+// only enforces each entry's own declared size, so without a total cap a
+// crafted archive (a small zip declaring huge media entries) would fill the
+// disk mid-import.
+const MaxArchiveExtractBytes = 10 << 30
+
+// MaxArchiveExtractEntries caps the number of file entries in an archive ZIP
+// (the same bound MaxImportExtractEntries applies to database bundles):
+// millions of tiny entries stay under the byte limit but would exhaust
+// inodes when the media entries are streamed to disk.
+const MaxArchiveExtractEntries = 100000
+
+// maxArchiveItemBytes caps one decoded archive item (64MB). Both passes
+// decode each item fully into memory, and a hostile archive stays valid
+// (deflate shrinks it to a few MB) while declaring gigabytes in a single
+// string value, so without a per-item cap one "full_text": "AAA..." entry
+// would OOM a small VPS. 64MB is far beyond any real tweet, account, or
+// connection object.
+const maxArchiveItemBytes = 64 << 20
 
 // Summary reports the imported row counts
 // (TwitterArchiveImporter#build_summary).
@@ -198,7 +221,28 @@ func (im *Importer) scanPass(ctx context.Context) (*scan, error) {
 		connectionKeys: map[string]struct{}{},
 		likeIDs:        map[string]struct{}{},
 	}
+	// Refuse bombs before anything is written: the declared uncompressed
+	// sizes bound what extraction can actually write (Go's zip reader fails
+	// an entry that outgrows its declared size). The comparison runs before
+	// the addition: declared stays <= MaxArchiveExtractBytes across
+	// iterations, so the subtraction cannot underflow and the running total
+	// can never wrap around past the limit on a forged zip64 entry. The
+	// entry count is capped too: a flood of tiny entries stays under the
+	// byte limit but would exhaust inodes when media lands on disk.
+	var declared uint64
+	var entries int
 	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		entries++
+		if entries > MaxArchiveExtractEntries {
+			return nil, fmt.Errorf("twitter archive: ZIP has more than %d file entries", MaxArchiveExtractEntries)
+		}
+		if f.UncompressedSize64 > MaxArchiveExtractBytes-declared {
+			return nil, fmt.Errorf("twitter archive: ZIP entry %q declares %d uncompressed bytes, over the %d total limit", f.Name, f.UncompressedSize64, MaxArchiveExtractBytes)
+		}
+		declared += f.UncompressedSize64
 		if isArchiveDataEntry(f.Name) {
 			sc.dataEntries++
 		}
@@ -285,6 +329,29 @@ func (im *Importer) replacePass(ctx context.Context, sc *scan) error {
 	return sink.flush(ctx)
 }
 
+// fileReferenced reports whether a files row is still referenced by an
+// attachment, a static_files entry or a /files/<key> URL in stored content.
+// static_files.file_id references files(id) under foreign_keys enforcement,
+// and a database import can merge a static file onto a row that tweet media
+// also uses, so both count; content embeds files by URL without any
+// attachment row (the model ReapOrphanFiles already uses), so a URL reuse in
+// an article, page, comment, setting or redirect counts too.
+func fileReferenced(ctx context.Context, q *query.Queries, id int64, key string) (bool, error) {
+	attached, err := q.CountAttachmentsForFile(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	static, err := q.CountStaticFilesForFile(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	content, err := q.CountFileKeyContentReferences(ctx, sql.NullString{String: key, Valid: true})
+	if err != nil {
+		return false, err
+	}
+	return attached+static+content > 0, nil
+}
+
 // clearStoredArchive mirrors the destroy_all transaction of
 // replace_archive_data plus the has_many_attached dependent: :purge_later
 // cleanup of tweet media (attachments, unreferenced files rows, disk files).
@@ -306,34 +373,51 @@ func (im *Importer) clearStoredArchive(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("twitter archive: list old media: %w", err)
 	}
-	// Variants reference their original via files.variant_of; under
-	// foreign_keys enforcement they must be deleted before the originals.
-	var variantRefs, originalRefs []fileRef
+	if err := q.DeleteTwitterArchiveTweetAttachments(ctx); err != nil {
+		return fmt.Errorf("twitter archive: delete old attachments: %w", err)
+	}
 	for _, mf := range mediaFiles {
-		originalRefs = append(originalRefs, fileRef{id: mf.ID, key: mf.Key})
+		referenced, err := fileReferenced(ctx, q, mf.ID, mf.Key)
+		if err != nil {
+			return fmt.Errorf("twitter archive: count file references: %w", err)
+		}
+		if referenced {
+			continue // still referenced elsewhere: keep row, variants and disk file
+		}
 		variants, err := q.ListFileVariants(ctx, sql.NullInt64{Int64: mf.ID, Valid: true})
 		if err != nil {
 			return fmt.Errorf("twitter archive: list old media variants: %w", err)
 		}
+		refs := make([]fileRef, 0, len(variants))
+		shared := false
 		for _, v := range variants {
-			variantRefs = append(variantRefs, fileRef{id: v.ID, key: v.Key})
+			vReferenced, err := fileReferenced(ctx, q, v.ID, v.Key)
+			if err != nil {
+				return fmt.Errorf("twitter archive: count file references: %w", err)
+			}
+			if vReferenced {
+				// A variant that is itself referenced pins its original via
+				// files.variant_of: keep the whole family.
+				shared = true
+				break
+			}
+			refs = append(refs, fileRef{id: v.ID, key: v.Key})
 		}
-	}
-	if err := q.DeleteTwitterArchiveTweetAttachments(ctx); err != nil {
-		return fmt.Errorf("twitter archive: delete old attachments: %w", err)
-	}
-	for _, ref := range append(variantRefs, originalRefs...) {
-		n, err := q.CountAttachmentsForFile(ctx, ref.id)
-		if err != nil {
-			return fmt.Errorf("twitter archive: count file attachments: %w", err)
+		if shared {
+			continue
 		}
-		if n > 0 {
-			continue // still referenced elsewhere: keep row and disk file
+		// Variants reference their original via files.variant_of; under
+		// foreign_keys enforcement they must be deleted before the originals.
+		for _, ref := range refs {
+			if err := q.DeleteFile(ctx, ref.id); err != nil {
+				return fmt.Errorf("twitter archive: delete file row: %w", err)
+			}
+			doomed = append(doomed, ref)
 		}
-		if err := q.DeleteFile(ctx, ref.id); err != nil {
+		if err := q.DeleteFile(ctx, mf.ID); err != nil {
 			return fmt.Errorf("twitter archive: delete file row: %w", err)
 		}
-		doomed = append(doomed, ref)
+		doomed = append(doomed, fileRef{id: mf.ID, key: mf.Key})
 	}
 	if err := q.DeleteAllTwitterArchiveTweets(ctx); err != nil {
 		return fmt.Errorf("twitter archive: clear tweets: %w", err)
@@ -349,8 +433,16 @@ func (im *Importer) clearStoredArchive(ctx context.Context) error {
 	}
 
 	// Disk files are removed only after the transaction commits; failures are
-	// logged, never fatal (mirrors purge_later best-effort semantics).
+	// logged, never fatal (mirrors purge_later best-effort semantics). The
+	// key comes from the files table, which a database import fills verbatim:
+	// a crafted bundle could plant a traversal (or short, slice-panicking)
+	// key here, so only well-formed keys ever reach a disk path. The row is
+	// already deleted; the blob is left alone when the key looks unsafe.
 	for _, ref := range doomed {
+		if !media.ValidKey(ref.key) {
+			slog.Warn("twitter archive: skip blob removal, unsafe key", "key", ref.key)
+			continue
+		}
 		if err := os.Remove(im.mediaPath(ref.key)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("twitter archive: remove replaced media file", "key", ref.key, "error", err)
 		}
@@ -367,10 +459,21 @@ type dbSink struct {
 	scan       *scan
 	mediaFiles map[string]*zip.File
 	mediaIDs   map[string]int64 // zip entry name -> files.id
+	// newMedia tracks media stored since the last committed tweet batch.
+	// Their files rows live outside the batch transaction, so a batch
+	// failure would orphan them; discardNewMedia reclaims them.
+	newMedia []storedMediaRef
 
 	tweets      []candidate
 	connections []connectionRow
 	likes       []likeRow
+}
+
+// storedMediaRef identifies one files row + disk blob written by
+// storeMediaEntry outside the tweet batch transaction.
+type storedMediaRef struct {
+	id  int64
+	key string
 }
 
 func (s *dbSink) consume(ctx context.Context, item map[string]any, entryType string) error {
@@ -430,6 +533,10 @@ func (s *dbSink) flushTweets(ctx context.Context) error {
 		for _, entryName := range c.media {
 			fileID, err := s.mediaFileID(ctx, entryName)
 			if err != nil {
+				// Media already stored for this batch is unreferenced
+				// (the batch transaction never opened): reclaim it like
+				// the commit-failure path below does.
+				s.discardNewMedia(ctx)
 				return err
 			}
 			if fileID > 0 {
@@ -438,6 +545,19 @@ func (s *dbSink) flushTweets(ctx context.Context) error {
 		}
 	}
 
+	if err := s.commitTweetBatch(ctx, batch, attached); err != nil {
+		// The batch transaction has rolled back by now, so the media rows
+		// stored for it above are unreferenced orphans: reclaim them.
+		s.discardNewMedia(ctx)
+		return err
+	}
+	s.newMedia = nil // committed; now protected by attachment links
+	return nil
+}
+
+// commitTweetBatch upserts one batch of tweets and their media attachments
+// in a single transaction.
+func (s *dbSink) commitTweetBatch(ctx context.Context, batch []candidate, attached [][]int64) error {
 	tx, err := s.im.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("twitter archive: begin tweet batch: %w", err)
@@ -476,6 +596,32 @@ func (s *dbSink) flushTweets(ctx context.Context) error {
 	return nil
 }
 
+// discardNewMedia reclaims the files rows and disk blobs stored for a tweet
+// batch whose transaction failed. It must run after the batch transaction
+// has rolled back (its attachment rows would otherwise still reference the
+// files and block the deletes). Best effort: failures are logged, not
+// fatal, mirroring the purge_later semantics of clearStoredArchive.
+//
+// The batch failure may be a canceled ctx (worker shutdown), and the cleanup
+// must still run or the fresh rows and blobs would stay orphaned — so it
+// goes through a context that cannot be canceled. No attachment liveness
+// check is needed before deleting: every ref was created by storeMediaEntry
+// within this flush window, and the only attachments that could reference it
+// belonged to the rolled-back batch, so the rows are never live.
+func (s *dbSink) discardNewMedia(ctx context.Context) {
+	ctx = context.WithoutCancel(ctx)
+	for _, ref := range s.newMedia {
+		if err := s.im.q.DeleteFile(ctx, ref.id); err != nil {
+			slog.Warn("twitter archive: delete orphan media row", "id", ref.id, "error", err)
+			continue
+		}
+		if err := os.Remove(s.im.mediaPath(ref.key)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("twitter archive: remove orphan media file", "key", ref.key, "error", err)
+		}
+	}
+	s.newMedia = nil
+}
+
 // mediaFileID returns the files row id for a media zip entry, extracting it
 // to disk on first sight. Zero means the entry was empty or missing (skipped,
 // like the Rails importer's blank/missing handling).
@@ -489,9 +635,12 @@ func (s *dbSink) mediaFileID(ctx context.Context, entryName string) (int64, erro
 		s.mediaIDs[entryName] = 0
 		return 0, nil
 	}
-	id, err := s.im.storeMediaEntry(ctx, f)
+	id, key, err := s.im.storeMediaEntry(ctx, f)
 	if err != nil {
 		return 0, err
+	}
+	if id > 0 {
+		s.newMedia = append(s.newMedia, storedMediaRef{id: id, key: key})
 	}
 	s.mediaIDs[entryName] = id
 	return id, nil
@@ -579,7 +728,9 @@ func (im *Importer) walkDataEntries(ctx context.Context, zr *zip.Reader, consume
 }
 
 // streamEntryItems opens one zip entry and decodes its JS/JSON payload
-// without ever buffering the whole entry.
+// without ever buffering the whole entry. A single item larger than
+// maxArchiveItemBytes fails the import (errItemTooLarge) instead of being
+// materialized in memory.
 func streamEntryItems(ctx context.Context, f *zip.File, consume func(ctx context.Context, item map[string]any, entryType string) error, entryType string) error {
 	rc, err := f.Open()
 	if err != nil {
@@ -594,16 +745,22 @@ func streamEntryItems(ctx context.Context, f *zip.File, consume func(ctx context
 	if br == nil {
 		return nil // blank payload: parse_js_payload returns nil
 	}
-	dec := json.NewDecoder(br)
+	lim := &itemBudgetReader{r: br}
+	dec := json.NewDecoder(lim)
 	dec.UseNumber()
 
 	if peek, err := peekNonSpace(br); err != nil {
 		return fmt.Errorf("invalid JSON payload: %w", err)
 	} else if peek == '[' {
+		lim.reset()
 		if _, err := dec.Token(); err != nil {
 			return err
 		}
-		for dec.More() {
+		for {
+			lim.reset()
+			if !dec.More() {
+				break
+			}
 			var item any
 			if err := dec.Decode(&item); err != nil {
 				return err
@@ -617,12 +774,14 @@ func streamEntryItems(ctx context.Context, f *zip.File, consume func(ctx context
 				}
 			}
 		}
+		lim.reset()
 		if _, err := dec.Token(); err != nil {
 			return err
 		}
 		return nil
 	}
 	// Single top-level value (an object in practice).
+	lim.reset()
 	var item any
 	if err := dec.Decode(&item); err != nil {
 		return err
@@ -631,6 +790,36 @@ func streamEntryItems(ctx context.Context, f *zip.File, consume func(ctx context
 		return consume(ctx, m, entryType)
 	}
 	return nil
+}
+
+// errItemTooLarge aborts an import when one archive item pulls more than
+// maxArchiveItemBytes from the entry stream; like any malformed payload, the
+// entry cannot be resumed mid-item, so the whole import fails.
+var errItemTooLarge = errors.New("twitter archive: single item exceeds the 64MB size limit")
+
+// itemBudgetReader bounds how many entry bytes one decoder step may pull.
+// json.Decoder keeps its own buffer, so an io.LimitReader around the whole
+// entry would cap the entry rather than the item; instead the budget is
+// reset before every Token/More/Decode step, letting a stream of any length
+// through while a multi-GB single value errors out during the scan, before
+// its string is materialized.
+type itemBudgetReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (l *itemBudgetReader) reset() { l.remaining = maxArchiveItemBytes }
+
+func (l *itemBudgetReader) Read(p []byte) (int, error) {
+	if l.remaining <= 0 {
+		return 0, errItemTooLarge
+	}
+	if int64(len(p)) > l.remaining {
+		p = p[:l.remaining]
+	}
+	n, err := l.r.Read(p)
+	l.remaining -= int64(n)
+	return n, err
 }
 
 // stripJSPayloadPrefix mirrors parse_js_payload: content starting with '{' or
@@ -1033,26 +1222,27 @@ func extractLike(item map[string]any) (likeRow, bool) {
 // (DataDir/files/xx/yy/<key>, the ActiveStorage-compatible layout of the
 // media service) and inserts the files row. The entry is never fully
 // buffered: the content type is sniffed from the first 512 bytes and the
-// body is copied straight to disk. Returns 0 for empty entries (skipped like
-// the Rails importer's blank check).
-func (im *Importer) storeMediaEntry(ctx context.Context, f *zip.File) (int64, error) {
+// body is copied straight to disk. Returns the new row id and its blob key;
+// id 0 means the entry was empty (skipped like the Rails importer's blank
+// check).
+func (im *Importer) storeMediaEntry(ctx context.Context, f *zip.File) (int64, string, error) {
 	rc, err := f.Open()
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	defer rc.Close()
 
 	key, err := newFileKey()
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	filePath := im.mediaPath(key)
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return 0, fmt.Errorf("twitter archive: create media dir: %w", err)
+		return 0, "", fmt.Errorf("twitter archive: create media dir: %w", err)
 	}
 	out, err := os.Create(filePath)
 	if err != nil {
-		return 0, fmt.Errorf("twitter archive: create media file: %w", err)
+		return 0, "", fmt.Errorf("twitter archive: create media file: %w", err)
 	}
 
 	hash := md5.New()
@@ -1062,28 +1252,28 @@ func (im *Importer) storeMediaEntry(ctx context.Context, f *zip.File) (int64, er
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 		out.Close()
 		os.Remove(filePath)
-		return 0, fmt.Errorf("twitter archive: read media: %w", err)
+		return 0, "", fmt.Errorf("twitter archive: read media: %w", err)
 	}
 	head = head[:headLen]
 	if _, err := w.Write(head); err != nil {
 		out.Close()
 		os.Remove(filePath)
-		return 0, fmt.Errorf("twitter archive: extract media: %w", err)
+		return 0, "", fmt.Errorf("twitter archive: extract media: %w", err)
 	}
 	rest, err := io.Copy(w, rc)
 	if err != nil {
 		out.Close()
 		os.Remove(filePath)
-		return 0, fmt.Errorf("twitter archive: extract media: %w", err)
+		return 0, "", fmt.Errorf("twitter archive: extract media: %w", err)
 	}
 	size := int64(headLen) + rest
 	if err := out.Close(); err != nil {
 		os.Remove(filePath)
-		return 0, fmt.Errorf("twitter archive: write media: %w", err)
+		return 0, "", fmt.Errorf("twitter archive: write media: %w", err)
 	}
 	if size == 0 {
 		os.Remove(filePath)
-		return 0, nil
+		return 0, "", nil
 	}
 
 	filename := path.Base(f.Name)
@@ -1099,9 +1289,9 @@ func (im *Importer) storeMediaEntry(ctx context.Context, f *zip.File) (int64, er
 	})
 	if err != nil {
 		os.Remove(filePath)
-		return 0, fmt.Errorf("twitter archive: insert media file row: %w", err)
+		return 0, "", fmt.Errorf("twitter archive: insert media file row: %w", err)
 	}
-	return row.ID, nil
+	return row.ID, key, nil
 }
 
 // mediaPath mirrors media.Service.PathFor.
@@ -1199,6 +1389,66 @@ func nullString(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: s != ""}
 }
 
+// sourceFilePresent reports whether the import's source zip is still on disk
+// to import: a NULL/empty path or a missing file both mean the terminal
+// cleanup already ran. Other stat errors count as present, so the import
+// fails on the real error instead of being silently skipped.
+func sourceFilePresent(path sql.NullString) bool {
+	if !path.Valid || path.String == "" {
+		return false
+	}
+	_, err := os.Stat(path.String)
+	return !errors.Is(err, os.ErrNotExist)
+}
+
+// removeSourceFile deletes the uploaded archive zip once the import reached a
+// terminal state. path comes from the twitter_archive_imports row, which a
+// crafted transfer bundle fills verbatim, so it is removed only when it is a
+// path this feature owns: directly inside <dataDir>/imports with the
+// twitter_archive_ prefix storeTwitterArchiveUpload writes (the same
+// ownership rule jobs.CleanupOrphanImportFiles sweeps by). Without the check
+// a planted row would make the re-executed job os.Remove an arbitrary server
+// file once the import fails on the fake path; such a path is only logged.
+func removeSourceFile(dataDir, path string) {
+	if filepath.Dir(path) != filepath.Join(dataDir, "imports") ||
+		!strings.HasPrefix(filepath.Base(path), "twitter_archive_") {
+		slog.Warn("twitter archive import: skip source removal, unexpected path", "path", path)
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("twitter archive import: remove source", "path", path, "error", err)
+	}
+}
+
+// RecoverStaleImports fails twitter_archive_imports rows stuck in queued or
+// running since before cutoff and releases their active_slot, so an import
+// interrupted by a process crash does not block new imports forever
+// (idx_tai_active_slot allows a single active row, and
+// HasActiveTwitterArchiveImport rejects submissions while one exists). It
+// runs at startup before the worker starts polling and returns the number of
+// rows recovered. A row whose job is still legitimately queued self-heals:
+// the handler re-marks it running (re-claiming active_slot) when the job
+// executes; if a newer import took the freed slot in between, the unique
+// index on active_slot fails the late re-mark instead of allowing two
+// concurrent imports.
+//
+// Caveat: the cutoff leaves a blind spot when a crashed process is relaunched
+// within the cutoff window (an instant supervisor restart). Rows the dead
+// process touched last still carry an updated_at newer than the cutoff, so
+// recovery skips them: they stay queued/running with active_slot held and
+// block new submissions even though no live process owns them. They heal on
+// the next restart after their updated_at falls behind the cutoff, when
+// recovery finally fails them.
+func RecoverStaleImports(ctx context.Context, q *query.Queries, cutoff time.Time) (int64, error) {
+	now := time.Now().Unix()
+	return q.FailStaleTwitterArchiveImports(ctx, query.FailStaleTwitterArchiveImportsParams{
+		ErrorMessage: nullString("Process restarted before the import finished"),
+		FinishedAt:   sql.NullInt64{Int64: now, Valid: true},
+		Now:          now,
+		Cutoff:       cutoff.Unix(),
+	})
+}
+
 // RegisterImportHandler installs the twitter_archive_import job handler
 // (TwitterArchiveImportJob): it marks the import running, streams the archive
 // in, records the summary and always cleans up the uploaded source file.
@@ -1217,12 +1467,53 @@ func RegisterImportHandler(w *jobs.Worker, db *sql.DB, dataDir string) {
 		if err != nil {
 			return fmt.Errorf("twitter archive import: load import %d: %w", p.ImportID, err)
 		}
+		// A job re-executed after its import already terminally failed (a
+		// crash between FailTwitterArchiveImport and CompleteJobRun) must not
+		// re-run: the terminal run already deleted the source zip, so
+		// re-marking running would only fail on the missing file and overwrite
+		// the original error with "Archive file not found". source_path is
+		// cleared after the file is removed, so a crash in between can leave
+		// a failed row whose source_path points at a deleted file — that row
+		// is terminal too. Rows that can still self-heal (failed by startup
+		// recovery while their job stayed queued) keep their source file, so
+		// they pass this check.
+		if imp.Status == "failed" && !sourceFilePresent(imp.SourcePath) {
+			return nil
+		}
+		// The self-heal re-run is only safe while nothing superseded it: if the
+		// admin uploaded a fresh archive after the recovery and that import
+		// already ran (or is queued), re-running this one would roll the
+		// stored archive back to the older upload. A newer non-failed row
+		// makes this import superseded — skip it like a terminal row.
+		if imp.Status == "failed" {
+			newer, err := q.HasNewerNonFailedTwitterArchiveImport(ctx, imp.ID)
+			if err != nil {
+				return fmt.Errorf("twitter archive import: check newer imports: %w", err)
+			}
+			if newer > 0 {
+				slog.Info("twitter archive import: skip recovered import superseded by a newer import", "import_id", imp.ID)
+				return nil
+			}
+		}
 
 		now := time.Now().Unix()
-		if err := q.MarkTwitterArchiveImportRunning(ctx, query.MarkTwitterArchiveImportRunningParams{
+		marked, err := q.MarkTwitterArchiveImportRunning(ctx, query.MarkTwitterArchiveImportRunningParams{
 			StartedAt: sql.NullInt64{Int64: now, Valid: true}, UpdatedAt: now, ID: imp.ID,
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("twitter archive import: mark running: %w", err)
+		}
+		if marked == 0 {
+			// The import already completed; only a re-executed job can see
+			// this (its own completion write was lost to a crash). A re-run
+			// could only clobber the history row back to failed — skip it
+			// and let the job complete. The crash may also have happened
+			// before the source cleanup below ran, so remove a leftover
+			// zip here too.
+			if imp.SourcePath.Valid && imp.SourcePath.String != "" {
+				removeSourceFile(dataDir, imp.SourcePath.String)
+			}
+			return nil
 		}
 		logActivity(ctx, db, "info", "started", fmt.Sprintf("filename=%s import_id=%d", activity.Quote(imp.SourceFilename), imp.ID))
 
@@ -1241,19 +1532,24 @@ func RegisterImportHandler(w *jobs.Worker, db *sql.DB, dataDir string) {
 		}
 		summary, runErr := importer.Import(ctx)
 
-		// cleanup_source_file!: the uploaded zip is always removed.
-		if imp.SourcePath.Valid && imp.SourcePath.String != "" {
-			if err := os.Remove(imp.SourcePath.String); err != nil && !errors.Is(err, os.ErrNotExist) {
-				slog.Warn("twitter archive import: remove source", "path", imp.SourcePath.String, "error", err)
-			}
+		// A shutdown-cancelled import (SIGTERM) is not a failure: leave the
+		// source zip and the running row untouched and propagate the
+		// cancellation, so the worker requeues the job for free and the
+		// import resumes from the still-present zip after the restart.
+		if errors.Is(runErr, context.Canceled) {
+			return runErr
 		}
-		_ = q.ClearTwitterArchiveImportSource(ctx, query.ClearTwitterArchiveImportSourceParams{
-			UpdatedAt: time.Now().Unix(), ID: imp.ID,
-		})
+
+		// Like the worker's own bookkeeping, the terminal import writes must
+		// land even when the job ctx is already cancelled (SIGTERM landed
+		// mid-import): otherwise the row would stay running with active_slot
+		// held until the next restart's recovery, and a finished import could
+		// go unrecorded and be clobbered by the re-executed job.
+		bookCtx := context.WithoutCancel(ctx)
 
 		if runErr != nil {
 			now = time.Now().Unix()
-			_ = q.FailTwitterArchiveImport(ctx, query.FailTwitterArchiveImportParams{
+			_ = q.FailTwitterArchiveImport(bookCtx, query.FailTwitterArchiveImportParams{
 				ErrorMessage: nullString(runErr.Error()),
 				FinishedAt:   sql.NullInt64{Int64: now, Valid: true},
 				UpdatedAt:    now,
@@ -1261,26 +1557,38 @@ func RegisterImportHandler(w *jobs.Worker, db *sql.DB, dataDir string) {
 			})
 			logActivity(ctx, db, "error", "failed", fmt.Sprintf("filename=%s error=%s import_id=%d",
 				activity.Quote(imp.SourceFilename), activity.Quote(runErr.Error()), imp.ID))
-			return nil // the job itself succeeds; the import row carries the failure
+		} else {
+			now = time.Now().Unix()
+			if err := q.CompleteTwitterArchiveImport(bookCtx, query.CompleteTwitterArchiveImportParams{
+				TweetsCount:     summary.Tweets,
+				FollowersCount:  summary.Followers,
+				FollowingCount:  summary.Following,
+				LikesCount:      summary.Likes,
+				TotalItemsCount: summary.TotalItems,
+				FinishedAt:      sql.NullInt64{Int64: now, Valid: true},
+				UpdatedAt:       now,
+				ID:              imp.ID,
+			}); err != nil {
+				return fmt.Errorf("twitter archive import: complete import: %w", err)
+			}
+			logActivity(ctx, db, "info", "completed", fmt.Sprintf(
+				"filename=%s followers=%d following=%d import_id=%d likes=%d total_items=%d tweets=%d",
+				activity.Quote(imp.SourceFilename), summary.Followers, summary.Following, imp.ID,
+				summary.Likes, summary.TotalItems, summary.Tweets))
 		}
 
-		now = time.Now().Unix()
-		if err := q.CompleteTwitterArchiveImport(ctx, query.CompleteTwitterArchiveImportParams{
-			TweetsCount:     summary.Tweets,
-			FollowersCount:  summary.Followers,
-			FollowingCount:  summary.Following,
-			LikesCount:      summary.Likes,
-			TotalItemsCount: summary.TotalItems,
-			FinishedAt:      sql.NullInt64{Int64: now, Valid: true},
-			UpdatedAt:       now,
-			ID:              imp.ID,
-		}); err != nil {
-			return fmt.Errorf("twitter archive import: complete import: %w", err)
+		// cleanup_source_file!: the uploaded zip is always removed — but only
+		// after the terminal status write above landed. Removing it first
+		// would make a lost terminal write (a crash, or a failed Complete)
+		// unrecoverable: the re-executed job would find the row still running
+		// with the source gone, fail on the missing file, and clobber an
+		// actually finished import back to failed.
+		if imp.SourcePath.Valid && imp.SourcePath.String != "" {
+			removeSourceFile(dataDir, imp.SourcePath.String)
 		}
-		logActivity(ctx, db, "info", "completed", fmt.Sprintf(
-			"filename=%s followers=%d following=%d import_id=%d likes=%d total_items=%d tweets=%d",
-			activity.Quote(imp.SourceFilename), summary.Followers, summary.Following, imp.ID,
-			summary.Likes, summary.TotalItems, summary.Tweets))
+		_ = q.ClearTwitterArchiveImportSource(bookCtx, query.ClearTwitterArchiveImportSourceParams{
+			UpdatedAt: time.Now().Unix(), ID: imp.ID,
+		})
 		return nil
 	})
 }

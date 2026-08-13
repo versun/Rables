@@ -62,8 +62,20 @@ func newSanitizePolicy() *bluemonday.Policy {
 	return p
 }
 
+// maxHTMLParseBytes caps the input to the html.ParseFragment-based
+// post-processing below. x/net/html bounds nesting depth (512) but not the
+// total node count, so a multi-MB document of sibling elements explodes
+// into millions of *html.Node (hundreds of MB of heap) and can OOM a small
+// VPS. Over the cap the DOM pass is skipped: restrictMediaSrc re-scans with
+// the tokenizer-based stripMediaSrcFallback (its media-src rule is a
+// security control, so it may not just return the input unchanged), while
+// AddLazyLoading returns the input unchanged (lazy loading is a rendering
+// nicety, not a security control).
+const maxHTMLParseBytes = 5 << 20
+
 // SanitizeHTML ports Article#sanitize_html: bluemonday with the §4.4
-// whitelist; src of iframe/video/audio/source is restricted to http/https.
+// whitelist; src of iframe is restricted to absolute http/https URLs, and
+// src of video/audio/source to http/https or /files/ root-relative paths.
 func SanitizeHTML(rawHTML string) string {
 	if IsBlank(rawHTML) {
 		return ""
@@ -71,8 +83,8 @@ func SanitizeHTML(rawHTML string) string {
 	return restrictMediaSrc(sanitizePolicy.Sanitize(rawHTML))
 }
 
-// srcHTTPElements are the elements whose src may only be http/https (§4.4).
-var srcHTTPElements = map[string]bool{
+// mediaSrcElements are the elements whose src restrictMediaSrc hardens (§4.4).
+var mediaSrcElements = map[string]bool{
 	"iframe": true,
 	"video":  true,
 	"audio":  true,
@@ -80,26 +92,65 @@ var srcHTTPElements = map[string]bool{
 }
 
 // restrictMediaSrc removes the src attribute from iframe/video/audio/source
-// unless it is an absolute http/https URL.
+// unless it satisfies allowedMediaSrc. This is more than hardening:
+// bluemonday allows relative URLs globally, so the iframe rule (absolute
+// http/https only — a same-origin iframe is a UI redress channel) is
+// enforced nowhere else. Input over maxHTMLParseBytes or refused by
+// html.ParseFragment (e.g. x/net/html's 512-node open-element stack cap)
+// goes through stripMediaSrcFallback, which applies the same rule without
+// building a DOM.
 func restrictMediaSrc(rawHTML string) string {
+	if len(rawHTML) > maxHTMLParseBytes {
+		return stripMediaSrcFallback(rawHTML)
+	}
 	nodes, err := html.ParseFragment(strings.NewReader(rawHTML), bodyContext)
 	if err != nil {
-		return rawHTML
+		return stripMediaSrcFallback(rawHTML)
 	}
 	for _, n := range nodes {
 		walkNodes(n, func(n *html.Node) {
-			if n.Type == html.ElementNode && srcHTTPElements[n.Data] {
-				n.Attr = filterNonHTTPSrc(n.Attr)
+			if n.Type == html.ElementNode && mediaSrcElements[n.Data] {
+				n.Attr = filterNonHTTPSrc(n.Data, n.Attr)
 			}
 		})
 	}
 	return renderFragment(nodes)
 }
 
-func filterNonHTTPSrc(attrs []html.Attribute) []html.Attribute {
+// stripMediaSrcFallback is the fail-closed path of restrictMediaSrc for
+// inputs over maxHTMLParseBytes or that html.ParseFragment refuses. A
+// tokenizer keeps no DOM and has no nesting limit, so oversized or deep
+// input cannot defeat it; the src of every iframe/video/audio/source is
+// filtered by the same allowedMediaSrc rule, and all other bytes pass
+// through verbatim.
+func stripMediaSrcFallback(rawHTML string) string {
+	z := html.NewTokenizer(strings.NewReader(rawHTML))
+	var b strings.Builder
+	b.Grow(len(rawHTML))
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			return b.String()
+		}
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			b.Write(z.Raw())
+			continue
+		}
+		// Copy the raw bytes first: Token may rewrite them in place.
+		raw := append([]byte(nil), z.Raw()...)
+		if tok := z.Token(); mediaSrcElements[tok.Data] {
+			tok.Attr = filterNonHTTPSrc(tok.Data, tok.Attr)
+			b.WriteString(tok.String())
+		} else {
+			b.Write(raw)
+		}
+	}
+}
+
+func filterNonHTTPSrc(elem string, attrs []html.Attribute) []html.Attribute {
 	out := attrs[:0]
 	for _, a := range attrs {
-		if a.Key == "src" && !isHTTPURL(a.Val) {
+		if a.Key == "src" && !allowedMediaSrc(elem, a.Val) {
 			continue
 		}
 		out = append(out, a)
@@ -107,17 +158,37 @@ func filterNonHTTPSrc(attrs []html.Attribute) []html.Attribute {
 	return out
 }
 
+// allowedMediaSrc reports whether src may stay on elem. iframe src must be
+// an absolute http/https URL: a root-relative iframe can embed any
+// same-origin page (e.g. an invisible full-viewport /admin overlay), a UI
+// redress channel with no legitimate in-app use. video/audio/source may
+// additionally use root-relative paths, but only under /files/ — the app's
+// own stored media (twittersync's <video src="/files/...">).
+func allowedMediaSrc(elem, src string) bool {
+	if isHTTPURL(src) {
+		return true
+	}
+	return elem != "iframe" && strings.HasPrefix(src, "/files/")
+}
+
+// isHTTPURL reports whether s is an absolute http(s) URL with a host. A
+// bare "https:/admin" parses as {Scheme: https, Path: /admin} with no
+// error, but browsers treat it as same-origin https://<site>/admin.
 func isHTTPURL(s string) bool {
 	u, err := url.Parse(s)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 // AddLazyLoading ports Sanitization#add_lazy_loading_to_images: sets
 // loading="lazy" on every <img> that has no loading attribute. Applied once
 // when content_html is written (decision log 2026-08-03); rendering does not
-// repeat it.
+// repeat it. Input over maxHTMLParseBytes is returned unchanged: lazy
+// loading is a rendering nicety, not a security control.
 func AddLazyLoading(rawHTML string) string {
 	if IsBlank(rawHTML) {
+		return rawHTML
+	}
+	if len(rawHTML) > maxHTMLParseBytes {
 		return rawHTML
 	}
 	nodes, err := html.ParseFragment(strings.NewReader(rawHTML), bodyContext)

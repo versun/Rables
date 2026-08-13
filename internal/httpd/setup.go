@@ -22,19 +22,30 @@ type setupPageData struct {
 // done it bounces to the admin root.
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
 	if !s.setupIncomplete(r.Context()) {
-		SetFlash(w, templates.Flash{Notice: "Setup has already been completed."})
+		s.SetFlash(w, templates.Flash{Notice: "Setup has already been completed."})
 		http.Redirect(w, r, "/admin/", http.StatusFound)
 		return
 	}
-	s.render(w, http.StatusOK, "auth_setup", setupPageData{Flash: PopFlash(r, w)})
+	s.render(w, http.StatusOK, "auth_setup", setupPageData{Flash: s.PopFlash(r, w)})
 }
 
 // setupCreate handles POST /setup, mirroring SetupController#create: inside
 // one transaction it re-checks incompleteness, creates the admin user and
 // flips settings.setup_completed to 1.
 func (s *Server) setupCreate(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	// Bail out before doing any work — notably the bcrypt hash below — once
+	// setup is done, like setupForm does: the endpoint is unauthenticated and
+	// unrated, so without this guard anyone could force a password hash per
+	// request. The in-transaction re-check still runs, so a stale cached
+	// "incomplete" verdict cannot create a second admin.
+	if !s.setupIncomplete(r.Context()) {
+		s.SetFlash(w, templates.Flash{Notice: "Setup has already been completed."})
+		http.Redirect(w, r, "/admin/", http.StatusFound)
+		return
+	}
+	// The endpoint is unauthenticated and unrated, so cap the form body like
+	// the other text-only forms (comments, subscriptions).
+	if !parseCappedForm(w, r) {
 		return
 	}
 	userName := normalizeUserName(r.FormValue("user_name"))
@@ -103,7 +114,7 @@ func (s *Server) setupCreate(w http.ResponseWriter, r *http.Request) {
 	settings, settingsErr := q.GetSettings(ctx)
 	completed := users > 0 && settingsErr == nil && settings.SetupCompleted != 0
 	if completed {
-		SetFlash(w, templates.Flash{Notice: "Setup has already been completed."})
+		s.SetFlash(w, templates.Flash{Notice: "Setup has already been completed."})
 		http.Redirect(w, r, "/admin/", http.StatusFound)
 		return
 	}
@@ -153,6 +164,10 @@ func (s *Server) setupCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.InvalidateSetupCache()
-	SetFlash(w, templates.Flash{Notice: "Setup completed successfully! Please log in with your admin credentials."})
+	// CompleteSetup bypassed settings.Cache.Update, so drop any cached row:
+	// one populated before setup (e.g. via the fail-open setup check) would
+	// otherwise keep serving the blank pre-setup values for its full TTL.
+	s.Settings().Invalidate()
+	s.SetFlash(w, templates.Flash{Notice: "Setup completed successfully! Please log in with your admin credentials."})
 	http.Redirect(w, r, "/session/new", http.StatusFound)
 }

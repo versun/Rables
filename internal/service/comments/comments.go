@@ -307,8 +307,14 @@ func EnqueueReplyNotification(ctx context.Context, q *query.Queries, enq *jobs.E
 		return false, nil
 	}
 	parent, err := q.GetCommentByID(ctx, c.ParentID.Int64)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil // parent gone: nothing to notify
+	}
+	if err != nil {
+		// A transient failure is not swallowed here: the error goes back to
+		// the caller, which logs it. The notification is still lost (no
+		// retry), but no longer silently.
+		return false, fmt.Errorf("get parent comment: %w", err)
 	}
 	if parent.Platform.Valid || strings.TrimSpace(parent.AuthorEmail.String) == "" {
 		return false, nil
@@ -384,9 +390,13 @@ func (t Threaded) PublishedUnix() int64 {
 	return t.Comment.CreatedAt
 }
 
-// Initial is the avatar fallback letter (author_name.to_s.first.upcase).
+// Initial is the avatar fallback letter (author_name.to_s.first.upcase);
+// a blank name yields no letter rather than U+FFFD.
 func (t Threaded) Initial() string {
-	r, _ := utf8.DecodeRuneInString(t.Comment.AuthorName)
+	r, size := utf8.DecodeRuneInString(t.Comment.AuthorName)
+	if size == 0 {
+		return ""
+	}
 	return string(unicode.ToUpper(r))
 }
 

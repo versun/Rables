@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -119,7 +120,8 @@ func seedSession(t *testing.T, s *Server) *http.Cookie {
 	if _, err := s.DB.Exec(`INSERT INTO users (user_name, password_digest, created_at, updated_at) VALUES ('admin', 'x', 1, 1)`); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
-	if _, err := s.DB.Exec(`INSERT INTO sessions (token, user_id, created_at, updated_at) VALUES ('tok-public-test', 1, 1, 1)`); err != nil {
+	now := time.Now().Unix()
+	if _, err := s.DB.Exec(`INSERT INTO sessions (token, user_id, created_at, updated_at) VALUES ('tok-public-test', 1, ?, ?)`, now, now); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 	return &http.Cookie{Name: sessionCookieName, Value: "tok-public-test"}
@@ -306,7 +308,9 @@ func TestPublicIndexPagination(t *testing.T) {
 	})
 
 	t.Run("invalid pages 404", func(t *testing.T) {
-		for _, target := range []string{"/?page=abc", "/?page=0", "/?page=-2"} {
+		// The huge value overflows int64 parsing, so rubyToI saturates past
+		// maxPageNumber and the range check must 404 it, not clamp it.
+		for _, target := range []string{"/?page=abc", "/?page=0", "/?page=-2", "/?page=99999999999999999999"} {
 			if rec := get(t, h, target); rec.Code != http.StatusNotFound {
 				t.Errorf("GET %s: status = %d, want 404", target, rec.Code)
 			}
@@ -333,6 +337,153 @@ func TestPublicIndexPagination(t *testing.T) {
 
 func pad2(n int64) string { return fmt.Sprintf("%02d", n) }
 
+// TestPublicIndexCacheControl: the index is publicly cacheable, but a
+// response that renders a one-time flash must degrade to private, no-cache
+// so shared caches never store per-user content.
+func TestPublicIndexCacheControl(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	seedArticle(t, s, seedArticleOpts{slug: "post-01", title: "Post 01", status: int64(domain.StatusPublish), createdAt: 1})
+
+	rec := get(t, h, "/")
+	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=300, s-maxage=900" {
+		t.Errorf("Cache-Control = %q, want public, max-age=300, s-maxage=900", cc)
+	}
+
+	cookie := signedFlashCookie(t, s, templates.Flash{Notice: "Your comment will be reviewed before being published."})
+	rec = get(t, h, "/", cookie)
+	if cc := rec.Header().Get("Cache-Control"); cc != "private, no-cache" {
+		t.Errorf("Cache-Control with flash = %q, want private, no-cache", cc)
+	}
+	if !strings.Contains(rec.Body.String(), "flash-notice") {
+		t.Error("flash notice not rendered on the index page")
+	}
+}
+
+// TestPublicIndexCacheControlMalformedFlash: a flash cookie that fails to
+// decode pops a zero Flash, yet PopFlash still emits the clearing Set-Cookie
+// — so the response must degrade to private, no-cache on cookie presence
+// alone, or a shared cache could store a response carrying Set-Cookie.
+func TestPublicIndexCacheControlMalformedFlash(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	seedArticle(t, s, seedArticleOpts{slug: "post-01", title: "Post 01", status: int64(domain.StatusPublish), createdAt: 1})
+
+	values := map[string]string{
+		"invalid base64": "!!!not-base64!!!",
+		"invalid json":   base64.RawURLEncoding.EncodeToString([]byte("{not json")),
+	}
+	for name, value := range values {
+		t.Run(name, func(t *testing.T) {
+			rec := get(t, h, "/", &http.Cookie{Name: flashCookieName, Value: value})
+			if cc := rec.Header().Get("Cache-Control"); cc != "private, no-cache" {
+				t.Errorf("Cache-Control = %q, want private, no-cache", cc)
+			}
+			if cleared := findCookie(rec, flashCookieName); cleared == nil || cleared.Value != "" {
+				t.Errorf("flash cookie not cleared: %+v", cleared)
+			}
+		})
+	}
+}
+
+// TestPublicShowCacheControlFlash: like the index, an article/page show
+// response that renders a one-time flash must degrade to private, no-cache
+// instead of its long max-age — otherwise the cached copy keeps re-showing
+// a stale flash after the flash cookie is gone.
+func TestPublicShowCacheControlFlash(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	seedArticle(t, s, seedArticleOpts{slug: "post-01", title: "Post 01", status: int64(domain.StatusPublish), createdAt: 1})
+	seedPage(t, s, seedPageOpts{slug: "about", title: "About", status: int64(domain.StatusPublish)})
+
+	flashCookie := signedFlashCookie(t, s, templates.Flash{Notice: "Your comment will be reviewed before being published."})
+
+	for _, tc := range []struct{ path, wantCacheable string }{
+		{"/post-01", "private, max-age=3600"},
+		{"/pages/about", "private, max-age=86400"},
+	} {
+		if cc := get(t, h, tc.path).Header().Get("Cache-Control"); cc != tc.wantCacheable {
+			t.Errorf("GET %s Cache-Control = %q, want %q", tc.path, cc, tc.wantCacheable)
+		}
+		rec := get(t, h, tc.path, flashCookie)
+		if cc := rec.Header().Get("Cache-Control"); cc != "private, no-cache" {
+			t.Errorf("GET %s Cache-Control with flash = %q, want private, no-cache", tc.path, cc)
+		}
+		if !strings.Contains(rec.Body.String(), "flash-notice") {
+			t.Errorf("GET %s: flash notice not rendered", tc.path)
+		}
+	}
+}
+
+// TestPublicShowPercentEncodedSlug: when the client's escaping differs from
+// Go's canonical form (lowercase hex here), net/url keeps the original bytes
+// in URL.RawPath and chi routes on it without decoding — slugParam must
+// unescape the parameter in that case, or the DB lookup misses a slug that
+// exists (Rails-migrated sites carry CJK slugs).
+func TestPublicShowPercentEncodedSlug(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	seedArticle(t, s, seedArticleOpts{slug: "2024年", title: "Year", status: int64(domain.StatusPublish), createdAt: 1})
+
+	rec := get(t, h, "/2024%e5%b9%b4")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Year") {
+		t.Error("article title not rendered")
+	}
+}
+
+// TestPublicShowErrorNotCached: Cache-Control is set only after every
+// fallible query, because http.Error does not clear headers already set — a
+// 500 carrying a cacheable header would be stored by a CDN.
+func TestPublicShowErrorNotCached(t *testing.T) {
+	t.Run("article", func(t *testing.T) {
+		s, h := newPublicTestServer(t, "")
+		seedArticle(t, s, seedArticleOpts{slug: "post-01", title: "Post 01", status: int64(domain.StatusPublish), createdAt: 1})
+		if _, err := s.DB.Exec(`DROP TABLE article_tags`); err != nil {
+			t.Fatalf("drop table: %v", err)
+		}
+		rec := get(t, h, "/post-01")
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want 500", rec.Code)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "" {
+			t.Errorf("Cache-Control = %q, want empty on a 500", cc)
+		}
+	})
+	t.Run("page", func(t *testing.T) {
+		s, h := newPublicTestServer(t, "")
+		seedPage(t, s, seedPageOpts{slug: "about", title: "About", status: int64(domain.StatusPublish), comment: 1})
+		if _, err := s.DB.Exec(`DROP TABLE comments`); err != nil {
+			t.Fatalf("drop table: %v", err)
+		}
+		rec := get(t, h, "/pages/about")
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want 500", rec.Code)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "" {
+			t.Errorf("Cache-Control = %q, want empty on a 500", cc)
+		}
+	})
+}
+
+// TestPublicTagsCacheControlFlash: like the article index, the tag pages are
+// publicly cacheable, but a response that renders a one-time flash must
+// degrade to private, no-cache so shared caches never store per-user content.
+func TestPublicTagsCacheControlFlash(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	seedTag(t, s, "Go", "go")
+
+	flashCookie := signedFlashCookie(t, s, templates.Flash{Notice: "Your comment will be reviewed before being published."})
+
+	for _, path := range []string{"/tags", "/tags/go"} {
+		if cc := get(t, h, path).Header().Get("Cache-Control"); cc != "public, max-age=300, s-maxage=900" {
+			t.Errorf("GET %s Cache-Control = %q, want public, max-age=300, s-maxage=900", path, cc)
+		}
+		rec := get(t, h, path, flashCookie)
+		if cc := rec.Header().Get("Cache-Control"); cc != "private, no-cache" {
+			t.Errorf("GET %s Cache-Control with flash = %q, want private, no-cache", path, cc)
+		}
+	}
+}
+
 // TestPublicTagPagination covers 20-per-page and strict Integer() parsing.
 func TestPublicTagPagination(t *testing.T) {
 	s, h := newPublicTestServer(t, "")
@@ -355,7 +506,9 @@ func TestPublicTagPagination(t *testing.T) {
 	})
 
 	t.Run("strict page parsing 404s", func(t *testing.T) {
-		for _, target := range []string{"/tags/go?page=abc", "/tags/go?page=", "/tags/go?page=2.5", "/tags/go?page=0"} {
+		// The huge value overflows int64 parsing, so rubyInteger saturates past
+		// maxPageNumber and the range check must 404 it, not clamp it.
+		for _, target := range []string{"/tags/go?page=abc", "/tags/go?page=", "/tags/go?page=2.5", "/tags/go?page=0", "/tags/go?page=99999999999999999999"} {
 			if rec := get(t, h, target); rec.Code != http.StatusNotFound {
 				t.Errorf("GET %s: status = %d, want 404", target, rec.Code)
 			}
@@ -427,7 +580,39 @@ func TestPublicSearch(t *testing.T) {
 	})
 }
 
-// TestPublicCommentsSection covers the comment block on show pages.
+// TestPublicSearchTruncatesLongQuery covers the ?q= length cap: the term is
+// cut to publicSearchMaxRunes runes (without splitting a multi-byte
+// character) before the LIKE pattern is built, so an overlong term behaves
+// exactly like its truncation.
+func TestPublicSearchTruncatesLongQuery(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	seedArticle(t, s, seedArticleOpts{slug: "long", content: "<p>" + strings.Repeat("a", 300) + "</p>", status: 1})
+
+	t.Run("overlong q matches its truncation", func(t *testing.T) {
+		// The full term cannot match (the content has no trailing "z"s), but
+		// its 200-rune truncation does.
+		long := strings.Repeat("a", 300) + "zzz"
+		rec := get(t, h, "/?q="+url.QueryEscape(long))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `href="/long"`) {
+			t.Errorf("overlong search did not behave like its truncation")
+		}
+	})
+
+	t.Run("multi-byte character at the cap stays whole", func(t *testing.T) {
+		mixed := strings.Repeat("中", publicSearchMaxRunes) + "文extra"
+		want := get(t, h, "/?q="+url.QueryEscape(strings.Repeat("中", publicSearchMaxRunes)))
+		got := get(t, h, "/?q="+url.QueryEscape(mixed))
+		if got.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", got.Code)
+		}
+		if got.Body.String() != want.Body.String() {
+			t.Errorf("overlong multi-byte search differs from its truncation")
+		}
+	})
+}
 func TestPublicCommentsSection(t *testing.T) {
 	s, h := newPublicTestServer(t, "")
 	artID := seedArticle(t, s, seedArticleOpts{slug: "with-comments", title: "WC", status: 1, comment: 1})
@@ -577,11 +762,75 @@ func TestPublicChrome(t *testing.T) {
 
 	t.Run("index flash renders after comment redirect", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		SetFlash(w, templates.Flash{Notice: "Your comment will be reviewed before being published."})
+		s.SetFlash(w, templates.Flash{Notice: "Your comment will be reviewed before being published."})
 		flash := findCookie(w, flashCookieName)
 		body := get(t, h, "/", flash).Body.String()
 		if !strings.Contains(body, "flash-notice") {
 			t.Error("flash notice not rendered on the index page")
 		}
 	})
+}
+
+// TestPublicChromeBadSocialLinks covers pre-existing malformed social_links
+// rows (stored before the admin form validated entry shapes): the bad entry
+// is skipped like Rails instead of failing every public page with a 500.
+func TestPublicChromeBadSocialLinks(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	if _, err := s.Settings().Get(t.Context()); err != nil {
+		t.Fatalf("ensure settings: %v", err)
+	}
+	if _, err := s.DB.Exec(`UPDATE settings SET social_links = '{"github":"https://github.com/versun","rss":{"url":"/feed.rss","icon":"fa-solid fa-square-rss"}}' WHERE id = 1`); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	s.Settings().Invalidate()
+
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "https://github.com/versun") {
+		t.Error("malformed entry rendered; want it skipped")
+	}
+	if !strings.Contains(body, `href="/feed.rss"`) {
+		t.Error("well-formed entry not rendered")
+	}
+}
+
+// TestPublicChromeUndecodableSocialLinks covers a social_links row whose top
+// level is not valid JSON (copied as-is from an old database by the Rails
+// migration): it degrades to no social links instead of a 500 on every
+// public page.
+func TestPublicChromeUndecodableSocialLinks(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	if _, err := s.Settings().Get(t.Context()); err != nil {
+		t.Fatalf("ensure settings: %v", err)
+	}
+	if _, err := s.DB.Exec(`UPDATE settings SET social_links = '{nope' WHERE id = 1`); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	s.Settings().Invalidate()
+
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+// TestBuildSourceReferenceUnsafeURL: a source_url persisted from an
+// attacker-controlled import (railsmigrate/transfer) must not become an href
+// unless it is an absolute http(s) URL with a host.
+func TestBuildSourceReferenceUnsafeURL(t *testing.T) {
+	out := string(buildSourceReference("alice", "quoted", "javascript:alert(1)"))
+	if strings.Contains(out, "<a href=") {
+		t.Errorf("javascript: source_url rendered a link: %s", out)
+	}
+	if !strings.Contains(out, "alice") {
+		t.Error("author dropped together with the unsafe link")
+	}
+
+	out = string(buildSourceReference("alice", "quoted", "https://example.com/post"))
+	if !strings.Contains(out, `href="https://example.com/post"`) {
+		t.Errorf("https source_url not linked: %s", out)
+	}
 }

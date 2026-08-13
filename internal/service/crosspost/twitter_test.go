@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -145,9 +146,18 @@ type fakeTwitter struct {
 	// tweetScripts are consumed one per POST /2/tweets; empty falls back to a
 	// 201 with a fresh id.
 	tweetScripts []tweetScript
+	// onTweet, when set, runs on each POST /2/tweets after the body is
+	// recorded (used to cancel the ctx mid-request).
+	onTweet func(r *http.Request)
 	// finalizeState / statusState drive processing_info.
 	finalizeState string
 	statusState   string
+	// finalizeEmptyBody / statusEmptyBody make the endpoint answer 2xx with an
+	// empty body (doJSON → nil media).
+	finalizeEmptyBody bool
+	statusEmptyBody   bool
+	// statusCheckAfter is the check_after_secs of the STATUS response.
+	statusCheckAfter float64
 
 	mediaSeq int
 }
@@ -183,6 +193,9 @@ func (f *fakeTwitter) handler() http.Handler {
 		raw, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(raw, &body)
 		f.tweetBodies = append(f.tweetBodies, body)
+		if f.onTweet != nil {
+			f.onTweet(r)
+		}
 		if len(f.tweetScripts) > 0 {
 			script := f.tweetScripts[0]
 			f.tweetScripts = f.tweetScripts[1:]
@@ -251,6 +264,10 @@ func (f *fakeTwitter) handler() http.Handler {
 		case "finalize":
 			f.finalizes = append(f.finalizes, mediaID)
 			f.log("FINALIZE %s", mediaID)
+			if f.finalizeEmptyBody {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			if f.finalizeState != "" {
 				f.writeJSON(w, http.StatusOK, fmt.Sprintf(
 					`{"data":{"id":%q,"processing_info":{"state":%q,"check_after_secs":0}}}`, mediaID, f.finalizeState))
@@ -266,10 +283,14 @@ func (f *fakeTwitter) handler() http.Handler {
 		defer f.mu.Unlock()
 		f.statusPolls++
 		f.log("STATUS %s", r.URL.Query().Get("media_id"))
+		if f.statusEmptyBody {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		state := f.statusState
 		f.writeJSON(w, http.StatusOK, fmt.Sprintf(
-			`{"data":{"id":%q,"processing_info":{"state":%q,"check_after_secs":0}}}`,
-			r.URL.Query().Get("media_id"), state))
+			`{"data":{"id":%q,"processing_info":{"state":%q,"check_after_secs":%v}}}`,
+			r.URL.Query().Get("media_id"), state, f.statusCheckAfter))
 	})
 	return mux
 }
@@ -610,6 +631,43 @@ func TestTwitterMediaErrorFallsBackToText(t *testing.T) {
 	}
 }
 
+// TestTwitterFallbackContextCanceled: a ctx canceled (SIGTERM) while the
+// text-only fallback is in flight must surface as context.Canceled — not as a
+// permanent fallback failure — so the job is retried instead of dropping the
+// crosspost.
+func TestTwitterFallbackContextCanceled(t *testing.T) {
+	f, srv := newFakeTwitter(t)
+	f.tweetScripts = []tweetScript{
+		{http.StatusOK, `{"errors":[{"message":"Invalid media ids"}]}`},
+	}
+	p := newTwitterPlatform(srv, newFakeTokenCache())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	f.onTweet = func(r *http.Request) {
+		if len(f.tweetBodies) == 2 { // the shutdown lands during the fallback
+			cancel()
+			// Wait until the client aborts the in-flight request over its
+			// canceled ctx (server-side r.Context() closes then). Writing the
+			// response without waiting is a race the client can win under
+			// load, which would make the fallback spuriously succeed.
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
+
+	in := PostInput{Text: "x", Images: []Image{{Filename: "a.png", ContentType: "image/png", Data: []byte("d")}}}
+	_, err := p.Post(ctx, twitterCfg(), in)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled (job must be retried)", err)
+	}
+	if IsTransient(err) {
+		t.Errorf("error = %v, must not be transient", err)
+	}
+}
+
 // TestTwitterNonMediaErrorIsPermanent: a 2xx failure without "media" in the
 // message is not retried.
 func TestTwitterNonMediaErrorIsPermanent(t *testing.T) {
@@ -660,6 +718,7 @@ func TestTwitterTweetErrorClassification(t *testing.T) {
 		transient bool
 	}{
 		{"429 is transient", http.StatusTooManyRequests, `{"errors":[{"message":"Too Many Requests"}]}`, true},
+		{"429 with non-object errors entry is transient", http.StatusTooManyRequests, `{"errors":["rate limited"]}`, true},
 		{"500 is transient", http.StatusInternalServerError, `{"errors":[{"message":"Internal error"}]}`, true},
 		{"503 is transient", http.StatusServiceUnavailable, `{"title":"Service Unavailable","detail":"down"}`, true},
 		{"400 is permanent", http.StatusBadRequest, `{"errors":[{"message":"bad request"}]}`, false},
@@ -719,6 +778,157 @@ func TestTwitterAwaitProcessing(t *testing.T) {
 	}
 }
 
+// TestTwitterAwaitProcessingDefaultWait: a STATUS response without a usable
+// check_after_secs (absent or <= 0) must still back off, never hot-loop.
+func TestTwitterAwaitProcessingDefaultWait(t *testing.T) {
+	f, srv := newFakeTwitter(t)
+	f.finalizeState = "pending"
+	f.statusState = "pending" // the fake always sends check_after_secs: 0
+	p := newTwitterPlatform(srv, newFakeTokenCache())
+	var sleeps []time.Duration
+	p.sleep = func(_ context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		f.mu.Lock()
+		f.statusState = "succeeded" // finish after the first backoff
+		f.mu.Unlock()
+		return nil
+	}
+
+	in := PostInput{Text: "x", Images: []Image{{Filename: "a.png", ContentType: "image/png", Data: []byte("d")}}}
+	if _, err := p.Post(t.Context(), twitterCfg(), in); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if len(sleeps) != 1 || sleeps[0] != time.Second {
+		t.Errorf("sleeps = %v, want one 1s default wait", sleeps)
+	}
+}
+
+// TestTwitterAwaitProcessingClampsCheckAfterSecs: a server hint above the
+// clamp is capped at twitterMaxCheckAfterSecs, never a multi-hour sleep.
+func TestTwitterAwaitProcessingClampsCheckAfterSecs(t *testing.T) {
+	f, srv := newFakeTwitter(t)
+	f.finalizeState = "pending"
+	f.statusState = "pending"
+	f.statusCheckAfter = 3600
+	p := newTwitterPlatform(srv, newFakeTokenCache())
+	var sleeps []time.Duration
+	p.sleep = func(_ context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		f.mu.Lock()
+		f.statusState = "succeeded" // finish after the first backoff
+		f.mu.Unlock()
+		return nil
+	}
+
+	in := PostInput{Text: "x", Images: []Image{{Filename: "a.png", ContentType: "image/png", Data: []byte("d")}}}
+	if _, err := p.Post(t.Context(), twitterCfg(), in); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	want := time.Duration(twitterMaxCheckAfterSecs * float64(time.Second))
+	if len(sleeps) != 1 || sleeps[0] != want {
+		t.Errorf("sleeps = %v, want one %s clamped wait", sleeps, want)
+	}
+}
+
+// TestTwitterAwaitProcessingClampsCheckAfterSecsLowerBound: a tiny positive
+// hint is raised to the 1s floor, never a millisecond loop burning the rate
+// limit.
+func TestTwitterAwaitProcessingClampsCheckAfterSecsLowerBound(t *testing.T) {
+	f, srv := newFakeTwitter(t)
+	f.finalizeState = "pending"
+	f.statusState = "pending"
+	f.statusCheckAfter = 0.001
+	p := newTwitterPlatform(srv, newFakeTokenCache())
+	var sleeps []time.Duration
+	p.sleep = func(_ context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		f.mu.Lock()
+		f.statusState = "succeeded" // finish after the first backoff
+		f.mu.Unlock()
+		return nil
+	}
+
+	in := PostInput{Text: "x", Images: []Image{{Filename: "a.png", ContentType: "image/png", Data: []byte("d")}}}
+	if _, err := p.Post(t.Context(), twitterCfg(), in); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if len(sleeps) != 1 || sleeps[0] != time.Second {
+		t.Errorf("sleeps = %v, want one 1s floor wait", sleeps)
+	}
+}
+
+// TestTwitterAwaitProcessingTimeout: media stuck in pending gives up after
+// twitterProcessingMaxWait with a permanent error, so the image is skipped
+// and the job worker is not blocked forever.
+func TestTwitterAwaitProcessingTimeout(t *testing.T) {
+	f, srv := newFakeTwitter(t)
+	f.finalizeState = "pending"
+	f.statusState = "pending" // never finishes; the fake sends check_after_secs: 0
+	p := newTwitterPlatform(srv, newFakeTokenCache())
+	// Fake clock advanced by the injected sleep: the loop must give up at the
+	// twitterProcessingMaxWait deadline.
+	var now time.Time
+	p.now = func() time.Time { return now }
+	p.sleep = func(_ context.Context, d time.Duration) error {
+		now = now.Add(d)
+		return nil
+	}
+
+	in := PostInput{Text: "x", Images: []Image{{Filename: "a.png", ContentType: "image/png", Data: []byte("d")}}}
+	postURL, err := p.Post(t.Context(), twitterCfg(), in)
+	if err != nil {
+		t.Fatalf("Post: %v (processing timeout is permanent → image skipped)", err)
+	}
+	if postURL == "" {
+		t.Fatal("want a posted url")
+	}
+	if want := int(twitterProcessingMaxWait / time.Second); f.statusPolls != want {
+		t.Errorf("status polls = %d, want %d (1s default waits up to %s)", f.statusPolls, want, twitterProcessingMaxWait)
+	}
+	if _, ok := f.tweetBodies[0]["media"]; ok {
+		t.Errorf("timed-out image must be dropped: %v", f.tweetBodies[0]["media"])
+	}
+}
+
+// TestTwitterAwaitProcessingTimeoutCountsRequestTime: when each STATUS
+// request itself burns wall clock (a slow server, up to the client timeout
+// per round), the total elapsed time — sleeps plus request time — must still
+// stay bounded by twitterProcessingMaxWait (plus the one in-flight request).
+func TestTwitterAwaitProcessingTimeoutCountsRequestTime(t *testing.T) {
+	f, srv := newFakeTwitter(t)
+	f.finalizeState = "pending"
+	f.statusState = "pending"
+	p := newTwitterPlatform(srv, newFakeTokenCache())
+	// The fake clock jumps 14s per STATUS poll, as if the server took that
+	// long to answer; sleeps are instant.
+	const statusCost = 14 * time.Second
+	start := time.Now()
+	p.now = func() time.Time {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return start.Add(time.Duration(f.statusPolls) * statusCost)
+	}
+
+	in := PostInput{Text: "x", Images: []Image{{Filename: "a.png", ContentType: "image/png", Data: []byte("d")}}}
+	postURL, err := p.Post(t.Context(), twitterCfg(), in)
+	if err != nil {
+		t.Fatalf("Post: %v (processing timeout is permanent → image skipped)", err)
+	}
+	if postURL == "" {
+		t.Fatal("want a posted url")
+	}
+	elapsed := time.Duration(f.statusPolls) * statusCost
+	if elapsed > twitterProcessingMaxWait+statusCost {
+		t.Errorf("wall clock = %s, want ≤ %s + one in-flight %s request", elapsed, twitterProcessingMaxWait, statusCost)
+	}
+	if want := int(twitterProcessingMaxWait/statusCost) + 1; f.statusPolls != want {
+		t.Errorf("status polls = %d, want %d (request time must count toward %s)", f.statusPolls, want, twitterProcessingMaxWait)
+	}
+	if _, ok := f.tweetBodies[0]["media"]; ok {
+		t.Errorf("timed-out image must be dropped: %v", f.tweetBodies[0]["media"])
+	}
+}
+
 func TestTwitterProcessingFailedSkipsImage(t *testing.T) {
 	f, srv := newFakeTwitter(t)
 	f.finalizeState = "pending"
@@ -735,6 +945,46 @@ func TestTwitterProcessingFailedSkipsImage(t *testing.T) {
 	}
 	if _, ok := f.tweetBodies[0]["media"]; ok {
 		t.Errorf("processing-failed image must be dropped: %v", f.tweetBodies[0]["media"])
+	}
+}
+
+// TestTwitterUploadEmptyFinalizeBodyFallsBackToInitID: a 2xx FINALIZE with an
+// empty body (doJSON → nil media) must not drop the uploaded image — the INIT
+// media id is still valid.
+func TestTwitterUploadEmptyFinalizeBodyFallsBackToInitID(t *testing.T) {
+	f, srv := newFakeTwitter(t)
+	f.finalizeEmptyBody = true
+	p := newTwitterPlatform(srv, newFakeTokenCache())
+
+	in := PostInput{Text: "x", Images: []Image{{Filename: "a.png", ContentType: "image/png", Data: []byte("d")}}}
+	if _, err := p.Post(t.Context(), twitterCfg(), in); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	ids := f.tweetBodies[0]["media"].(map[string]any)["media_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "m1" {
+		t.Errorf("media_ids = %v, want [m1] (the INIT id)", ids)
+	}
+}
+
+// TestTwitterUploadEmptyStatusBodyFallsBackToInitID: a pending FINALIZE whose
+// STATUS poll answers 2xx with an empty body must likewise fall back to the
+// INIT media id instead of dropping the image.
+func TestTwitterUploadEmptyStatusBodyFallsBackToInitID(t *testing.T) {
+	f, srv := newFakeTwitter(t)
+	f.finalizeState = "pending"
+	f.statusEmptyBody = true
+	p := newTwitterPlatform(srv, newFakeTokenCache())
+
+	in := PostInput{Text: "x", Images: []Image{{Filename: "a.png", ContentType: "image/png", Data: []byte("d")}}}
+	if _, err := p.Post(t.Context(), twitterCfg(), in); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if f.statusPolls != 1 {
+		t.Errorf("status polls = %d, want 1", f.statusPolls)
+	}
+	ids := f.tweetBodies[0]["media"].(map[string]any)["media_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "m1" {
+		t.Errorf("media_ids = %v, want [m1] (the INIT id)", ids)
 	}
 }
 
@@ -810,5 +1060,74 @@ func TestTwitterRegistered(t *testing.T) {
 	}
 	if Get("twitter").Name() != "twitter" {
 		t.Errorf("name = %q", Get("twitter").Name())
+	}
+}
+
+// TestXErrorMessageNonObjectEntries: errors entries that are not JSON
+// objects must not panic — the HTTP status stands in as the fallback.
+func TestXErrorMessageNonObjectEntries(t *testing.T) {
+	resp := &http.Response{Status: "429 Too Many Requests"}
+	for _, body := range []string{`{"errors":["rate limited"]}`, `{"errors":[null]}`} {
+		if got := xErrorMessage(resp, []byte(body)); got != resp.Status {
+			t.Errorf("xErrorMessage(%s) = %q, want %q", body, got, resp.Status)
+		}
+	}
+}
+
+// TestExtractTweetErrorMessageNonObjectEntry: a non-object first errors
+// entry must not panic and falls back to "Unknown error".
+func TestExtractTweetErrorMessageNonObjectEntry(t *testing.T) {
+	for _, resp := range []map[string]any{
+		{"errors": []any{"rate limited"}},
+		{"errors": []any{nil}},
+	} {
+		if got := extractTweetErrorMessage(resp); got != "Unknown error" {
+			t.Errorf("extractTweetErrorMessage(%v) = %q, want %q", resp, got, "Unknown error")
+		}
+	}
+}
+
+// TestXDataID: the id is taken verbatim from a JSON string or, when the API
+// returns a JSON number, from the exact token doJSON's UseNumber preserved —
+// a float64 would round 64-bit snowflake ids (>2^53).
+func TestXDataID(t *testing.T) {
+	const snowflake = "1956375028776861879" // > 2^53, not exactly representable as float64
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{"string id", map[string]any{"data": map[string]any{"id": snowflake}}, snowflake},
+		{"number id", map[string]any{"data": map[string]any{"id": json.Number(snowflake)}}, snowflake},
+		{"no data", map[string]any{}, ""},
+		{"data not object", map[string]any{"data": "x"}, ""},
+		{"id missing", map[string]any{"data": map[string]any{}}, ""},
+		{"id wrong type", map[string]any{"data": map[string]any{"id": true}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := xDataID(tc.body); got != tc.want {
+				t.Errorf("xDataID(%v) = %q, want %q", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTwitterPostNumericTweetID: a tweet id returned as a JSON number (the
+// defensive branch for an API change) must keep every digit — a float64
+// decode rounds it (%.0f prints 1956375028776861952) and the recorded tweet
+// URL then points at the wrong status.
+func TestTwitterPostNumericTweetID(t *testing.T) {
+	f, srv := newFakeTwitter(t)
+	p := newTwitterPlatform(srv, newFakeTokenCache())
+	f.tweetScripts = []tweetScript{
+		{code: http.StatusCreated, body: `{"data":{"id":1956375028776861879,"text":"ok"}}`},
+	}
+
+	postURL, err := p.Post(t.Context(), twitterCfg(), PostInput{Text: "Hello X"})
+	if err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if want := "https://x.com/tester/status/1956375028776861879"; postURL != want {
+		t.Errorf("post url = %q, want %q", postURL, want)
 	}
 }

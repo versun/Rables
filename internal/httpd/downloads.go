@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -24,16 +25,33 @@ func RegisterDownloadsRoutes(r chi.Router, s *Server) {
 }
 
 func (s *Server) adminDownloadShow(w http.ResponseWriter, r *http.Request) {
-	// chi hands over the raw (still escaped) segment, so decode first: an
-	// encoded slash (%2f) must be caught by the basename check below.
-	name, err := url.PathUnescape(chi.URLParam(r, "filename"))
-	if err != nil {
-		http.Error(w, "invalid filename", http.StatusBadRequest)
-		return
+	// chi routes on URL.RawPath when it is set (client encoding differs
+	// from Go's canonical escaping) and never decodes params in that case,
+	// so unescape the raw value; when RawPath is empty chi already used the
+	// decoded URL.Path and a second decode would corrupt a literal "%"
+	// (same pattern as slugParam). Decode before the basename check so an
+	// encoded slash (%2f) is still caught there.
+	name := chi.URLParam(r, "filename")
+	if r.URL.RawPath != "" {
+		decoded, err := url.PathUnescape(name)
+		if err != nil {
+			http.Error(w, "invalid filename", http.StatusBadRequest)
+			return
+		}
+		name = decoded
 	}
 	if name != filepath.Base(name) || name == "" || strings.HasPrefix(name, ".") {
 		http.Error(w, "invalid filename", http.StatusBadRequest)
 		return
+	}
+
+	// Export zips can reach hundreds of MB, and the server-wide 60s
+	// WriteTimeout (cmd/server/main.go) is an absolute per-request deadline
+	// that would cut a slow client off mid-download; clear the write deadline
+	// for this response. The route is admin-only, so the slow-client surface
+	// stays limited to authenticated sessions.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		s.Log.Warn("clear download write deadline", "error", err)
 	}
 
 	for _, dir := range []string{

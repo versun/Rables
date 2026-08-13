@@ -90,7 +90,6 @@ func (s *Server) publicTwitterArchiveShow(w http.ResponseWriter, r *http.Request
 	}
 
 	data := publicTwitterArchiveData{
-		Flash:     PopFlash(r, w),
 		Chrome:    chrome,
 		ActiveTab: tab,
 		IsLikeTab: tab == "like",
@@ -156,6 +155,18 @@ func (s *Server) publicTwitterArchiveShow(w http.ResponseWriter, r *http.Request
 		}
 	}
 	data.Page = buildPagination(page, total, twitterArchivePerPage, pageURLFunc(r))
+	// A present flash cookie means the page renders a one-time flash, so the
+	// response must not be cached (same check as publicArticleIndex). Set only
+	// after every fallible query, or http.Error would send a cached 500.
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	cacheControl := "public, max-age=300, s-maxage=900"
+	if flashCookieErr == nil {
+		cacheControl = "private, no-cache"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
+	// PopFlash runs only after every fallible query: its clearing Set-Cookie
+	// would otherwise go out with a 500 and destroy the unseen flash.
+	data.Flash = s.PopFlash(r, w)
 	s.render(w, http.StatusOK, "public_twitter_archive", data)
 }
 

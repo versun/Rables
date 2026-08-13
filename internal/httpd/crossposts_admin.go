@@ -74,7 +74,7 @@ func (s *Server) crosspostsIndex(w http.ResponseWriter, r *http.Request) {
 		active = "mastodon"
 	}
 	s.render(w, http.StatusOK, "admin_crossposts", crosspostsPageData{
-		Flash:          PopFlash(r, w),
+		Flash:          s.PopFlash(r, w),
 		ActivePlatform: active,
 		Platforms:      platforms,
 	})
@@ -92,7 +92,7 @@ func (s *Server) crosspostUpdate(w http.ResponseWriter, r *http.Request) {
 		// validation, so update redirects with the alert.
 		const msg = "Platform is not included in the list"
 		s.logCrosspostActivity(r.Context(), "error", "failed", platform, msg)
-		SetFlash(w, templates.Flash{Alert: msg})
+		s.SetFlash(w, templates.Flash{Alert: msg})
 		http.Redirect(w, r, redirectURL, http.StatusFound)
 		return
 	}
@@ -117,7 +117,7 @@ func (s *Server) crosspostUpdate(w http.ResponseWriter, r *http.Request) {
 	cfg = applyCrosspostForm(r, cfg)
 	if errs := crosspostValidationErrors(cfg); len(errs) > 0 {
 		s.logCrosspostActivity(ctx, "error", "failed", platform, strings.Join(errs, ", "))
-		SetFlash(w, templates.Flash{Alert: strings.Join(errs, ", ")})
+		s.SetFlash(w, templates.Flash{Alert: strings.Join(errs, ", ")})
 		http.Redirect(w, r, redirectURL, http.StatusFound)
 		return
 	}
@@ -141,12 +141,12 @@ func (s *Server) crosspostUpdate(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		s.Log.Error("update crosspost", "platform", platform, "error", err)
 		s.logCrosspostActivity(ctx, "error", "failed", platform, "Failed to update CrossPost settings.")
-		SetFlash(w, templates.Flash{Alert: "Failed to update CrossPost settings."})
+		s.SetFlash(w, templates.Flash{Alert: "Failed to update CrossPost settings."})
 		http.Redirect(w, r, redirectURL, http.StatusFound)
 		return
 	}
 	s.logCrosspostActivity(ctx, "info", "updated", platform, "")
-	SetFlash(w, templates.Flash{Notice: "CrossPost settings updated successfully."})
+	s.SetFlash(w, templates.Flash{Notice: "CrossPost settings updated successfully."})
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
@@ -180,7 +180,10 @@ func applyCrosspostForm(r *http.Request, cfg query.Crosspost) query.Crosspost {
 		}
 		switch field {
 		case "server_url":
-			cfg.ServerUrl = str(v)
+			// The format validation trims before parsing; store the trimmed
+			// value too so a padded URL does not pass validation and then
+			// fail later when the publish job requests it.
+			cfg.ServerUrl = str(strings.TrimSpace(v))
 		case "access_token":
 			cfg.AccessToken = str(v)
 		case "access_token_secret":
@@ -228,7 +231,7 @@ func crosspostValidationErrors(cfg query.Crosspost) []string {
 		errs = append(errs, "Max characters must be greater than 0")
 	}
 	if cfg.Enabled == 1 {
-		blank := func(v sql.NullString) bool { return !v.Valid || v.String == "" }
+		blank := func(v sql.NullString) bool { return !v.Valid || domain.IsBlank(v.String) }
 		switch cfg.Platform {
 		case "mastodon":
 			if blank(cfg.ClientKey) {
@@ -304,7 +307,10 @@ func (s *Server) crosspostVerify(w http.ResponseWriter, r *http.Request) {
 		v := r.PostFormValue("crosspost[" + name + "]")
 		return sql.NullString{String: v, Valid: v != ""}
 	}
-	cfg.ServerUrl = str("server_url")
+	// The save path stores a trimmed server_url; trim here too so a padded
+	// URL does not pass validation on save but fail the platform's Verify.
+	v := strings.TrimSpace(r.PostFormValue("crosspost[server_url]"))
+	cfg.ServerUrl = sql.NullString{String: v, Valid: v != ""}
 	cfg.Username = str("username")
 	cfg.AccessToken = str("access_token")
 	cfg.AccessTokenSecret = str("access_token_secret")

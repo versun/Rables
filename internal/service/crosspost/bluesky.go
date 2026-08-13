@@ -41,6 +41,12 @@ const (
 	// blueskyMaxImageSize mirrors BlueskyService::MAX_IMAGE_SIZE
 	// (950.kilobytes, just under the 976.56KB protocol limit).
 	blueskyMaxImageSize = 950 * 1024
+	// maxCompressPixels caps the decoded size for image compression.
+	// Decoding allocates ~4 bytes per pixel, so a tiny but highly compressed
+	// image (e.g. a solid 25000x25000 PNG) would need gigabytes of memory and
+	// can OOM-kill the worker. Mirrors maxVariantPixels in
+	// internal/service/media (unexported there, so duplicated here).
+	maxCompressPixels = 50_000_000
 )
 
 // blueskyPlatform ports BlueskyService with hand-rolled XRPC calls (plan §6
@@ -140,7 +146,11 @@ func (p blueskyPlatform) Post(ctx context.Context, cfg query.Crosspost, in PostI
 	record := map[string]any{
 		"text":      in.Text,
 		"createdAt": p.clock()().Format(time.RFC3339),
-		"facets":    linkFacets(in.Text),
+	}
+	// The lexicon forbids "facets": null, so the key is omitted entirely
+	// when the text has no links.
+	if facets := linkFacets(in.Text); len(facets) > 0 {
+		record["facets"] = facets
 	}
 	if embed != nil {
 		record["embed"] = embed
@@ -435,8 +445,16 @@ func (p blueskyPlatform) uploadBlob(ctx context.Context, server string, sess *bl
 // then scaling by sqrt(max/current)*0.95 (clamped to [0.5, 0.9], quality
 // reset to 85) until the output fits maxSize. Images that would shrink below
 // 100px give up (the Rails nil). EXIF autorotation is not applied (known gap,
-// same as media variants); alpha is flattened onto white for JPEG.
+// same as media variants); alpha is flattened onto white for JPEG. Images
+// declaring more than maxCompressPixels are refused before decoding.
 func compressImage(data []byte, maxSize int) ([]byte, bool) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, false
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxCompressPixels {
+		return nil, false // too large to decode safely: skip the image
+	}
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, false

@@ -1,15 +1,21 @@
 package httpd
 
 import (
+	"bytes"
+	"database/sql"
+	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
+	"rables/internal/config"
 	"rables/internal/db/query"
 )
 
@@ -191,6 +197,52 @@ func TestChangePassword(t *testing.T) {
 	}
 }
 
+// TestChangePasswordRevokesOtherSessions: a successful password change
+// deletes the user's other sessions — a stolen cookie must stop working —
+// while the session that made the change stays valid. A username-only update
+// (blank password) revokes nothing.
+func TestChangePasswordRevokesOtherSessions(t *testing.T) {
+	s, h := newTestServer(t)
+	completeSetup(t, h)
+	current := login(t, h, "admin", "secret-pw")
+	other := login(t, h, "admin", "secret-pw")
+
+	edit := func(c *http.Cookie) *httptest.ResponseRecorder {
+		return doRequest(t, h, http.MethodGet, "/users/1/edit", nil, c)
+	}
+
+	// Username-only update keeps every session.
+	rec := doRequest(t, h, http.MethodPost, "/users/1", url.Values{
+		"user_name": {"admin"}, "current_password": {""}, "password": {""}, "password_confirmation": {""},
+	}, current)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("username-only update: status = %d, want 302", rec.Code)
+	}
+	if rec := edit(other); rec.Code != http.StatusOK {
+		t.Fatalf("other session after username-only update: status = %d, want 200", rec.Code)
+	}
+
+	// Password change revokes the other session and its row...
+	rec = doRequest(t, h, http.MethodPost, "/users/1", url.Values{
+		"user_name": {"admin"}, "current_password": {"secret-pw"},
+		"password": {"new-pw"}, "password_confirmation": {"new-pw"},
+	}, current)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("password change: status = %d, want 302", rec.Code)
+	}
+	if rec := edit(other); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/session/new" {
+		t.Fatalf("other session after password change: status = %d location = %q, want 302 /session/new", rec.Code, rec.Header().Get("Location"))
+	}
+	if _, err := s.Q.GetSessionByToken(t.Context(), other.Value); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("other session row: err = %v, want sql.ErrNoRows (deleted)", err)
+	}
+
+	// ...but keeps the current one.
+	if rec := edit(current); rec.Code != http.StatusOK {
+		t.Fatalf("current session after password change: status = %d, want 200", rec.Code)
+	}
+}
+
 // TestOriginCheck covers the CSRF-replacement middleware.
 func TestOriginCheck(t *testing.T) {
 	_, h := newTestServer(t)
@@ -214,10 +266,13 @@ func TestOriginCheck(t *testing.T) {
 		{name: "sec-fetch-site cross-site", fetchSite: "cross-site", want: http.StatusForbidden},
 		{name: "good origin beats cross-site fetch", origin: "http://example.com", fetchSite: "cross-site", want: http.StatusForbidden},
 	}
-	for _, tt := range tests {
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			form := url.Values{"user_name": {"admin"}, "password": {"secret-pw"}}
 			req := httptest.NewRequest(http.MethodPost, "http://example.com/session", strings.NewReader(form.Encode()))
+			// Distinct remote IPs keep the login rate-limit buckets isolated
+			// between subtests.
+			req.RemoteAddr = "192.0.2." + strconv.Itoa(i+1) + ":1234"
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			if tt.origin != "" {
 				req.Header.Set("Origin", tt.origin)
@@ -231,6 +286,125 @@ func TestOriginCheck(t *testing.T) {
 				t.Errorf("status = %d, want %d", rec.Code, tt.want)
 			}
 		})
+	}
+}
+
+// TestLoginUnknownUser: an unknown username fails exactly like a wrong
+// password (same redirect, same alert, no session).
+func TestLoginUnknownUser(t *testing.T) {
+	_, h := newTestServer(t)
+	completeSetup(t, h)
+
+	rec := doRequest(t, h, http.MethodPost, "/session", url.Values{
+		"user_name": {"ghost"}, "password": {"secret-pw"},
+	})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/session/new" {
+		t.Fatalf("unknown user: status = %d location = %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if c := findCookie(rec, sessionCookieName); c != nil && c.Value != "" {
+		t.Error("unknown user set a session cookie")
+	}
+	rec = doRequest(t, h, http.MethodGet, "/session/new", nil, findCookie(rec, flashCookieName))
+	if !strings.Contains(rec.Body.String(), "Try another username or password.") {
+		t.Error("login page does not show the bad-credentials alert")
+	}
+
+	// The dummy-digest comparison runs for unknown users, but a match on the
+	// literal dummy password must not authenticate: before the err check the
+	// zero-value user fell through to startSession and 500'd on the FK.
+	rec = doRequest(t, h, http.MethodPost, "/session", url.Values{
+		"user_name": {"ghost"}, "password": {"dummy-password"},
+	})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/session/new" {
+		t.Errorf("unknown user with dummy password: status = %d location = %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if c := findCookie(rec, sessionCookieName); c != nil && c.Value != "" {
+		t.Error("dummy password set a session cookie")
+	}
+}
+
+// TestDummyPasswordDigestCost: the dummy digest compared for unknown
+// usernames must cost the same bcrypt rounds as the Rails-migrated digests
+// (cost 12), or the login response time leaks whether the username exists.
+func TestDummyPasswordDigestCost(t *testing.T) {
+	cost, err := bcrypt.Cost(dummyPasswordDigest)
+	if err != nil {
+		t.Fatalf("dummy digest not a bcrypt hash: %v", err)
+	}
+	if cost != 12 {
+		t.Errorf("dummy digest cost = %d, want 12 to match Rails digests", cost)
+	}
+}
+
+// TestLoginRateLimited: POST /session allows 5 attempts per minute per IP.
+func TestLoginRateLimited(t *testing.T) {
+	_, h := newTestServer(t)
+	completeSetup(t, h)
+
+	bad := url.Values{"user_name": {"admin"}, "password": {"wrong"}}
+	for i := 1; i <= 5; i++ {
+		rec := doRequest(t, h, http.MethodPost, "/session", bad)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("attempt %d: status = %d, want 302", i, rec.Code)
+		}
+	}
+	rec := doRequest(t, h, http.MethodPost, "/session", bad)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("6th attempt: status = %d, want 429", rec.Code)
+	}
+}
+
+// TestUserUpdateRateLimited: POST /users/{id} allows 5 attempts per minute
+// per IP — it verifies the current password, so it needs the same
+// brute-force protection as POST /session.
+func TestUserUpdateRateLimited(t *testing.T) {
+	_, h := newTestServer(t)
+	completeSetup(t, h)
+	session := login(t, h, "admin", "secret-pw")
+
+	bad := url.Values{
+		"user_name": {"admin"}, "current_password": {"wrong"},
+		"password": {"new-pw"}, "password_confirmation": {"new-pw"},
+	}
+	for i := 1; i <= 5; i++ {
+		rec := doRequest(t, h, http.MethodPost, "/users/1", bad, session)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("attempt %d: status = %d, want 422", i, rec.Code)
+		}
+	}
+	rec := doRequest(t, h, http.MethodPost, "/users/1", bad, session)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("6th attempt: status = %d, want 429", rec.Code)
+	}
+}
+
+// TestSecureCookies: with SECURE_COOKIES on, the session and flash cookies
+// (set and cleared) all carry the Secure attribute.
+func TestSecureCookies(t *testing.T) {
+	// Build the server with the flag on so the test covers the production
+	// wiring too: handlers read SecureCookies straight from the server
+	// config when setting and clearing cookies.
+	_, h := newTestServerWithConfig(t, config.Config{Addr: ":8080", HMACSecret: "x", SecureCookies: true})
+
+	// Setup redirects with a Secure flash cookie.
+	rec := completeSetup(t, h)
+	if c := findCookie(rec, flashCookieName); c == nil || !c.Secure {
+		t.Errorf("setup flash cookie = %+v, want Secure", c)
+	}
+	// Rendering the login page pops the flash: the clearing cookie is Secure.
+	rec = doRequest(t, h, http.MethodGet, "/session/new", nil, findCookie(rec, flashCookieName))
+	if c := findCookie(rec, flashCookieName); c == nil || c.MaxAge != -1 || !c.Secure {
+		t.Errorf("cleared flash cookie = %+v, want MaxAge -1 and Secure", c)
+	}
+	// Login sets a Secure session cookie.
+	session := login(t, h, "admin", "secret-pw")
+	if !session.Secure {
+		t.Error("session cookie is not Secure")
+	}
+	// Logout clears it with a Secure cookie.
+	rec = doRequest(t, h, http.MethodPost, "/session/destroy", nil, session)
+	if c := findCookie(rec, sessionCookieName); c == nil || c.MaxAge != -1 || !c.Secure {
+		t.Errorf("cleared session cookie = %+v, want MaxAge -1 and Secure", c)
 	}
 }
 
@@ -293,6 +467,105 @@ func TestSetupValidation(t *testing.T) {
 				t.Errorf("status = %d, want 422", rec.Code)
 			}
 		})
+	}
+}
+
+// TestSetupCreateAfterSetupCompleted: once setup is done, POST /setup bounces
+// to the admin root without creating another user. The guard runs before form
+// validation and the bcrypt hash, so even an invalid form gets the bounce
+// instead of a 422 — an unauthenticated client cannot force hash work.
+func TestSetupCreateAfterSetupCompleted(t *testing.T) {
+	s, h := newTestServer(t)
+	completeSetup(t, h)
+
+	// Valid form: same bounce the in-transaction re-check used to produce.
+	rec := doRequest(t, h, http.MethodPost, "/setup", setupForm)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/" {
+		t.Fatalf("POST /setup post-setup: status = %d location = %q", rec.Code, rec.Header().Get("Location"))
+	}
+	// Invalid form bounces too: the guard fires before validation/bcrypt.
+	rec = doRequest(t, h, http.MethodPost, "/setup", url.Values{"user_name": {"x"}})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/" {
+		t.Fatalf("POST /setup post-setup (invalid form): status = %d location = %q", rec.Code, rec.Header().Get("Location"))
+	}
+	// No second admin was created.
+	users, err := s.Q.CountUsers(t.Context())
+	if err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if users != 1 {
+		t.Errorf("users = %d, want 1", users)
+	}
+}
+
+// TestSetupBodyTooLarge: the unauthenticated, unrated setup endpoint caps the
+// form body at 1 MB (same as the other text-only forms), so an oversized
+// multipart body is rejected 413 instead of spilling parts into os.TempDir().
+func TestSetupBodyTooLarge(t *testing.T) {
+	_, h := newTestServer(t)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("description", strings.Repeat("a", 2<<20)); err != nil {
+		t.Fatalf("write multipart field: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/setup", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+}
+
+// TestSetupInvalidatesSettingsCache pins the contract of settings.Cache:
+// CompleteSetup bypasses Cache.Update, so a settings row cached before setup
+// (e.g. via the fail-open setup check) must not keep serving the blank
+// pre-setup values after setup commits.
+func TestSetupInvalidatesSettingsCache(t *testing.T) {
+	s, h := newTestServer(t)
+
+	if _, err := s.Settings().Get(t.Context()); err != nil {
+		t.Fatalf("preload settings cache: %v", err)
+	}
+	completeSetup(t, h)
+
+	st, err := s.Settings().Get(t.Context())
+	if err != nil {
+		t.Fatalf("settings after setup: %v", err)
+	}
+	if st.Title.String != "My Blog" {
+		t.Errorf("settings title after setup = %q, want %q (stale pre-setup cache row)", st.Title.String, "My Blog")
+	}
+}
+
+// TestExpiredSessionRejected: a session older than sessionTTL no longer
+// authenticates — RequireAuth redirects to the login page and deletes the
+// row. The login cookie's MaxAge matches the TTL.
+func TestExpiredSessionRejected(t *testing.T) {
+	s, h := newTestServer(t)
+	completeSetup(t, h)
+	session := login(t, h, "admin", "secret-pw")
+	if want := int(sessionTTL.Seconds()); session.MaxAge != want {
+		t.Errorf("session cookie MaxAge = %d, want %d", session.MaxAge, want)
+	}
+
+	old := time.Now().Add(-2 * sessionTTL).Unix()
+	if _, err := s.DB.Exec("UPDATE sessions SET created_at = ?, updated_at = ? WHERE token = ?", old, old, session.Value); err != nil {
+		t.Fatalf("age session: %v", err)
+	}
+
+	rec := doRequest(t, h, http.MethodGet, "/users/1/edit", nil, session)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/session/new" {
+		t.Fatalf("expired session: status = %d location = %q, want 302 /session/new", rec.Code, rec.Header().Get("Location"))
+	}
+	if _, err := s.Q.GetSessionByToken(t.Context(), session.Value); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("expired session row: err = %v, want sql.ErrNoRows (deleted)", err)
 	}
 }
 

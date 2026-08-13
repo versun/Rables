@@ -201,9 +201,20 @@ func TestSocialLinksRoundTrip(t *testing.T) {
 		}
 	})
 
-	t.Run("unmarshal invalid JSON errors", func(t *testing.T) {
-		if _, err := UnmarshalSocialLinks("{nope"); err == nil {
-			t.Error("expected error for invalid JSON")
+	t.Run("unmarshal invalid JSON degrades to nil", func(t *testing.T) {
+		links, err := UnmarshalSocialLinks("{nope")
+		if err != nil || links != nil {
+			t.Errorf("UnmarshalSocialLinks(%q) = %v, %v; want nil, nil", "{nope", links, err)
+		}
+	})
+
+	t.Run("malformed entries are skipped", func(t *testing.T) {
+		links, err := UnmarshalSocialLinks(`{"github":"https://github.com/versun","rss":{"url":"/feed.rss","icon":"i"},"x":{"url":123}}`)
+		if err != nil {
+			t.Fatalf("UnmarshalSocialLinks: %v", err)
+		}
+		if len(links) != 1 || links["rss"].URL != "/feed.rss" {
+			t.Errorf("links = %v, want only the well-formed rss entry", links)
 		}
 	})
 
@@ -225,8 +236,9 @@ func TestSocialLinksRoundTrip(t *testing.T) {
 	})
 }
 
-// TestNormalizeSocialLinks covers the admin form validation: any JSON object
-// is accepted (Rails Hash check) and stored compact; anything else errors.
+// TestNormalizeSocialLinks covers the admin form validation: a JSON object
+// whose values all have the SocialLink shape is stored compact; anything else
+// errors.
 func TestNormalizeSocialLinks(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -241,6 +253,10 @@ func TestNormalizeSocialLinks(t *testing.T) {
 		{name: "array rejected", raw: `[1,2]`, wantErr: true},
 		{name: "string rejected", raw: `"x"`, wantErr: true},
 		{name: "null rejected", raw: "null", wantErr: true},
+		{name: "null entry rejected", raw: `{"github": null}`, wantErr: true},
+		{name: "bare string value rejected", raw: `{"github":"https://github.com/versun"}`, wantErr: true},
+		{name: "wrong field type rejected", raw: `{"github":{"url":123}}`, wantErr: true},
+		{name: "array value rejected", raw: `{"github":["https://github.com/versun"]}`, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

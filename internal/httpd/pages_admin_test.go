@@ -271,6 +271,7 @@ func TestAdminPagesValidation(t *testing.T) {
 		{"blank title", func(f url.Values) { f.Set("title", "  ") }, "Title can&#39;t be blank"},
 		{"blank slug", func(f url.Values) { f.Set("slug", "") }, "Slug can&#39;t be blank"},
 		{"taken slug", func(f url.Values) { f.Set("slug", "taken") }, "Slug has already been taken"},
+		{"batch action slug", func(f url.Values) { f.Set("slug", "batch_destroy") }, "Slug is reserved"},
 		{"bad redirect", func(f url.Values) { f.Set("redirect_url", "notaurl") }, "Redirect url is not a valid URL"},
 		{"ftp redirect", func(f url.Values) { f.Set("redirect_url", "ftp://example.com/x") }, "Redirect url is not a valid URL"},
 		{"bad content type", func(f url.Values) { f.Set("content_type", "textile") }, "Content type is not included in the list"},
@@ -329,6 +330,77 @@ func TestAdminPagesValidation(t *testing.T) {
 	}
 }
 
+// TestAdminPagesCleansURLUnsafeSlug: a handwritten slug with URL path
+// reserved chars is stripped down to a reachable slug (CleanSlug, like
+// article slugs) on both create and update, instead of being stored as-is
+// where /pages/{slug} and the admin edit link could never match it; a slug
+// that strips to nothing is the blank-slug validation error.
+func TestAdminPagesCleansURLUnsafeSlug(t *testing.T) {
+	s, h := newPagesTestServer(t)
+	session := pagesSessionCookie(t, s)
+	ctx := t.Context()
+
+	form := validPageForm()
+	form.Set("slug", "a/b?c#d")
+	rec := doRequest(t, h, http.MethodPost, "/admin/pages", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("create: status = %d, want 302", rec.Code)
+	}
+	if _, err := s.Q.GetAdminPageBySlug(ctx, sql.NullString{String: "abcd", Valid: true}); err != nil {
+		t.Fatalf("page not stored under the cleaned slug: %v", err)
+	}
+	rec = doRequest(t, h, http.MethodGet, "/admin/pages/abcd/edit", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Errorf("edit by cleaned slug: status = %d, want 200", rec.Code)
+	}
+
+	update := validPageForm()
+	update.Set("slug", "e/f%g\\h")
+	rec = doRequest(t, h, http.MethodPost, "/admin/pages/abcd", update, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("update: status = %d, want 302", rec.Code)
+	}
+	if _, err := s.Q.GetAdminPageBySlug(ctx, sql.NullString{String: "efgh", Valid: true}); err != nil {
+		t.Errorf("updated page not stored under the cleaned slug: %v", err)
+	}
+
+	bad := validPageForm()
+	bad.Set("slug", "./?")
+	rec = doRequest(t, h, http.MethodPost, "/admin/pages", bad, session)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Slug can&#39;t be blank") {
+		t.Errorf("slug stripping to nothing: status = %d, want 422 blank slug", rec.Code)
+	}
+}
+
+// TestAdminPagesFormErrorKeepsScheduledAt: a validation-failure re-render
+// keeps the submitted scheduled_at in the datetime-local input.
+func TestAdminPagesFormErrorKeepsScheduledAt(t *testing.T) {
+	s, h := newPagesTestServer(t)
+	session := pagesSessionCookie(t, s)
+
+	const submitted = "2030-01-02T03:04"
+	const want = `value="` + submitted + `"`
+
+	// Create: a blank title re-renders admin_pages_new with 422.
+	form := validPageForm()
+	form.Set("title", "")
+	form.Set("scheduled_at", submitted)
+	rec := doRequest(t, h, http.MethodPost, "/admin/pages", form, session)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("create: status = %d, want 422 keeping scheduled_at %s", rec.Code, want)
+	}
+
+	// Update: a blank title re-renders admin_pages_edit with 422.
+	createPageViaForm(t, h, s, session, validPageForm())
+	bad := validPageForm()
+	bad.Set("title", "")
+	bad.Set("scheduled_at", submitted)
+	rec = doRequest(t, h, http.MethodPost, "/admin/pages/about", bad, session)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("update: status = %d, want 422 keeping scheduled_at %s", rec.Code, want)
+	}
+}
+
 // TestAdminPagesIndexOrderAndFilter mirrors fetch_articles(sort_by:
 // :page_order): page_order DESC and the status tabs.
 func TestAdminPagesIndexOrderAndFilter(t *testing.T) {
@@ -370,6 +442,15 @@ func TestAdminPagesIndexOrderAndFilter(t *testing.T) {
 	rec = doRequest(t, h, http.MethodGet, "/admin/pages?status=bogus", nil, session)
 	if !strings.Contains(rec.Body.String(), `value="high"`) {
 		t.Errorf("unknown status should fall back to the unfiltered list")
+	}
+
+	// The 19-digit page guards the int64 offset overflow (maxAdminPageNumber),
+	// same as the articles list.
+	for _, bad := range []string{"?page=0", "?page=-1", "?page=abc", "?page=1.5", "?page=9223372036854775807"} {
+		rec = doRequest(t, h, http.MethodGet, "/admin/pages"+bad, nil, session)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("index %q: status = %d, want 404", bad, rec.Code)
+		}
 	}
 }
 
@@ -523,26 +604,24 @@ func TestAdminPagesScheduleEnqueue(t *testing.T) {
 	}
 }
 
-// TestAdminPagesHTMLMode: html content_type stores html_content (sanitized).
+// TestAdminPagesHTMLMode: html content_type stores html_content verbatim
+// (the "skip sanitize" semantic): no SanitizeHTML, no lazy-load rewrite.
 func TestAdminPagesHTMLMode(t *testing.T) {
 	s, h := newPagesTestServer(t)
 	session := pagesSessionCookie(t, s)
 
+	raw := `<div><img src="/files/pic.png"><iframe src="javascript:alert(1)"></iframe><script>alert(1)</script></div>`
 	form := validPageForm()
 	form.Set("slug", "raw")
 	form.Set("content_type", "html")
 	form.Set("content", "<p>ignored rich text</p>")
-	form.Set("html_content", `<div><img src="/files/pic.png"><iframe src="javascript:alert(1)"></iframe></div>`)
+	form.Set("html_content", raw)
 	page := createPageViaForm(t, h, s, session, form)
 	if page.ContentType != "html" {
 		t.Fatalf("content_type = %q, want html", page.ContentType)
 	}
-	stored := page.ContentHtml.String
-	if !strings.Contains(stored, `img src="/files/pic.png" loading="lazy"`) {
-		t.Errorf("stored html missing lazy image: %s", stored)
-	}
-	if strings.Contains(stored, "javascript:") {
-		t.Errorf("stored html kept a javascript: iframe src: %s", stored)
+	if stored := page.ContentHtml.String; stored != raw {
+		t.Errorf("stored html = %s, want the raw html_content untouched", stored)
 	}
 
 	// The edit form puts the content into the html textarea for html pages.
@@ -613,5 +692,27 @@ func TestAdminPagesMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(page.ContentHtml.String, "Back to rich") {
 		t.Errorf("content_html after switch = %q", page.ContentHtml.String)
+	}
+}
+
+// TestAdminPagesBatchLookupDBError covers the batch lookup error split: a
+// missing slug is skipped, but a real DB error aborts with the processing
+// alert instead of riding the success notice.
+func TestAdminPagesBatchLookupDBError(t *testing.T) {
+	s, h := newPagesTestServer(t)
+	session := pagesSessionCookie(t, s)
+	createPageViaForm(t, h, s, session, validPageForm())
+	if _, err := s.DB.ExecContext(t.Context(), "ALTER TABLE pages RENAME TO pages_gone"); err != nil {
+		t.Fatalf("break pages table: %v", err)
+	}
+
+	form := url.Values{}
+	form["ids"] = []string{"about"}
+	rec := doRequest(t, h, http.MethodPost, "/admin/pages/batch_publish", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("batch_publish: status = %d", rec.Code)
+	}
+	if flash := flashOf(t, rec); !strings.Contains(flash.Alert, "Error processing publish for pages") {
+		t.Errorf("batch_publish flash = %+v, want the processing alert", flash)
 	}
 }

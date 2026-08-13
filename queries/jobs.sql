@@ -24,9 +24,40 @@ WHERE id = ?;
 UPDATE job_runs SET status = 'failed', attempts = ?, last_error = ?, updated_at = ?
 WHERE id = ?;
 
+-- name: RequeueStaleRunningJobRuns :execrows
+-- Startup recovery: rows claimed (running) but untouched since :cutoff belong
+-- to a dead process; requeue them so they run again. The requeue consumes an
+-- attempt, and a row whose attempt budget is exhausted by it is failed
+-- instead of requeued: the claim path never checks attempts, so a plain
+-- requeue would let a job that reliably crashes the process (OOM/SIGKILL)
+-- loop forever under Restart=always.
+UPDATE job_runs SET
+  status = CASE WHEN attempts + 1 >= :max_attempts THEN 'failed' ELSE 'queued' END,
+  attempts = attempts + 1,
+  last_error = CASE WHEN attempts + 1 >= :max_attempts THEN :crash_error ELSE last_error END,
+  updated_at = :now
+WHERE status = 'running' AND updated_at < :cutoff;
+
 -- name: DeleteFinishedJobRuns :execrows
 DELETE FROM job_runs
 WHERE status IN ('done', 'failed') AND updated_at < ?;
+
+-- name: ListActiveImportJobPayloads :many
+-- Startup orphan-upload cleanup (jobs.CleanupOrphanImportFiles): payloads of
+-- still-active import jobs reference the data/imports files that must not be
+-- deleted. The twitter_archive_import payload carries only an import_id; its
+-- path lives in twitter_archive_imports.source_path.
+SELECT kind, payload FROM job_runs
+WHERE status IN ('queued', 'running')
+  AND kind IN ('import_db', 'import_rails', 'twitter_archive_import');
+
+-- name: ListActiveTwitterArchiveImportPaths :many
+-- Source uploads of still-active imports; the startup orphan cleanup keeps
+-- them even while their job row is missing (crash between the INSERT and the
+-- enqueue). Startup recovery fails such rows once they fall behind the
+-- cutoff, which unprotects the file on the next sweep.
+SELECT source_path FROM twitter_archive_imports
+WHERE source_path IS NOT NULL AND status IN ('queued', 'running');
 
 -- name: DeleteOldActivityLogs :execrows
 DELETE FROM activity_logs WHERE created_at < ?;

@@ -50,7 +50,7 @@ func (s *Server) adminTagsIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "admin_tags_index", adminTagsIndexData{
-		Flash: PopFlash(r, w),
+		Flash: s.PopFlash(r, w),
 		Tags:  rows,
 	})
 }
@@ -64,7 +64,7 @@ type adminTagFormData struct {
 
 // adminTagsNew renders GET /admin/tags/new.
 func (s *Server) adminTagsNew(w http.ResponseWriter, r *http.Request) {
-	s.render(w, http.StatusOK, "admin_tags_new", adminTagFormData{Flash: PopFlash(r, w)})
+	s.render(w, http.StatusOK, "admin_tags_new", adminTagFormData{Flash: s.PopFlash(r, w)})
 }
 
 // adminTagsCreate handles POST /admin/tags, mirroring
@@ -90,7 +90,7 @@ func (s *Server) adminTagsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logTagActivity(r.Context(), "created", 0, fmt.Sprintf("name=%s slug=%s", activityQuote(tag.Name), activityQuote(tag.Slug)))
-	SetFlash(w, templates.Flash{Notice: "Tag was successfully created."})
+	s.SetFlash(w, templates.Flash{Notice: "Tag was successfully created."})
 	http.Redirect(w, r, "/admin/tags", http.StatusFound)
 }
 
@@ -107,7 +107,7 @@ func (s *Server) adminTagsEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "admin_tags_edit", adminTagFormData{
-		Flash: PopFlash(r, w),
+		Flash: s.PopFlash(r, w),
 		Tag:   tag,
 	})
 }
@@ -130,8 +130,13 @@ func (s *Server) adminTagsUpdate(w http.ResponseWriter, r *http.Request) {
 		if msg := tagFormError(err); msg != "" {
 			s.logTagActivity(r.Context(), "failed", 2, fmt.Sprintf("name=%s errors=%s", activityQuote(name), activityQuote(msg)))
 			tag, getErr := s.Q.GetTagByID(r.Context(), id)
-			if getErr != nil {
+			if errors.Is(getErr, sql.ErrNoRows) {
 				http.NotFound(w, r)
+				return
+			}
+			if getErr != nil {
+				s.Log.Error("get tag", "error", getErr)
+				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
 			tag.Name = strings.TrimSpace(name)
@@ -149,7 +154,7 @@ func (s *Server) adminTagsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logTagActivity(r.Context(), "updated", 0, fmt.Sprintf("name=%s slug=%s", activityQuote(tag.Name), activityQuote(tag.Slug)))
-	SetFlash(w, templates.Flash{Notice: "Tag was successfully updated."})
+	s.SetFlash(w, templates.Flash{Notice: "Tag was successfully updated."})
 	http.Redirect(w, r, "/admin/tags", http.StatusFound)
 }
 
@@ -174,7 +179,7 @@ func (s *Server) adminTagsDestroy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logTagActivity(r.Context(), "deleted", 0, fmt.Sprintf("name=%s slug=%s", activityQuote(tag.Name), activityQuote(tag.Slug)))
-	SetFlash(w, templates.Flash{Notice: "Tag was successfully deleted."})
+	s.SetFlash(w, templates.Flash{Notice: "Tag was successfully deleted."})
 	http.Redirect(w, r, "/admin/tags", http.StatusSeeOther)
 }
 
@@ -200,13 +205,13 @@ func (s *Server) adminTagsBatchDestroy(w http.ResponseWriter, r *http.Request) {
 		if err := tagsvc.Destroy(r.Context(), s.DB, id); errors.Is(err, sql.ErrNoRows) {
 			continue
 		} else if err != nil {
-			SetFlash(w, templates.Flash{Alert: fmt.Sprintf("Error processing destroy for tags: %s", err)})
+			s.SetFlash(w, templates.Flash{Alert: fmt.Sprintf("Error processing destroy for tags: %s", err)})
 			http.Redirect(w, r, "/admin/tags", http.StatusFound)
 			return
 		}
 		count++
 	}
-	SetFlash(w, templates.Flash{Notice: fmt.Sprintf("Successfully deleted %d tag(s).", count)})
+	s.SetFlash(w, templates.Flash{Notice: fmt.Sprintf("Successfully deleted %d tag(s).", count)})
 	http.Redirect(w, r, "/admin/tags", http.StatusFound)
 }
 

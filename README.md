@@ -40,6 +40,8 @@ Configuration via environment variables:
 | `HMAC_SECRET` | *(required)* | Signs math-captcha tokens |
 | `ARTICLE_ROUTE_PREFIX` | *(empty)* | Optional prefix for article URLs (e.g. `blog`) |
 | `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` (JSON logs to stdout) |
+| `TRUST_X_FORWARDED_FOR` | `false` | `1`/`true`/`yes`: key rate limits off the rightmost `X-Forwarded-For` hop (the one the proxy appended) — enable only behind a reverse proxy that appends to the header |
+| `SECURE_COOKIES` | `false` | `1`/`true`/`yes`: add `Secure` to session/flash cookies (enable when serving HTTPS) |
 
 ## Development
 

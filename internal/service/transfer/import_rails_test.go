@@ -4,12 +4,16 @@ import (
 	"archive/zip"
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
+
+	"rables/internal/jobs"
 )
 
 // buildTestZip writes a zip with the given entries (name -> content).
@@ -54,6 +58,7 @@ func TestRestoreStorageZip(t *testing.T) {
 		"storage/ab/cd/abcdef123456": "new-blob",        // storage/ wrapper stripped
 		"ef/gh/efgh654321ef":         "plain-blob",      // bare xx/yy/key layout
 		"storage/ab/ab/abab0000abab": "other-content",   // exists already: kept
+		"storage/zz/yy/abcd1234abcd": "wrong-layout",    // dirs don't match the key: ignored
 		"storage/notes/readme.txt":   "not a blob path", // ignored
 	})
 	copied, kept, err := restoreStorageZip(dataDir, zipPath)
@@ -62,6 +67,9 @@ func TestRestoreStorageZip(t *testing.T) {
 	}
 	if copied != 2 || kept != 1 {
 		t.Errorf("copied=%d kept=%d, want 2/1", copied, kept)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "files", "zz", "yy", "abcd1234abcd")); !os.IsNotExist(err) {
+		t.Errorf("wrong-layout blob must not be restored, stat err = %v", err)
 	}
 	for rel, want := range map[string]string{
 		"ab/cd/abcdef123456": "new-blob",
@@ -242,5 +250,127 @@ func TestRunRailsImportRejectsGoDatabase(t *testing.T) {
 
 	if _, err := runRailsImport(ctx, dstDB, dstDir, ImportRailsPayload{DBPath: copyPath}); err == nil {
 		t.Fatal("expected an error for a Go database")
+	}
+}
+
+// A failed migration must leave no blobs on disk: the upload is cleaned up
+// afterwards, so blobs copied beforehand would be unreferenced disk litter.
+func TestRunRailsImportFailureRestoresNoBlobs(t *testing.T) {
+	ctx := context.Background()
+	dstDB, dstDir := newTestDB(t)
+
+	goDB, _ := newTestDB(t)
+	copyPath := filepath.Join(t.TempDir(), "rables.db")
+	if err := vacuumInto(ctx, goDB, copyPath); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	storageZip := buildTestZip(t, map[string]string{"aa/aa/aaaa1111bbbb": "png-content"})
+
+	if _, err := runRailsImport(ctx, dstDB, dstDir, ImportRailsPayload{DBPath: copyPath, StoragePath: storageZip}); err == nil {
+		t.Fatal("expected an error for a Go database")
+	}
+	if _, err := os.Lstat(filepath.Join(dstDir, "files")); !os.IsNotExist(err) {
+		t.Errorf("files dir exists after a failed import (err=%v)", err)
+	}
+}
+
+// runImportRailsJob enqueues one import_rails job and executes it
+// synchronously.
+func runImportRailsJob(t *testing.T, database *sql.DB, dataDir string, payload ImportRailsPayload) {
+	t.Helper()
+	ctx := context.Background()
+	w := jobs.NewWorker(database)
+	RegisterImportHandlers(w, database, dataDir, nil)
+	if _, err := jobs.NewEnqueuer(database).Enqueue(ctx, jobs.KindImportRails, payload, time.Now()); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if _, err := w.RunOnce(ctx); err != nil {
+		t.Fatalf("run job: %v", err)
+	}
+}
+
+// TestImportRailsJobBlobRestoreFailureRemovesUploads: when the storage zip
+// restore fails after the migration committed, the error surfaces as a
+// BlobRestoreError and the job removes both uploads (a rails import has no
+// server-file retry channel, so a kept zip could never be replayed).
+// Re-uploading both files heals the import: the migration is idempotent
+// (INSERT OR IGNORE), so the second run restores the missing blob.
+func TestImportRailsJobBlobRestoreFailureRemovesUploads(t *testing.T) {
+	ctx := context.Background()
+	dstDB, dstDir := newTestDB(t)
+
+	importsDir := filepath.Join(dstDir, "imports")
+	if err := os.MkdirAll(importsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(importsDir, "import_123_production.sqlite3")
+	if err := copyFile(buildRailsFixture(t), dbPath); err != nil {
+		t.Fatal(err)
+	}
+	storageZip := filepath.Join(importsDir, "import_123_storage.zip")
+	if err := copyFile(buildTestZip(t, map[string]string{"aa/aa/aaaa1111bbbb": "png-content"}), storageZip); err != nil {
+		t.Fatal(err)
+	}
+
+	// Break the blob restore: <DataDir>/files as a regular file makes the
+	// MkdirAll of every blob destination fail.
+	filesPath := filepath.Join(dstDir, "files")
+	if err := os.WriteFile(filesPath, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The direct run surfaces the post-commit failure as a BlobRestoreError.
+	_, err := runRailsImport(ctx, dstDB, dstDir, ImportRailsPayload{DBPath: dbPath, StoragePath: storageZip})
+	var blobErr *BlobRestoreError
+	if !errors.As(err, &blobErr) {
+		t.Fatalf("runRailsImport err = %v, want a *BlobRestoreError", err)
+	}
+	// The migration committed before the restore ran.
+	var n int
+	if err := dstDB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("users = %d, want 1 (migration committed before the blob failure)", n)
+	}
+
+	// Through the job both uploads are removed: the committed migration is
+	// idempotent, and a kept zip could never be replayed anyway.
+	runImportRailsJob(t, dstDB, dstDir, ImportRailsPayload{DBPath: dbPath, StoragePath: storageZip})
+	if _, err := os.Stat(storageZip); !os.IsNotExist(err) {
+		t.Errorf("storage zip kept after a blob-restore failure, stat err = %v", err)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Errorf("database upload kept after a blob-restore failure, stat err = %v", err)
+	}
+	// The handler logs the report printed before the failed blob restore:
+	// dropping it on the error path would lose the record of what the
+	// committed migration imported.
+	var reportLog string
+	if err := dstDB.QueryRow(`SELECT description FROM activity_logs WHERE target = 'import' AND action = 'report'`).Scan(&reportLog); err != nil {
+		t.Fatalf("query report activity: %v", err)
+	}
+	if !strings.Contains(reportLog, "attachment references:") {
+		t.Errorf("report activity = %q, want the migration report", reportLog)
+	}
+
+	// Heal the disk and re-upload both files: the import succeeds (the
+	// committed rows are skipped via INSERT OR IGNORE, the blob is restored
+	// now) and the job removes both uploads.
+	if err := os.Remove(filesPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(buildRailsFixture(t), dbPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(buildTestZip(t, map[string]string{"aa/aa/aaaa1111bbbb": "png-content"}), storageZip); err != nil {
+		t.Fatal(err)
+	}
+	runImportRailsJob(t, dstDB, dstDir, ImportRailsPayload{DBPath: dbPath, StoragePath: storageZip})
+	if _, err := os.Stat(storageZip); !os.IsNotExist(err) {
+		t.Errorf("storage zip left behind after the successful retry, stat err = %v", err)
+	}
+	if blob, err := os.ReadFile(filepath.Join(dstDir, "files", "aa", "aa", "aaaa1111bbbb")); err != nil || string(blob) != "png-content" {
+		t.Errorf("blob not restored by the retry: %q, %v", blob, err)
 	}
 }

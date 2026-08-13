@@ -28,6 +28,23 @@ func TestPlainText(t *testing.T) {
 	}
 }
 
+func TestPlainTextDeepNesting(t *testing.T) {
+	// Over 512 open elements the parser errors out; PlainText falls back to
+	// "" rather than panicking.
+	if got := PlainText(strings.Repeat("<div>", 600) + "x"); got != "" {
+		t.Errorf("PlainText(600 nested divs) = %q, want \"\"", got)
+	}
+}
+
+func TestPlainTextOversized(t *testing.T) {
+	// Over maxHTMLParseBytes, PlainText takes its parse-error fallback ("")
+	// rather than building a DOM from the untrusted-sized input.
+	big := "<p>hi</p>" + strings.Repeat("<p>x</p>", maxHTMLParseBytes/len("<p>x</p>")+1)
+	if got := PlainText(big); got != "" {
+		t.Errorf("PlainText(oversized) = %.20q, want \"\"", got)
+	}
+}
+
 func TestSquish(t *testing.T) {
 	if got := Squish("  a  b\n\tc  "); got != "a b c" {
 		t.Errorf("Squish = %q, want %q", got, "a b c")

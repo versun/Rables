@@ -2,6 +2,7 @@ package newsletter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 
@@ -79,6 +80,13 @@ func (s *sender) sendNative(ctx context.Context, articleID int64, st query.Newsl
 			err = mailer.Send(ctx, msg)
 		}
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				// Worker shutdown: return the error so the job is rescheduled
+				// (free, without consuming an attempt) instead of counted as
+				// a per-recipient failure, which would silently drop the
+				// remaining recipients of this issue.
+				return err
+			}
 			failCount++
 			activity.Log(ctx, s.db, "error", "failed", "newsletter", fmt.Sprintf(
 				"title=%s slug=%s email=%s mode=%s error=%s",

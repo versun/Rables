@@ -205,6 +205,9 @@ func TestSettingsUpdateValidation(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), "Social links JSON is invalid") {
 			t.Error("alert not shown")
 		}
+		if !strings.Contains(rec.Body.String(), "invalid character") {
+			t.Error("alert does not include the JSON syntax error detail")
+		}
 		if !strings.Contains(rec.Body.String(), "{nope") {
 			t.Error("submitted JSON not echoed back for fixing")
 		}
@@ -214,6 +217,48 @@ func TestSettingsUpdateValidation(t *testing.T) {
 		}
 		if st.Title.String == "My Blog" {
 			t.Error("row was written despite the invalid social links JSON")
+		}
+	})
+
+	t.Run("malformed social link entries are rejected with 422", func(t *testing.T) {
+		s, h, session := newServer(t, true)
+		form := settingsForm()
+		form.Set("social_links_json", `{"github":"https://github.com/versun"}`)
+		rec := doRequest(t, h, http.MethodPost, "/admin/setting", form, session)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "Social links JSON is invalid") {
+			t.Error("alert not shown")
+		}
+		if !strings.Contains(rec.Body.String(), "invalid social link") {
+			t.Error("alert does not include the malformed entry detail")
+		}
+		if strings.Contains(rec.Body.String(), "not a JSON object") {
+			t.Error("alert blames the top-level shape for an entry-level failure")
+		}
+		st, err := s.Q.GetSettings(t.Context())
+		if err != nil {
+			t.Fatalf("get settings: %v", err)
+		}
+		if st.SocialLinks.String != "" {
+			t.Errorf("malformed social links were stored: %q", st.SocialLinks.String)
+		}
+	})
+
+	t.Run("null social link entry is rejected with 422", func(t *testing.T) {
+		_, h, session := newServer(t, true)
+		form := settingsForm()
+		form.Set("social_links_json", `{"github":null}`)
+		rec := doRequest(t, h, http.MethodPost, "/admin/setting", form, session)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "Social links JSON is invalid") {
+			t.Error("alert not shown")
+		}
+		if !strings.Contains(rec.Body.String(), "must be an object") {
+			t.Error("alert does not include the null entry detail")
 		}
 	})
 

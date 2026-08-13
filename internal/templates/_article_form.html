@@ -112,14 +112,14 @@
       <div class="card">
         <h2 class="card-title">Distribution</h2>
         <div class="field-checkbox">
-          <input type="hidden" name="send_newsletter" value="0">
+          <input type="hidden" name="send_newsletter" value="0"{{if not .NewsletterEnabled}} disabled{{end}}>
           <input type="checkbox" id="send_newsletter" name="send_newsletter" value="1" {{if .Form.SendNewsletter}}checked{{end}} {{if not .NewsletterEnabled}}disabled{{end}}>
           <label for="send_newsletter">Send Newsletter</label>
           {{if not .NewsletterEnabled}}<small class="text-muted">(not enabled)</small>{{end}}
         </div>
 
         <div class="crosspost-row">
-          <input type="hidden" name="crosspost_mastodon" value="0">
+          <input type="hidden" name="crosspost_mastodon" value="0"{{if not .MastodonEnabled}} disabled{{end}}>
           <input type="checkbox" id="crosspost_mastodon" name="crosspost_mastodon" value="1" {{if index .Form.Crosspost "mastodon"}}checked{{end}} {{if not .MastodonEnabled}}disabled{{end}}>
           <label for="crosspost_mastodon">Mastodon</label>
           {{if not .MastodonEnabled}}<small class="text-muted">(off)</small>{{end}}
@@ -127,7 +127,7 @@
         </div>
 
         <div class="crosspost-row">
-          <input type="hidden" name="crosspost_twitter" value="0">
+          <input type="hidden" name="crosspost_twitter" value="0"{{if not .TwitterEnabled}} disabled{{end}}>
           <input type="checkbox" id="crosspost_twitter" name="crosspost_twitter" value="1" {{if index .Form.Crosspost "twitter"}}checked{{end}} {{if not .TwitterEnabled}}disabled{{end}}>
           <label for="crosspost_twitter">Twitter</label>
           {{if not .TwitterEnabled}}<small class="text-muted">(off)</small>{{end}}
@@ -135,7 +135,7 @@
         </div>
 
         <div class="crosspost-row">
-          <input type="hidden" name="crosspost_bluesky" value="0">
+          <input type="hidden" name="crosspost_bluesky" value="0"{{if not .BlueskyEnabled}} disabled{{end}}>
           <input type="checkbox" id="crosspost_bluesky" name="crosspost_bluesky" value="1" {{if index .Form.Crosspost "bluesky"}}checked{{end}} {{if not .BlueskyEnabled}}disabled{{end}}>
           <label for="crosspost_bluesky">Bluesky</label>
           {{if not .BlueskyEnabled}}<small class="text-muted">(off)</small>{{end}}
@@ -143,7 +143,7 @@
         </div>
 
         <div class="crosspost-row">
-          <input type="hidden" name="crosspost_xiaohongshu" value="0">
+          <input type="hidden" name="crosspost_xiaohongshu" value="0"{{if not .XiaohongshuEnabled}} disabled{{end}}>
           <input type="checkbox" id="crosspost_xiaohongshu" name="crosspost_xiaohongshu" value="1" {{if index .Form.Crosspost "xiaohongshu"}}checked{{end}} {{if not .XiaohongshuEnabled}}disabled{{end}}>
           <label for="crosspost_xiaohongshu">Xiaohongshu</label>
           {{if not .XiaohongshuEnabled}}<small class="text-muted">(off)</small>{{end}}

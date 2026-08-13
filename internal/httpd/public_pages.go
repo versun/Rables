@@ -24,7 +24,7 @@ type publicPageData struct {
 // with a redirect_url answers 302 instead of rendering (plan section 4.12).
 func (s *Server) publicPageShow(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	slug := slugParam(r)
+	slug := slugParam(r, "slug")
 	page, err := s.Q.GetPublicPageBySlug(ctx, sql.NullString{String: slug, Valid: true})
 	if errors.Is(err, sql.ErrNoRows) {
 		s.publicNotFound(w)
@@ -43,12 +43,6 @@ func (s *Server) publicPageShow(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, page.RedirectUrl.String, http.StatusFound)
 		return
 	}
-	if public {
-		// Must stay private: the comment form embeds a per-session captcha token.
-		w.Header().Set("Cache-Control", "private, max-age=86400")
-	} else {
-		w.Header().Set("Cache-Control", "private, no-cache")
-	}
 
 	chrome, err := s.chrome(ctx, "")
 	if err != nil {
@@ -60,8 +54,18 @@ func (s *Server) publicPageShow(w http.ResponseWriter, r *http.Request) {
 		s.listError(w, "list comments", err)
 		return
 	}
+	// Must stay private: the comment form embeds a per-session captcha token.
+	// A present flash cookie means the page renders a one-time flash, so the
+	// response must not be cached (same check as publicArticleIndex). Set only
+	// after every fallible query, or http.Error would send a cached 500.
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	cacheControl := "private, no-cache"
+	if public && flashCookieErr != nil {
+		cacheControl = "private, max-age=86400"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
 	s.render(w, http.StatusOK, "public_page", publicPageData{
-		Flash:       PopFlash(r, w),
+		Flash:       s.PopFlash(r, w),
 		Chrome:      chrome,
 		Title:       page.Title.String,
 		ContentHTML: s.renderCache().fetch("page", page.ID, page.UpdatedAt, page.ContentHtml.String),

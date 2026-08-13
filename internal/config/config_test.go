@@ -65,11 +65,57 @@ func TestLoad(t *testing.T) {
 				LogLevel:   slog.LevelError,
 			},
 		},
+		{
+			name: "boolean flags on",
+			env: map[string]string{
+				"HMAC_SECRET":           "x",
+				"TRUST_X_FORWARDED_FOR": "true",
+				"SECURE_COOKIES":        "1",
+			},
+			want: Config{
+				Addr:               ":8080",
+				DataDir:            "./data",
+				HMACSecret:         "x",
+				LogLevel:           slog.LevelInfo,
+				TrustXForwardedFor: true,
+				SecureCookies:      true,
+			},
+		},
+		{
+			name: "boolean flags accept yes",
+			env: map[string]string{
+				"HMAC_SECRET":           "x",
+				"TRUST_X_FORWARDED_FOR": "YES",
+				"SECURE_COOKIES":        "yes",
+			},
+			want: Config{
+				Addr:               ":8080",
+				DataDir:            "./data",
+				HMACSecret:         "x",
+				LogLevel:           slog.LevelInfo,
+				TrustXForwardedFor: true,
+				SecureCookies:      true,
+			},
+		},
+		{
+			name: "boolean flags reject other values",
+			env: map[string]string{
+				"HMAC_SECRET":           "x",
+				"TRUST_X_FORWARDED_FOR": "on",
+				"SECURE_COOKIES":        "0",
+			},
+			want: Config{
+				Addr:       ":8080",
+				DataDir:    "./data",
+				HMACSecret: "x",
+				LogLevel:   slog.LevelInfo,
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, k := range []string{"ADDR", "DATA_DIR", "HMAC_SECRET", "ARTICLE_ROUTE_PREFIX", "LOG_LEVEL"} {
+			for _, k := range []string{"ADDR", "DATA_DIR", "HMAC_SECRET", "ARTICLE_ROUTE_PREFIX", "LOG_LEVEL", "TRUST_X_FORWARDED_FOR", "SECURE_COOKIES"} {
 				t.Setenv(k, "")
 			}
 			for k, v := range tt.env {

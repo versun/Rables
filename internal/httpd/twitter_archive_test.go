@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -396,6 +397,59 @@ func TestPublicTwitterArchiveRendersMedia(t *testing.T) {
 	}
 }
 
+// TestPublicTwitterArchiveCacheControlFlash: like the article index, the
+// archive page is publicly cacheable, but a response that renders a one-time
+// flash must degrade to private, no-cache.
+func TestPublicTwitterArchiveCacheControlFlash(t *testing.T) {
+	s, h := newTwitterArchiveTestServer(t, "")
+
+	flashCookie := signedFlashCookie(t, s, templates.Flash{Notice: "subscribed"})
+
+	if cc := get(t, h, "/twitter/archive").Header().Get("Cache-Control"); cc != "public, max-age=300, s-maxage=900" {
+		t.Errorf("Cache-Control = %q, want public, max-age=300, s-maxage=900", cc)
+	}
+	rec := get(t, h, "/twitter/archive", flashCookie)
+	if cc := rec.Header().Get("Cache-Control"); cc != "private, no-cache" {
+		t.Errorf("Cache-Control with flash = %q, want private, no-cache", cc)
+	}
+}
+
+// TestPublicTwitterArchiveErrorNotCached: Cache-Control is set only after
+// every fallible query, because http.Error does not clear headers already
+// set — a 500 carrying s-maxage would be stored by a CDN.
+func TestPublicTwitterArchiveErrorNotCached(t *testing.T) {
+	s, h := newTwitterArchiveTestServer(t, "")
+	if _, err := s.DB.Exec(`DROP TABLE twitter_archive_tweets`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+
+	rec := get(t, h, "/twitter/archive")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "" {
+		t.Errorf("Cache-Control = %q, want empty on a 500", cc)
+	}
+}
+
+// TestPublicTwitterArchiveErrorKeepsFlash: PopFlash runs only after every
+// fallible query, so a 500 response must not carry the clearing Set-Cookie —
+// the one-time flash survives to render on the next successful page.
+func TestPublicTwitterArchiveErrorKeepsFlash(t *testing.T) {
+	s, h := newTwitterArchiveTestServer(t, "")
+	if _, err := s.DB.Exec(`DROP TABLE twitter_archive_tweets`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+
+	rec := get(t, h, "/twitter/archive", signedFlashCookie(t, s, templates.Flash{Notice: "subscribed"}))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if cleared := findCookie(rec, flashCookieName); cleared != nil {
+		t.Errorf("500 cleared the flash cookie: %+v", cleared)
+	}
+}
+
 func TestPublicTwitterArchiveRoutePrefix(t *testing.T) {
 	s, h := newTwitterArchiveTestServer(t, "blog")
 	seedArchiveTweet(t, s, "300", "tweet", "Prefixed archive tweet", 1000)
@@ -454,4 +508,69 @@ func TestAdminTwitterArchivesEndToEnd(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "@archive_owner") {
 		t.Fatalf("public archive misses the account screen name")
 	}
+}
+
+func TestStoreTwitterArchiveUploadTempName(t *testing.T) {
+	s, _ := newTwitterArchiveTestServer(t, "")
+	importsDir := filepath.Join(s.Cfg.DataDir, "imports")
+	content := "archive-bytes"
+
+	t.Run("final name only appears fully written", func(t *testing.T) {
+		// Mid-copy only the .part temp name may exist in data/imports: the
+		// startup sweep (jobs.CleanupOrphanImportFiles) must never see a
+		// half-written twitter_archive_* file.
+		f := &peekFile{r: strings.NewReader(content), see: func() {
+			entries, err := os.ReadDir(importsDir)
+			if err != nil {
+				t.Errorf("read imports dir mid-write: %v", err)
+				return
+			}
+			for _, e := range entries {
+				if !strings.HasSuffix(e.Name(), ".part") {
+					t.Errorf("mid-write entry %q does not carry the .part temp suffix", e.Name())
+				}
+			}
+		}}
+		path, err := s.storeTwitterArchiveUpload(f)
+		if err != nil {
+			t.Fatalf("storeTwitterArchiveUpload: %v", err)
+		}
+		if !f.seen {
+			t.Fatal("mid-write check never ran")
+		}
+		base := filepath.Base(path)
+		if !strings.HasPrefix(base, "twitter_archive_") || !strings.HasSuffix(base, ".zip") {
+			t.Errorf("final path = %q, want twitter_archive_*.zip", base)
+		}
+		stored, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read stored upload: %v", err)
+		}
+		if string(stored) != content {
+			t.Errorf("stored content = %q, want %q", stored, content)
+		}
+		// The rename leaves no temp file behind.
+		entries, err := os.ReadDir(importsDir)
+		if err != nil {
+			t.Fatalf("read imports dir: %v", err)
+		}
+		if len(entries) != 1 || entries[0].Name() != base {
+			t.Errorf("imports dir entries = %v, want only %s", entries, base)
+		}
+	})
+
+	t.Run("failed copy removes the temp file", func(t *testing.T) {
+		if _, err := s.storeTwitterArchiveUpload(errFile{}); err == nil {
+			t.Fatal("storeTwitterArchiveUpload: want an error")
+		}
+		entries, err := os.ReadDir(importsDir)
+		if err != nil {
+			t.Fatalf("read imports dir: %v", err)
+		}
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".part") {
+				t.Errorf("temp file %s left behind after a failed copy", e.Name())
+			}
+		}
+	})
 }

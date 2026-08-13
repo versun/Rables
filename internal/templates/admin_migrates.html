@@ -65,6 +65,42 @@
 </div>
 
 <div class="card">
+  <h2 class="card-title">Import from Server File</h2>
+  <p class="card-desc">Files already in the server's <code>data/imports/</code> directory (copied there with scp/rsync). Use this for large backups that a reverse proxy would reject — Cloudflare caps uploads at 100&nbsp;MB (413 Payload Too Large). A successful import deletes the file; a failed one leaves it in place so you can fix the problem and retry.</p>
+  <div class="table-card">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Size</th>
+          <th>Created</th>
+          <th class="row-actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Imports}}
+        <tr>
+          <td><span class="truncate" title="{{.Name}}">{{.Name}}</span></td>
+          <td class="text-muted">{{.Size}} bytes</td>
+          <td><small class="text-muted">{{formatTime .ModTime $.TimeZone "2006-01-02 15:04:05"}}</small></td>
+          <td class="row-actions">
+            <form method="post" action="/admin/migrates/import_server" onsubmit="this.querySelector('button').disabled=true">
+              <input type="hidden" name="filename" value="{{.Name}}">
+              <button type="submit" class="row-btn">Import</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr>
+          <td colspan="4" class="empty">No files in data/imports yet.</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
   <h2 class="card-title">Import from Rails Database</h2>
   <p class="card-desc">Upload the SQLite database of a Rails rables site (e.g. production.sqlite3). Rows that already exist are skipped. Optionally attach a ZIP of the Rails storage/ directory to restore the media files.</p>
   <form method="post" action="/admin/migrates/import_rails" enctype="multipart/form-data">

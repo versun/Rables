@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -99,7 +100,7 @@ func clearJobs(t *testing.T, s *Server) {
 
 func TestAdminMigratesImportAuth(t *testing.T) {
 	_, h := newMigratesImportTestServer(t)
-	for _, path := range []string{"/admin/migrates/import", "/admin/migrates/import_rails", "/admin/migrates/import_rss"} {
+	for _, path := range []string{"/admin/migrates/import", "/admin/migrates/import_server", "/admin/migrates/import_rails", "/admin/migrates/import_rss"} {
 		rec := doRequest(t, h, http.MethodPost, path, nil)
 		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/session/new" {
 			t.Errorf("POST %s unauthenticated: status = %d location = %q, want 302 /session/new",
@@ -275,6 +276,189 @@ func TestAdminMigratesImportDB(t *testing.T) {
 	})
 }
 
+func TestAdminMigratesImportServerFile(t *testing.T) {
+	s, h := newMigratesImportTestServer(t)
+	session := redirectsSessionCookie(t, s)
+	importsDir := filepath.Join(s.Cfg.DataDir, "imports")
+	if err := os.MkdirAll(importsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	zipBytes := []byte("PK\x03\x04fake-zip")
+	if err := os.WriteFile(filepath.Join(importsDir, "export_2026.zip"), zipBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A web upload already owned by an enqueued job must not be listed.
+	if err := os.WriteFile(filepath.Join(importsDir, "import_1700000000_a1b2c3d4.zip"), zipBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A twitter archive upload is likewise owned by an enqueued job.
+	if err := os.WriteFile(filepath.Join(importsDir, "twitter_archive_1700000000_a1b2c3d4.zip"), zipBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("listed on the import tab", func(t *testing.T) {
+		rec := doRequest(t, h, http.MethodGet, "/admin/migrates?tab=import", nil, session)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		for _, want := range []string{`action="/admin/migrates/import_server"`, "export_2026.zip"} {
+			if !strings.Contains(rec.Body.String(), want) {
+				t.Errorf("import tab missing %q", want)
+			}
+		}
+		if strings.Contains(rec.Body.String(), "import_1700000000_a1b2c3d4.zip") {
+			t.Error("import tab listed a pending upload owned by a job")
+		}
+		if strings.Contains(rec.Body.String(), "twitter_archive_1700000000_a1b2c3d4.zip") {
+			t.Error("import tab listed a twitter archive upload owned by a job")
+		}
+	})
+
+	t.Run("existing file enqueued and renamed out of the list", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {"export_2026.zip"}}, session)
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
+			t.Fatalf("status = %d location = %q, want 302 tab=import", rec.Code, rec.Header().Get("Location"))
+		}
+		kind, payload, err := latestJob(t, s)
+		if err != nil {
+			t.Fatalf("expected queued job: %v", err)
+		}
+		if kind != "import_db" {
+			t.Errorf("kind = %q, want import_db", kind)
+		}
+		var p transfer.ImportDBPayload
+		if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
+			t.Fatalf("payload not JSON: %v", err)
+		}
+		queuedPath := filepath.Join(importsDir, "export_2026.zip.queued")
+		if p.Path != queuedPath {
+			t.Errorf("payload path = %q, want the .queued file in data/imports", p.Path)
+		}
+		if !p.KeepOnFailure {
+			t.Error("KeepOnFailure = false, want true so a failed import leaves the server file for a retry")
+		}
+		// The rename moves the file aside so it cannot be enqueued twice.
+		if _, err := os.Stat(filepath.Join(importsDir, "export_2026.zip")); !os.IsNotExist(err) {
+			t.Errorf("original file still present after enqueue: %v", err)
+		}
+		stored, err := os.ReadFile(p.Path)
+		if err != nil {
+			t.Fatalf("queued file missing after enqueue: %v", err)
+		}
+		if !bytes.Equal(stored, zipBytes) {
+			t.Errorf("stored content = %q, want the original bytes", stored)
+		}
+		// The queued file drops out of the import tab list.
+		rec = doRequest(t, h, http.MethodGet, "/admin/migrates?tab=import", nil, session)
+		if strings.Contains(rec.Body.String(), "export_2026.zip") {
+			t.Error("import tab still listed the enqueued file")
+		}
+		// Re-submitting the original name now reports the file as missing.
+		clearJobs(t, s)
+		rec = doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {"export_2026.zip"}}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("resubmit: status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected for a resubmitted file, got kind %q", kind)
+		}
+		// And the .queued name itself is rejected as job-owned.
+		rec = doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {"export_2026.zip.queued"}}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("queued name: status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected for a .queued name, got kind %q", kind)
+		}
+	})
+
+	t.Run("existing .queued rejected without overwrite", func(t *testing.T) {
+		clearJobs(t, s)
+		// A leftover .queued is either a failed import kept for a retry or a
+		// file still owned by a pending job; the rename must not clobber it.
+		path := filepath.Join(importsDir, "export_2027.zip")
+		queuedPath := path + ".queued"
+		if err := os.WriteFile(path, zipBytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		queuedBytes := []byte("PK\x03\x04previous-run")
+		if err := os.WriteFile(queuedPath, queuedBytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {"export_2027.zip"}}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
+		}
+		// Both files stay untouched: the backup keeps its bytes and the
+		// original stays listed for another attempt.
+		stored, err := os.ReadFile(queuedPath)
+		if err != nil || !bytes.Equal(stored, queuedBytes) {
+			t.Errorf("queued file = %q, %v; want the untouched backup bytes", stored, err)
+		}
+		stored, err = os.ReadFile(path)
+		if err != nil || !bytes.Equal(stored, zipBytes) {
+			t.Errorf("original file = %q, %v; want the untouched original bytes", stored, err)
+		}
+	})
+
+	t.Run("path traversal rejected", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {"../rables.db"}}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
+		}
+	})
+
+	t.Run("wrong type rejected", func(t *testing.T) {
+		clearJobs(t, s)
+		if err := os.WriteFile(filepath.Join(importsDir, "notes.txt"), []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {"notes.txt"}}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
+		}
+	})
+
+	t.Run("missing file rejected", func(t *testing.T) {
+		clearJobs(t, s)
+		for _, form := range []url.Values{{"filename": {"nope.zip"}}, {}} {
+			rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", form, session)
+			if rec.Code != http.StatusFound {
+				t.Fatalf("status = %d, want 302", rec.Code)
+			}
+			if kind, _, err := latestJob(t, s); err == nil {
+				t.Errorf("no job expected, got kind %q", kind)
+			}
+		}
+	})
+
+	t.Run("job-owned upload rejected", func(t *testing.T) {
+		clearJobs(t, s)
+		// The files exist but belong to enqueued jobs (a web upload and a
+		// twitter archive upload); importing either again would race the owner.
+		for _, name := range []string{"import_1700000000_a1b2c3d4.zip", "twitter_archive_1700000000_a1b2c3d4.zip"} {
+			rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {name}}, session)
+			if rec.Code != http.StatusFound {
+				t.Fatalf("%s: status = %d, want 302", name, rec.Code)
+			}
+			if kind, _, err := latestJob(t, s); err == nil {
+				t.Errorf("%s: no job expected, got kind %q", name, kind)
+			}
+		}
+	})
+}
+
 func TestAdminMigratesImportRails(t *testing.T) {
 	s, h := newMigratesImportTestServer(t)
 	session := redirectsSessionCookie(t, s)
@@ -383,6 +567,101 @@ func TestAdminMigratesImportRails(t *testing.T) {
 		}
 		if kind, _, err := latestJob(t, s); err == nil {
 			t.Errorf("no job expected, got kind %q", kind)
+		}
+	})
+}
+
+// peekFile is a multipart.File that runs see once on the first Read, then
+// serves content, so a test can observe data/imports mid-copy.
+type peekFile struct {
+	r    *strings.Reader
+	see  func()
+	seen bool
+}
+
+func (f *peekFile) Read(p []byte) (int, error) {
+	if !f.seen {
+		f.seen = true
+		f.see()
+	}
+	return f.r.Read(p)
+}
+
+func (f *peekFile) ReadAt(p []byte, off int64) (int, error) { return f.r.ReadAt(p, off) }
+func (f *peekFile) Seek(off int64, whence int) (int64, error) {
+	return f.r.Seek(off, whence)
+}
+func (f *peekFile) Close() error { return nil }
+
+// errFile is a multipart.File whose Read always fails.
+type errFile struct{}
+
+func (errFile) Read([]byte) (int, error)          { return 0, errors.New("read boom") }
+func (errFile) ReadAt([]byte, int64) (int, error) { return 0, errors.New("read boom") }
+func (errFile) Seek(int64, int) (int64, error)    { return 0, nil }
+func (errFile) Close() error                      { return nil }
+
+func TestSaveImportUploadTempName(t *testing.T) {
+	s, _ := newMigratesImportTestServer(t)
+	importsDir := filepath.Join(s.Cfg.DataDir, "imports")
+	content := "upload-bytes"
+
+	t.Run("final name only appears fully written", func(t *testing.T) {
+		// Mid-copy only the .part temp name may exist in data/imports: the
+		// startup sweep (jobs.CleanupOrphanImportFiles) and the import tab
+		// must never see a half-written import_* file.
+		f := &peekFile{r: strings.NewReader(content), see: func() {
+			entries, err := os.ReadDir(importsDir)
+			if err != nil {
+				t.Errorf("read imports dir mid-write: %v", err)
+				return
+			}
+			for _, e := range entries {
+				if !strings.HasSuffix(e.Name(), ".part") {
+					t.Errorf("mid-write entry %q does not carry the .part temp suffix", e.Name())
+				}
+			}
+		}}
+		path, err := s.saveImportUpload(f, ".zip")
+		if err != nil {
+			t.Fatalf("saveImportUpload: %v", err)
+		}
+		if !f.seen {
+			t.Fatal("mid-write check never ran")
+		}
+		base := filepath.Base(path)
+		if !strings.HasPrefix(base, "import_") || !strings.HasSuffix(base, ".zip") {
+			t.Errorf("final path = %q, want import_*.zip", base)
+		}
+		stored, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read stored upload: %v", err)
+		}
+		if string(stored) != content {
+			t.Errorf("stored content = %q, want %q", stored, content)
+		}
+		// The rename leaves no temp file behind.
+		entries, err := os.ReadDir(importsDir)
+		if err != nil {
+			t.Fatalf("read imports dir: %v", err)
+		}
+		if len(entries) != 1 || entries[0].Name() != base {
+			t.Errorf("imports dir entries = %v, want only %s", entries, base)
+		}
+	})
+
+	t.Run("failed copy removes the temp file", func(t *testing.T) {
+		if _, err := s.saveImportUpload(errFile{}, ".zip"); err == nil {
+			t.Fatal("saveImportUpload: want an error")
+		}
+		entries, err := os.ReadDir(importsDir)
+		if err != nil {
+			t.Fatalf("read imports dir: %v", err)
+		}
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".part") {
+				t.Errorf("temp file %s left behind after a failed copy", e.Name())
+			}
 		}
 	})
 }

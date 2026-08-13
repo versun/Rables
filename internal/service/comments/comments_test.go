@@ -366,3 +366,55 @@ func TestEnqueueReplyNotification(t *testing.T) {
 		})
 	}
 }
+
+// TestEnqueueReplyNotificationParentLookup covers the two GetCommentByID
+// failure modes: a missing parent (ErrNoRows) quietly skips the
+// notification, while any other database error propagates instead of
+// silently dropping it.
+func TestEnqueueReplyNotificationParentLookup(t *testing.T) {
+	reply := cm(2, "", domain.CommentApproved, 12345, 0) // parent never inserted
+
+	t.Run("missing parent skips", func(t *testing.T) {
+		database, err := db.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		t.Cleanup(func() { database.Close() })
+		enqueued, err := EnqueueReplyNotification(t.Context(), query.New(database), jobs.NewEnqueuer(database), reply)
+		if err != nil || enqueued {
+			t.Errorf("EnqueueReplyNotification = (%v, %v), want (false, nil) for a gone parent", enqueued, err)
+		}
+	})
+
+	t.Run("database error propagates", func(t *testing.T) {
+		database, err := db.Open(t.TempDir())
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		database.Close() // every query fails from here on
+		enqueued, err := EnqueueReplyNotification(t.Context(), query.New(database), jobs.NewEnqueuer(database), reply)
+		if err == nil {
+			t.Errorf("EnqueueReplyNotification = (%v, nil), want the database error", enqueued)
+		}
+	})
+}
+
+func TestInitial(t *testing.T) {
+	tests := []struct {
+		name       string
+		authorName string
+		want       string
+	}{
+		{name: "ascii upcased", authorName: "ann", want: "A"},
+		{name: "blank yields no letter", authorName: "", want: ""},
+		{name: "unicode first rune kept", authorName: "匿名", want: "匿"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := Threaded{Comment: query.Comment{AuthorName: tt.authorName}}
+			if got := n.Initial(); got != tt.want {
+				t.Errorf("Initial() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -200,6 +200,14 @@ func TestBuildPostURL(t *testing.T) {
 		{name: "route prefix", siteURL: "https://example.com", prefix: "blog", slug: "my-post", want: "https://example.com/blog/my-post"},
 		{name: "route prefix with slashes", siteURL: "https://example.com", prefix: "/blog/", slug: "my-post", want: "https://example.com/blog/my-post"},
 		{name: "chinese slug escaped", siteURL: "https://example.com", slug: "你好 世界", want: "https://example.com/%E4%BD%A0%E5%A5%BD%20%E4%B8%96%E7%95%8C"},
+		{name: "site path kept", siteURL: "https://example.com/blog", slug: "my-post", want: "https://example.com/blog/my-post"},
+		{name: "site path trailing slash chomped", siteURL: "https://example.com/blog/", slug: "my-post", want: "https://example.com/blog/my-post"},
+		{name: "site path with route prefix", siteURL: "https://example.com/blog", prefix: "posts", slug: "my-post", want: "https://example.com/blog/posts/my-post"},
+		{name: "ipv6 no port", siteURL: "https://[2001:db8::1]", slug: "my-post", want: "https://[2001:db8::1]/my-post"},
+		{name: "ipv6 default port omitted", siteURL: "https://[2001:db8::1]:443", slug: "my-post", want: "https://[2001:db8::1]/my-post"},
+		{name: "ipv6 non-default port kept", siteURL: "http://[2001:db8::1]:8080", slug: "my-post", want: "http://[2001:db8::1]:8080/my-post"},
+		{name: "unparseable site URL falls back", siteURL: "http://exa mple.com", slug: "my-post", want: "http://exa mple.com/my-post"},
+		{name: "fallback keeps route prefix", siteURL: "http://exa mple.com", prefix: "blog", slug: "my-post", want: "http://exa mple.com/blog/my-post"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5/middleware"
+
 	"rables/internal/config"
 	"rables/internal/db"
 	"rables/internal/templates"
@@ -16,6 +19,14 @@ import (
 
 // newTestServer builds a Server backed by a real SQLite DB in a temp dir.
 func newTestServer(t *testing.T) (*Server, http.Handler) {
+	t.Helper()
+	return newTestServerWithConfig(t, config.Config{Addr: ":8080", HMACSecret: "x"})
+}
+
+// newTestServerWithConfig is newTestServer with a caller-controlled Config,
+// so tests exercise the real wiring (e.g. NewRouter publishing SecureCookies
+// to the flash cookie helpers) instead of poking package state by hand.
+func newTestServerWithConfig(t *testing.T, cfg config.Config) (*Server, http.Handler) {
 	t.Helper()
 	database, err := db.Open(t.TempDir())
 	if err != nil {
@@ -27,7 +38,7 @@ func newTestServer(t *testing.T) (*Server, http.Handler) {
 		t.Fatalf("load templates: %v", err)
 	}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	s := NewServer(database, config.Config{Addr: ":8080", HMACSecret: "x"}, logger, renderer)
+	s := NewServer(database, cfg, logger, renderer)
 	return s, NewRouter(s)
 }
 
@@ -60,6 +71,18 @@ func findCookie(rec *httptest.ResponseRecorder, name string) *http.Cookie {
 		}
 	}
 	return nil
+}
+
+// locationPath parses a redirect's Location header and returns its path,
+// dropping the cache-busting "_" query parameter redirectWithFlash appends
+// to public targets.
+func locationPath(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location %q: %v", rec.Header().Get("Location"), err)
+	}
+	return loc.Path
 }
 
 var setupForm = url.Values{
@@ -105,6 +128,48 @@ func login(t *testing.T, h http.Handler, userName, password string) *http.Cookie
 		t.Error("session cookie is not HttpOnly")
 	}
 	return cookie
+}
+
+// TestAccessLogPanics: with accessLog outside middleware.Recoverer, a
+// panicking handler still produces an access log line recording the 500
+// Recoverer wrote.
+func TestAccessLogPanics(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	panicHandler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
+	h := accessLog(logger)(middleware.Recoverer(panicHandler))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/panic", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `"path":"/panic"`) || !strings.Contains(out, `"status":500`) {
+		t.Errorf("access log missing 500 line for the panicking request: %s", out)
+	}
+}
+
+// TestStatusRecorderUnwrap: the access-log wrapper must implement Unwrap so
+// http.NewResponseController (e.g. the download handler's write-deadline
+// relaxation) can reach the underlying ResponseWriter through the chain.
+func TestStatusRecorderUnwrap(t *testing.T) {
+	inner := httptest.NewRecorder()
+	sr := &statusRecorder{ResponseWriter: inner, status: http.StatusOK}
+	if got := sr.Unwrap(); got != inner {
+		t.Errorf("Unwrap = %v, want the wrapped recorder", got)
+	}
+	rc := http.NewResponseController(sr)
+	// Flush walks the Unwrap chain to the recorder's Flusher; without Unwrap
+	// it would report "feature not supported".
+	if err := rc.Flush(); err != nil {
+		t.Errorf("Flush through the wrapper: %v", err)
+	}
+	if !inner.Flushed {
+		t.Error("Flush did not reach the wrapped recorder")
+	}
 }
 
 func TestRouter(t *testing.T) {

@@ -123,7 +123,7 @@ func TestPublishArticleDueFlipsAndConsumesSnapshot(t *testing.T) {
 	d := openDB(t)
 	now := time.Now().UTC()
 	w := newTestWorker(d, now)
-	RegisterPublishHandlers(w, d, NewEnqueuer(d))
+	RegisterPublishHandlers(w, d)
 
 	scheduledAt := now.Add(-time.Hour).Unix()
 	id := insertScheduledArticle(t, d, domain.StatusSchedule, &scheduledAt, `["mastodon","bluesky"]`, 1)
@@ -176,7 +176,7 @@ func TestPublishArticleWithoutSnapshotEnqueuesNothing(t *testing.T) {
 	d := openDB(t)
 	now := time.Now().UTC()
 	w := newTestWorker(d, now)
-	RegisterPublishHandlers(w, d, NewEnqueuer(d))
+	RegisterPublishHandlers(w, d)
 
 	scheduledAt := now.Add(-time.Hour).Unix()
 	id := insertScheduledArticle(t, d, domain.StatusSchedule, &scheduledAt, "[]", 0)
@@ -198,7 +198,7 @@ func TestPublishArticleSkipsNonScheduleStates(t *testing.T) {
 	d := openDB(t)
 	now := time.Now().UTC()
 	w := newTestWorker(d, now)
-	RegisterPublishHandlers(w, d, NewEnqueuer(d))
+	RegisterPublishHandlers(w, d)
 
 	scheduledAt := now.Add(-time.Hour).Unix()
 	tests := []struct {
@@ -237,7 +237,7 @@ func TestPublishArticleNotYetDueSkips(t *testing.T) {
 	d := openDB(t)
 	now := time.Now().UTC()
 	w := newTestWorker(d, now)
-	RegisterPublishHandlers(w, d, NewEnqueuer(d))
+	RegisterPublishHandlers(w, d)
 
 	future := now.Add(time.Hour).Unix()
 	id := insertScheduledArticle(t, d, domain.StatusSchedule, &future, `["mastodon"]`, 1)
@@ -260,7 +260,7 @@ func TestPublishArticleRerunDoesNotReenqueue(t *testing.T) {
 	d := openDB(t)
 	now := time.Now().UTC()
 	w := newTestWorker(d, now)
-	RegisterPublishHandlers(w, d, NewEnqueuer(d))
+	RegisterPublishHandlers(w, d)
 
 	scheduledAt := now.Add(-time.Hour).Unix()
 	id := insertScheduledArticle(t, d, domain.StatusSchedule, &scheduledAt, `["mastodon"]`, 1)
@@ -281,7 +281,7 @@ func TestPublishArticleMissingRowIsDone(t *testing.T) {
 	d := openDB(t)
 	now := time.Now().UTC()
 	w := newTestWorker(d, now)
-	RegisterPublishHandlers(w, d, NewEnqueuer(d))
+	RegisterPublishHandlers(w, d)
 
 	// No article with id 99999; the handler must succeed so the job completes.
 	runPublishJob(t, d, w, now, KindPublishArticle, publishArticlePayload{ArticleID: 99999})
@@ -291,7 +291,7 @@ func TestPublishPageDueFlipsWithoutCreatedAtBackfill(t *testing.T) {
 	d := openDB(t)
 	now := time.Now().UTC()
 	w := newTestWorker(d, now)
-	RegisterPublishHandlers(w, d, NewEnqueuer(d))
+	RegisterPublishHandlers(w, d)
 
 	scheduledAt := now.Add(-time.Hour).Unix()
 	id := insertScheduledPage(t, d, domain.StatusSchedule, &scheduledAt)
@@ -310,11 +310,54 @@ func TestPublishPageDueFlipsWithoutCreatedAtBackfill(t *testing.T) {
 	}
 }
 
+// A failure between the guarded update and the follow-up enqueues must roll
+// the flip back, so the rescheduled job retries the whole publish instead of
+// finding the snapshot consumed. The unparseable platforms snapshot stands in
+// for an enqueue failure (same rollback path).
+func TestPublishArticleEnqueueFailureRollsBackFlip(t *testing.T) {
+	d := openDB(t)
+	now := time.Now().UTC()
+	w := newTestWorker(d, now)
+	RegisterPublishHandlers(w, d)
+
+	scheduledAt := now.Add(-time.Hour).Unix()
+	id := insertScheduledArticle(t, d, domain.StatusSchedule, &scheduledAt, "not-json", 1)
+
+	runPublishJob(t, d, w, now, KindPublishArticle, publishArticlePayload{ArticleID: id})
+
+	a := getArticle(t, d, id)
+	if a.status != domain.StatusSchedule {
+		t.Errorf("status = %v, want schedule (flip must roll back with the failed handler)", a.status)
+	}
+	if !a.scheduledAt.Valid || a.scheduledAt.Int64 != scheduledAt {
+		t.Errorf("scheduled_at = %v, want %d (unchanged)", a.scheduledAt, scheduledAt)
+	}
+	if a.platforms != "not-json" || a.newsletter != 1 {
+		t.Errorf("snapshot = %q/%d, want unchanged not-json/1", a.platforms, a.newsletter)
+	}
+	if n := countJobs(t, d, KindCrosspost); n != 0 {
+		t.Errorf("crosspost jobs = %d, want 0", n)
+	}
+	if n := countJobs(t, d, KindSendNewsletter); n != 0 {
+		t.Errorf("newsletter jobs = %d, want 0", n)
+	}
+
+	// The publish job itself was rescheduled, so a later retry can succeed.
+	var status string
+	var attempts int64
+	if err := d.QueryRow(`SELECT status, attempts FROM job_runs WHERE kind = ?`, KindPublishArticle).Scan(&status, &attempts); err != nil {
+		t.Fatalf("load publish job: %v", err)
+	}
+	if status != "queued" || attempts != 1 {
+		t.Errorf("publish job = %q attempts %d, want queued attempts 1 (retryable)", status, attempts)
+	}
+}
+
 func TestPublishPageSkips(t *testing.T) {
 	d := openDB(t)
 	now := time.Now().UTC()
 	w := newTestWorker(d, now)
-	RegisterPublishHandlers(w, d, NewEnqueuer(d))
+	RegisterPublishHandlers(w, d)
 
 	past := now.Add(-time.Hour).Unix()
 	future := now.Add(time.Hour).Unix()

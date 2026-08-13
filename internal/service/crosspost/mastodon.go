@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -84,7 +85,11 @@ func (p mastodonPlatform) Post(ctx context.Context, cfg query.Crosspost, in Post
 			slog.Warn("mastodon: image upload failed", "filename", img.Filename, "error", err)
 			continue
 		}
-		mediaIDs = append(mediaIDs, id)
+		// uploadMedia can return ("", nil) (bad server URL, 2xx without an
+		// id); an empty media_ids[]= value is a 422, so skip it.
+		if id != "" {
+			mediaIDs = append(mediaIDs, id)
+		}
 	}
 
 	u, err := mastodonAPIURL(cfg.ServerUrl.String, "/api/v1/statuses")
@@ -187,7 +192,8 @@ func (p mastodonPlatform) uploadMedia(ctx context.Context, cfg query.Crosspost, 
 }
 
 // escapeQuotes mirrors the Rails multipart filename escaping: CR/LF stripped,
-// double quotes backslash-escaped, so the filename cannot break out of the
+// backslashes and double quotes backslash-escaped (backslash first, like
+// mime/multipart's escapeQuotes), so the filename cannot break out of the
 // Content-Disposition header.
 func escapeQuotes(s string) string {
 	s = strings.Map(func(r rune) rune {
@@ -196,6 +202,7 @@ func escapeQuotes(s string) string {
 		}
 		return r
 	}, s)
+	s = strings.ReplaceAll(s, `\`, `\\`)
 	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
@@ -268,7 +275,11 @@ func mastodonAPIURL(serverURL, endpoint string) (string, error) {
 
 	host := u.Hostname()
 	if port := u.Port(); port != "" && !isDefaultMastodonPort(u.Scheme, port) {
-		host += ":" + port
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		// IPv6 literal with a default (or no) port: url.URL.Host needs
+		// brackets to stay parseable (net.JoinHostPort adds them above).
+		host = "[" + host + "]"
 	}
 	path := u.Path
 	if path == "" {

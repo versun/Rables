@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"rables/internal/domain"
 	"rables/internal/jobs"
 )
 
@@ -59,10 +61,17 @@ func TestRSSSafeRemoteURL(t *testing.T) {
 		{"reserved 240.x", "http://blog.example/", []string{"240.0.0.1"}, false},
 		{"192.0.0.x", "http://blog.example/", []string{"192.0.0.9"}, false},
 		{"benchmark 198.18.x", "http://blog.example/", []string{"198.18.0.1"}, false},
+		{"ipv6 unspecified", "http://blog.example/", []string{"::"}, false},
 		{"ipv6 loopback", "http://blog.example/", []string{"::1"}, false},
 		{"ipv6 ula", "http://blog.example/", []string{"fd00::1"}, false},
 		{"ipv6 link local", "http://blog.example/", []string{"fe80::1"}, false},
 		{"ipv6 public", "http://blog.example/", []string{"2606:4700::1111"}, true},
+		// NAT64 well-known prefix (RFC 6052): the embedded IPv4 is checked
+		// against the same blocklist (64:ff9b::a9fe:a9fe = 169.254.169.254).
+		{"nat64 embeds link local", "http://blog.example/", []string{"64:ff9b::a9fe:a9fe"}, false},
+		{"nat64 embeds loopback", "http://blog.example/", []string{"64:ff9b::7f00:1"}, false},
+		{"nat64 embeds public", "http://blog.example/", []string{"64:ff9b::5db8:d822"}, true},
+		{"nat64 local-use", "http://blog.example/", []string{"64:ff9b:1::1"}, false},
 		{"one bad among many", "http://blog.example/", []string{"93.184.216.34", "192.168.0.1"}, false},
 		{"dns failure", "http://gone.example/", nil, false},
 		{"empty answer", "http://empty.example/", []string{}, false},
@@ -95,10 +104,21 @@ func TestRSSSafeRemoteURLLiterals(t *testing.T) {
 	}{
 		{"http://127.0.0.1:8080/feed", false},
 		{"http://[::1]/feed", false},
+		{"http://[::]/feed", false},
 		{"http://[fe80::1]/feed", false},
 		{"http://10.1.2.3/feed", false},
 		{"http://93.184.216.34/feed", true},
 		{"http://[2606:4700::1111]/feed", true},
+		// NAT64 literals: the embedded IPv4 decides (link-local blocked,
+		// public allowed); the local-use range is blocked outright.
+		{"http://[64:ff9b::a9fe:a9fe]/feed", false},
+		{"http://[64:ff9b::5db8:d822]/feed", true},
+		{"http://[64:ff9b:1::1]/feed", false},
+		// Zoned literals: Prefix.Contains never matches them (the zone is
+		// not part of the address bits), so they are refused outright.
+		{"http://[::1%25lo0]/feed", false},
+		{"http://[fe80::1%25eth0]/feed", false},
+		{"http://[2606:4700::1111%25eth0]/feed", false},
 	} {
 		if got := imp.safeRemoteURL(context.Background(), tt.url); got != tt.want {
 			t.Errorf("safeRemoteURL(%q) = %v, want %v", tt.url, got, tt.want)
@@ -317,6 +337,50 @@ func TestRSSImportImages(t *testing.T) {
 	}
 }
 
+// TestRSSImportSanitizesContent stores feed content through the same
+// sanitize/lazy-load write path as admin-saved articles: script markup and
+// event-handler attributes must not survive into content_html.
+func TestRSSImportSanitizesContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>x</title>
+<item>
+  <title>Evil</title>
+  <link>https://blog.example/posts/evil</link>
+  <content:encoded>&lt;p&gt;hi&lt;/p&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src="https://blog.example/x.png" onerror="alert(2)"/&gt;</content:encoded>
+</item>
+</channel></rss>`)
+	}))
+	defer srv.Close()
+
+	database, dataDir := newTestDB(t)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: stubLookup(nil)}
+	result, err := imp.Import(context.Background(), srv.URL+"/feed", false)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != 1 {
+		t.Fatalf("imported = %d, want 1", result.Imported)
+	}
+	var content string
+	if err := database.QueryRow(`SELECT content_html FROM articles WHERE slug = 'evil'`).Scan(&content); err != nil {
+		t.Fatalf("query article: %v", err)
+	}
+	for _, banned := range []string{"<script", "onerror"} {
+		if strings.Contains(content, banned) {
+			t.Errorf("content_html contains %q: %q", banned, content)
+		}
+	}
+	if !strings.Contains(content, "<p>hi</p>") {
+		t.Errorf("content_html lost the legit paragraph: %q", content)
+	}
+	if !strings.Contains(content, `loading="lazy"`) {
+		t.Errorf("content_html missing lazy loading on the image: %q", content)
+	}
+}
+
 // TestRSSImportJobEndToEnd drives an RSS import through job_runs and checks
 // the activity rows mirror ImportFromRssJob.
 func TestRSSImportJobEndToEnd(t *testing.T) {
@@ -327,7 +391,7 @@ func TestRSSImportJobEndToEnd(t *testing.T) {
 
 	database, dataDir := newTestDB(t)
 	worker := jobs.NewWorker(database)
-	RegisterImportHandlers(worker, database, dataDir)
+	RegisterImportHandlers(worker, database, dataDir, nil)
 
 	// The worker-side handler uses the real resolver; enqueue a payload the
 	// importer stub cannot see, so drive the importer through the handler
@@ -368,5 +432,378 @@ func TestRSSImportJobEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(description, `source="rss"`) || !strings.Contains(description, "unsafe feed URL") {
 		t.Errorf("failed description = %q, want source=url and the SSRF error", description)
+	}
+}
+
+// TestRSSImportDotOnlySlug rejects entries whose link's last segment is only
+// dots ("." , "..", "..."): GenerateSlug strips the dots to a blank slug,
+// which would otherwise insert an article no URL can reach.
+func TestRSSImportDotOnlySlug(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>x</title>
+<item>
+  <title>Dot</title>
+  <link>https://blog.example/posts/.</link>
+  <content:encoded>&lt;p&gt;dot&lt;/p&gt;</content:encoded>
+</item>
+<item>
+  <title>Dot Dot</title>
+  <link>https://blog.example/posts/..</link>
+  <content:encoded>&lt;p&gt;dotdot&lt;/p&gt;</content:encoded>
+</item>
+<item>
+  <title>Triple Dot</title>
+  <link>https://blog.example/posts/...</link>
+  <content:encoded>&lt;p&gt;triple&lt;/p&gt;</content:encoded>
+</item>
+<item>
+  <title>Fine</title>
+  <link>https://blog.example/posts/fine</link>
+  <content:encoded>&lt;p&gt;fine&lt;/p&gt;</content:encoded>
+</item>
+</channel></rss>`)
+	}))
+	defer srv.Close()
+
+	database, dataDir := newTestDB(t)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: stubLookup(nil)}
+	result, err := imp.Import(context.Background(), srv.URL+"/feed", false)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != 1 || result.Failed != 3 {
+		t.Errorf("result = %+v, want imported=1 failed=3", result)
+	}
+	var blank int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM articles WHERE slug IS NULL OR TRIM(slug) = ''`).Scan(&blank); err != nil {
+		t.Fatal(err)
+	}
+	if blank != 0 {
+		t.Errorf("articles with blank slug = %d, want 0", blank)
+	}
+}
+
+// TestRSSImportBatchSlug refuses entries whose link ends in an admin batch
+// action: POST /admin/posts/batch_publish etc. are static chi routes, so the
+// update of an article imported under such a slug would be swallowed by the
+// batch handler (same reservation articles.Save enforces).
+func TestRSSImportBatchSlug(t *testing.T) {
+	var items strings.Builder
+	for _, slug := range domain.AdminArticleBatchSlugs {
+		fmt.Fprintf(&items, `
+<item>
+  <title>%s</title>
+  <link>https://blog.example/posts/%s</link>
+  <content:encoded>&lt;p&gt;body&lt;/p&gt;</content:encoded>
+</item>`, slug, slug)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>x</title>%s
+</channel></rss>`, items.String())
+	}))
+	defer srv.Close()
+
+	database, dataDir := newTestDB(t)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: stubLookup(nil)}
+	result, err := imp.Import(context.Background(), srv.URL+"/feed", false)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != 0 || result.Failed != len(domain.AdminArticleBatchSlugs) {
+		t.Errorf("result = %+v, want imported=0 failed=%d", result, len(domain.AdminArticleBatchSlugs))
+	}
+	var n int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM articles`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("articles = %d, want 0", n)
+	}
+}
+
+// TestRSSImportImagesDedup downloads a repeated image URL only once, even
+// across entries: every img tag is rewritten to the same local file.
+func TestRSSImportImagesDedup(t *testing.T) {
+	const pngHeader = "\x89PNG\r\n\x1a\n"
+	var srvURL string
+	var hits int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/feed", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>x</title>
+<item>
+  <title>One</title>
+  <link>https://blog.example/posts/one</link>
+  <content:encoded>&lt;p&gt;&lt;img src=%q/&gt;&lt;img src=%[1]q/&gt;&lt;/p&gt;</content:encoded>
+</item>
+<item>
+  <title>Two</title>
+  <link>https://blog.example/posts/two</link>
+  <content:encoded>&lt;p&gt;&lt;img src=%[1]q/&gt;&lt;/p&gt;</content:encoded>
+</item>
+</channel></rss>`, srvURL+"/img/pic.png")
+	})
+	mux.HandleFunc("/img/pic.png", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "image/png")
+		fmt.Fprint(w, pngHeader+"fake")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	srvURL = srv.URL
+
+	database, dataDir := newTestDB(t)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: stubLookup(nil)}
+	result, err := imp.Import(context.Background(), srv.URL+"/feed", true)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != 2 {
+		t.Fatalf("imported = %d, want 2", result.Imported)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("image downloads = %d, want 1", got)
+	}
+	if got := tableCount(t, database, "files"); got != 1 {
+		t.Fatalf("files = %d, want 1 (one image stored)", got)
+	}
+	var key string
+	if err := database.QueryRow(`SELECT key FROM files`).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	local := "/files/" + key
+	for slug, want := range map[string]int{"one": 2, "two": 1} {
+		var content string
+		if err := database.QueryRow(`SELECT content_html FROM articles WHERE slug = ?`, slug).Scan(&content); err != nil {
+			t.Fatalf("query %s: %v", slug, err)
+		}
+		if got := strings.Count(content, local); got != want {
+			t.Errorf("%s: %q count = %d, want %d: %q", slug, local, got, want, content)
+		}
+	}
+}
+
+// TestRSSImportImagesCap downloads at most MaxImportImages distinct images
+// per import; img tags past the cap keep their original src.
+func TestRSSImportImagesCap(t *testing.T) {
+	var srvURL string
+	var hits int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/feed", func(w http.ResponseWriter, r *http.Request) {
+		var imgs strings.Builder
+		for i := 0; i < MaxImportImages+5; i++ {
+			fmt.Fprintf(&imgs, "&lt;img src=%q/&gt;", fmt.Sprintf("%s/img/%d.png", srvURL, i))
+		}
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>x</title>
+<item>
+  <title>Many Images</title>
+  <link>https://blog.example/posts/many-images</link>
+  <content:encoded>&lt;p&gt;%s&lt;/p&gt;</content:encoded>
+</item>
+</channel></rss>`, imgs.String())
+	})
+	mux.HandleFunc("/img/", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "image/png")
+		fmt.Fprint(w, "\x89PNG\r\n\x1a\nfake")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	srvURL = srv.URL
+
+	database, dataDir := newTestDB(t)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: stubLookup(nil)}
+	result, err := imp.Import(context.Background(), srv.URL+"/feed", true)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != 1 {
+		t.Fatalf("imported = %d, want 1", result.Imported)
+	}
+	if got := atomic.LoadInt32(&hits); got != MaxImportImages {
+		t.Errorf("image downloads = %d, want %d", got, MaxImportImages)
+	}
+	if got := tableCount(t, database, "files"); got != MaxImportImages {
+		t.Errorf("files = %d, want %d", got, MaxImportImages)
+	}
+	var content string
+	if err := database.QueryRow(`SELECT content_html FROM articles WHERE slug = 'many-images'`).Scan(&content); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(content, "/files/"); got != MaxImportImages {
+		t.Errorf("rewritten srcs = %d, want %d", got, MaxImportImages)
+	}
+	overflow := fmt.Sprintf("%s/img/%d.png", srvURL, MaxImportImages)
+	if !strings.Contains(content, overflow) {
+		t.Errorf("img past the cap should keep its original src %q", overflow)
+	}
+}
+
+// TestRSSImportImagesDNSCap puts MaxImportImages+5 imgs on distinct
+// wildcard-style hosts; the seen-src cap must bound the SSRF check's DNS
+// lookups to MaxImportImages, and imgs past the cap keep their original
+// src. The img hosts resolve to a private address so no download runs.
+func TestRSSImportImagesDNSCap(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/feed", func(w http.ResponseWriter, r *http.Request) {
+		var imgs strings.Builder
+		for i := 0; i < MaxImportImages+5; i++ {
+			fmt.Fprintf(&imgs, "&lt;img src=%q/&gt;", fmt.Sprintf("http://img-%d.evil.example/pic.png", i))
+		}
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>x</title>
+<item>
+  <title>DNS Amplification</title>
+  <link>https://blog.example/posts/dns-amplification</link>
+  <content:encoded>&lt;p&gt;%s&lt;/p&gt;</content:encoded>
+</item>
+</channel></rss>`, imgs.String())
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var lookups int32
+	lookup := func(_ context.Context, host string) ([]netip.Addr, error) {
+		if strings.HasSuffix(host, ".evil.example") {
+			atomic.AddInt32(&lookups, 1)
+			return []netip.Addr{netip.MustParseAddr("10.0.0.5")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
+
+	database, dataDir := newTestDB(t)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: lookup}
+	result, err := imp.Import(context.Background(), srv.URL+"/feed", true)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != 1 {
+		t.Fatalf("imported = %d, want 1", result.Imported)
+	}
+	if got := atomic.LoadInt32(&lookups); got != MaxImportImages {
+		t.Errorf("img host DNS lookups = %d, want %d", got, MaxImportImages)
+	}
+	var content string
+	if err := database.QueryRow(`SELECT content_html FROM articles WHERE slug = 'dns-amplification'`).Scan(&content); err != nil {
+		t.Fatal(err)
+	}
+	overflow := fmt.Sprintf("http://img-%d.evil.example/pic.png", MaxImportImages)
+	if !strings.Contains(content, overflow) {
+		t.Errorf("img past the cap should keep its original src %q", overflow)
+	}
+}
+
+// TestRSSImportOversizedItemContent: an entry whose content exceeds
+// MaxItemContentBytes skips the image-rewriting tree walk entirely — the img
+// keeps its original src, its host is never resolved, nothing is downloaded —
+// while the content is still sanitized on the way in.
+func TestRSSImportOversizedItemContent(t *testing.T) {
+	var cdnLookups int32
+	lookup := func(ctx context.Context, host string) ([]netip.Addr, error) {
+		if host == "cdn.example" {
+			atomic.AddInt32(&cdnLookups, 1)
+		}
+		return stubLookup(nil)(ctx, host)
+	}
+	// content:encoded is XML-escaped, so the feed body stays well under the
+	// 20MB response limit while the decoded content clears the per-item cap.
+	padding := strings.Repeat("&lt;p&gt;x&lt;/p&gt;", MaxItemContentBytes/8+1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>x</title>
+<item>
+  <title>Big</title>
+  <link>https://blog.example/posts/big</link>
+  <content:encoded>&lt;p&gt;&lt;img src="http://cdn.example/pic.png"/&gt;&lt;script&gt;alert(1)&lt;/script&gt;%s&lt;/p&gt;</content:encoded>
+</item>
+</channel></rss>`, padding)
+	}))
+	defer srv.Close()
+
+	database, dataDir := newTestDB(t)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: lookup}
+	result, err := imp.Import(context.Background(), srv.URL+"/feed", true)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != 1 {
+		t.Fatalf("imported = %d, want 1", result.Imported)
+	}
+	var content string
+	if err := database.QueryRow(`SELECT content_html FROM articles WHERE slug = 'big'`).Scan(&content); err != nil {
+		t.Fatalf("query article: %v", err)
+	}
+	if !strings.Contains(content, `src="http://cdn.example/pic.png"`) {
+		t.Errorf("oversized content should keep the original img src")
+	}
+	if strings.Contains(content, "<script") {
+		t.Errorf("oversized content must still be sanitized")
+	}
+	if strings.Contains(content, `loading="lazy"`) {
+		t.Errorf("oversized content should skip the lazy-loading pass")
+	}
+	if got := atomic.LoadInt32(&cdnLookups); got != 0 {
+		t.Errorf("cdn.example DNS lookups = %d, want 0 (tree walk skipped)", got)
+	}
+	if got := tableCount(t, database, "files"); got != 0 {
+		t.Errorf("files = %d, want 0 (no image downloaded)", got)
+	}
+}
+
+// TestRSSImportItemsCap imports at most MaxImportItems entries per run;
+// entries past the cap count as failed and never reach the articles table.
+func TestRSSImportItemsCap(t *testing.T) {
+	var items strings.Builder
+	for i := 0; i < MaxImportItems+5; i++ {
+		fmt.Fprintf(&items, `
+<item>
+  <title>Post %d</title>
+  <link>https://blog.example/posts/post-%d</link>
+  <content:encoded>&lt;p&gt;body&lt;/p&gt;</content:encoded>
+</item>`, i, i)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>x</title>%s
+</channel></rss>`, items.String())
+	}))
+	defer srv.Close()
+
+	database, dataDir := newTestDB(t)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: stubLookup(nil)}
+	result, err := imp.Import(context.Background(), srv.URL+"/feed", false)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != MaxImportItems || result.Failed != 5 {
+		t.Errorf("result = %+v, want imported=%d failed=5", result, MaxImportItems)
+	}
+	if got := tableCount(t, database, "articles"); got != MaxImportItems {
+		t.Errorf("articles = %d, want %d", got, MaxImportItems)
+	}
+	// The first entries win; one past the cap must not exist.
+	var n int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM articles WHERE slug = ?`, fmt.Sprintf("post-%d", MaxImportItems)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("entry past the cap was imported (slug post-%d)", MaxImportItems)
 	}
 }

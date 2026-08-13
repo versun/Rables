@@ -84,10 +84,31 @@ func vacuumInto(ctx context.Context, db *sql.DB, dest string) error {
 // data/files into <stage>.zip (entries sorted, relative slash paths).
 // Files that do not match the blob layout (xx/yy/<key>) are skipped, so
 // litter like .DS_Store never makes it into a backup.
+//
+// The zip is assembled inside the staging directory and renamed to its final
+// name only once complete: a crash mid-write (SIGKILL/OOM) then leaves a
+// stale export_* staging dir - reaped by the scheduler's cleanOldExports -
+// instead of a truncated export_*.zip sitting in the admin download list.
 func (e *BundleExporter) zipBundle(stage, dbCopy string) (string, error) {
 	// entries: zip entry name -> disk path
 	entries := map[string]string{"rables.db": dbCopy}
 	filesRoot := filepath.Join(e.DataDir, "files")
+	// WalkDir does not follow a symlinked root: resolve it so a files/ tree
+	// symlinked to another disk is actually scanned, and fail when the root
+	// exists but is not a directory. A backup must not silently omit media.
+	if resolved, err := filepath.EvalSymlinks(filesRoot); err == nil {
+		filesRoot = resolved
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("export: scan media files: %w", err)
+	} else if _, lerr := os.Lstat(filesRoot); lerr == nil {
+		// EvalSymlinks says "not exist" but Lstat sees the entry: a dangling
+		// symlink (e.g. an unmounted media disk). Failing beats exporting a
+		// bundle with zero blobs while reporting success.
+		return "", fmt.Errorf("export: scan media files: %s: %w", filesRoot, err)
+	}
+	if info, err := os.Stat(filesRoot); err == nil && !info.IsDir() {
+		return "", fmt.Errorf("export: scan media files: %s is not a directory", filesRoot)
+	}
 	walkErr := filepath.WalkDir(filesRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if path == filesRoot && os.IsNotExist(err) {
@@ -114,7 +135,8 @@ func (e *BundleExporter) zipBundle(stage, dbCopy string) (string, error) {
 	}
 
 	zipPath := stage + ".zip"
-	out, err := os.Create(zipPath)
+	tempPath := filepath.Join(stage, "bundle.zip")
+	out, err := os.Create(tempPath)
 	if err != nil {
 		return "", err
 	}
@@ -129,18 +151,22 @@ func (e *BundleExporter) zipBundle(stage, dbCopy string) (string, error) {
 		if err := addZipEntry(zw, name, entries[name]); err != nil {
 			zw.Close()
 			out.Close()
-			os.Remove(zipPath)
+			os.Remove(tempPath)
 			return "", fmt.Errorf("export: pack %s: %w", name, err)
 		}
 	}
 	if err := zw.Close(); err != nil {
 		out.Close()
-		os.Remove(zipPath)
+		os.Remove(tempPath)
 		return "", fmt.Errorf("export: finalize zip: %w", err)
 	}
 	if err := out.Close(); err != nil {
-		os.Remove(zipPath)
+		os.Remove(tempPath)
 		return "", fmt.Errorf("export: finalize zip: %w", err)
+	}
+	if err := os.Rename(tempPath, zipPath); err != nil {
+		os.Remove(tempPath)
+		return "", fmt.Errorf("export: rename zip: %w", err)
 	}
 	return zipPath, nil
 }

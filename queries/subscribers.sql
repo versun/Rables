@@ -4,7 +4,12 @@
 SELECT * FROM subscribers WHERE id = ?;
 
 -- name: GetSubscriberByEmail :one
-SELECT * FROM subscribers WHERE email = ?;
+-- COLLATE NOCASE so legacy rows imported with mixed-case emails still match;
+-- writes are normalized to lowercase by subscribersvc.NormalizeEmail. The
+-- email UNIQUE index is BINARY, so case-variant duplicates can coexist;
+-- ORDER BY (email = ?) DESC puts an exact-case match first instead of
+-- returning an arbitrary row from the full scan.
+SELECT * FROM subscribers WHERE email = ?1 COLLATE NOCASE ORDER BY (email = ?1) DESC;
 
 -- name: GetSubscriberByConfirmationToken :one
 SELECT * FROM subscribers WHERE confirmation_token = ?;
@@ -31,6 +36,13 @@ UPDATE subscribers SET unsubscribed_at = ?, updated_at = ? WHERE id = ?;
 -- confirmation state resets and a fresh confirmation token is issued.
 -- name: ResetSubscriberForResubscribe :exec
 UPDATE subscribers SET confirmed_at = NULL, unsubscribed_at = NULL, confirmation_token = ?, updated_at = ?
+WHERE id = ?;
+
+-- Re-subscribe of a legacy imported row whose confirmation token is blank
+-- (imports keep token columns verbatim): Subscriber#generate_tokens fills
+-- blanks on every save, so mint the token the confirmation email links to.
+-- name: SetSubscriberConfirmationToken :exec
+UPDATE subscribers SET confirmation_token = ?, updated_at = ?
 WHERE id = ?;
 
 -- name: DeleteSubscriber :exec

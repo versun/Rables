@@ -178,7 +178,9 @@ func TestAdminJobsPagination(t *testing.T) {
 		t.Errorf("page 2 missing the oldest row")
 	}
 
-	for _, bad := range []string{"?page=0", "?page=-1", "?page=abc", "?page=1.5"} {
+	// The 19-digit page guards the int64 offset overflow (maxAdminPageNumber),
+	// same as the articles list.
+	for _, bad := range []string{"?page=0", "?page=-1", "?page=abc", "?page=1.5", "?page=9223372036854775807"} {
 		rec = doRequest(t, h, http.MethodGet, "/admin/jobs"+bad, nil, session)
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("index %q: status = %d, want 404", bad, rec.Code)

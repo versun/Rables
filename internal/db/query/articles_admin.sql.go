@@ -836,10 +836,9 @@ type SearchAdminArticlesParams struct {
 }
 
 // Article.search_content: LIKE on title/slug/description/content_html with
-// ESCAPE '\'. The sqlc sqlite grammar rejects the ESCAPE keyword, so the
-// queries use the equivalent like(pattern, string, escape) function form.
-// The caller pre-escapes %, _ and backslash, then wraps the term in %...%
-// (sanitize_sql_like semantics).
+// ESCAPE '\', written in the equivalent like(pattern, string, escape)
+// function form. The caller pre-escapes %, _ and backslash, then wraps the
+// term in %...% (sanitize_sql_like semantics).
 func (q *Queries) SearchAdminArticles(ctx context.Context, arg SearchAdminArticlesParams) ([]Article, error) {
 	rows, err := q.db.QueryContext(ctx, searchAdminArticles,
 		arg.LIKE,

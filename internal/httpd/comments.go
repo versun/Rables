@@ -28,7 +28,7 @@ const commentCreateBurst = 5
 // the integrator.
 func RegisterCommentRoutes(r chi.Router, s *Server) {
 	limiter := NewIPRateLimiter(rate.Every(3*time.Minute/commentCreateBurst), commentCreateBurst)
-	r.With(RateLimit(limiter, ClientIP)).Post("/comments", s.createComment)
+	r.With(RateLimit(limiter, s.rateLimitKey)).Post("/comments", s.createComment)
 }
 
 // Enqueuer returns the shared job enqueuer, creating it on first use.
@@ -53,20 +53,29 @@ type commentableTarget struct {
 // (HTML form path only): captcha check, moderation-safe defaults, redirect
 // back with a flash. Successful submissions are always pending.
 func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	// Same capped form parse as subscriptionsCreate (the form has only text
+	// fields).
+	if !parseCappedForm(w, r) {
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 
 	target, err := s.resolveCommentable(r)
+	if errors.Is(err, errCommentableNotFound) {
+		s.redirectWithFlash(w, r, "/", templates.Flash{Alert: "Article or page not found."})
+		return
+	}
 	if err != nil {
-		SetFlash(w, templates.Flash{Alert: "Article or page not found."})
-		http.Redirect(w, r, "/", http.StatusFound)
+		// A real query failure (e.g. the DB is down) must not masquerade as
+		// "not found".
+		s.Log.Error("resolve commentable", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	back := func(alert string) {
-		SetFlash(w, templates.Flash{Alert: alert})
-		http.Redirect(w, r, target.redirectPath, http.StatusFound)
+		s.redirectWithFlash(w, r, target.redirectPath, templates.Flash{Alert: alert})
 	}
 
 	cap := captcha.New(s.Cfg.HMACSecret, captcha.TTL)
@@ -96,8 +105,17 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.FormValue("comment[parent_id]")); raw != "" {
 		if parentID, err := strconv.ParseInt(raw, 10, 64); err == nil && parentID > 0 {
 			comment.ParentID = sql.NullInt64{Int64: parentID, Valid: true}
-			if p, err := s.Q.GetCommentByID(r.Context(), parentID); err == nil {
+			p, err := s.Q.GetCommentByID(r.Context(), parentID)
+			switch {
+			case err == nil:
 				parent = &p
+			case errors.Is(err, sql.ErrNoRows):
+				// Parent stays nil; the validation below reports it.
+			default:
+				// A real query failure must not masquerade as "not found".
+				s.Log.Error("resolve comment parent", "error", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
 			}
 		}
 	}
@@ -124,15 +142,20 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	SetFlash(w, templates.Flash{Notice: "Your comment will be reviewed before being published."})
-	http.Redirect(w, r, target.redirectPath, http.StatusFound)
+	s.redirectWithFlash(w, r, target.redirectPath, templates.Flash{Notice: "Your comment will be reviewed before being published."})
 }
 
 // resolveCommentable mirrors set_commentable: find the article/page by slug
-// and accept comments only for publish/shared content with comment=1.
+// and accept comments only for publish/shared content with comment=1. A
+// missing row maps to errCommentableNotFound; any other query error is
+// returned as-is so the caller can tell a genuine DB failure apart from
+// "not found".
 func (s *Server) resolveCommentable(r *http.Request) (commentableTarget, error) {
 	if slug := r.FormValue("article_id"); slug != "" {
 		article, err := s.Q.GetCommentableArticleBySlug(r.Context(), sql.NullString{String: slug, Valid: true})
+		if errors.Is(err, sql.ErrNoRows) {
+			return commentableTarget{}, errCommentableNotFound
+		}
 		if err != nil {
 			return commentableTarget{}, err
 		}
@@ -147,6 +170,9 @@ func (s *Server) resolveCommentable(r *http.Request) (commentableTarget, error) 
 	}
 	if slug := r.FormValue("page_id"); slug != "" {
 		page, err := s.Q.GetCommentablePageBySlug(r.Context(), sql.NullString{String: slug, Valid: true})
+		if errors.Is(err, sql.ErrNoRows) {
+			return commentableTarget{}, errCommentableNotFound
+		}
 		if err != nil {
 			return commentableTarget{}, err
 		}

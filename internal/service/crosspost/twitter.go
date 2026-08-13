@@ -200,6 +200,11 @@ func (p twitterPlatform) tryTextOnlyTweet(ctx context.Context, client *http.Clie
 	slog.Warn("twitter: media tweet failed, retrying text-only", "error", originalErr)
 	resp, err := p.createTweet(ctx, client, buildTweetData(text, quoteTweetID, nil))
 	if err != nil {
+		// Worker shutdown: keep context.Canceled recognizable so the job is
+		// rescheduled, not marked permanently failed.
+		if errors.Is(err, context.Canceled) {
+			return "", err
+		}
 		if IsTransient(err) {
 			return "", err
 		}
@@ -279,7 +284,12 @@ func (p twitterPlatform) doJSON(ctx context.Context, client *http.Client, method
 			return nil, nil // Net::HTTPNoContent → nil
 		}
 		var out map[string]any
-		if err := json.Unmarshal(data, &out); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(data))
+		// UseNumber keeps id-sized integers exact: float64 rounds 64-bit
+		// snowflake ids (>2^53), corrupting tweet/media ids decoded as
+		// JSON numbers (see xDataID).
+		dec.UseNumber()
+		if err := dec.Decode(&out); err != nil {
 			return nil, nil // ResponseParser rescues JSON::ParserError → nil
 		}
 		return out, nil
@@ -300,8 +310,12 @@ func xErrorMessage(resp *http.Response, data []byte) string {
 		if errs, ok := parsed["errors"].([]any); ok {
 			messages := make([]string, 0, len(errs))
 			for _, e := range errs {
-				if m, ok := e.(map[string]any)["message"].(string); ok {
-					messages = append(messages, m)
+				m, ok := e.(map[string]any)
+				if !ok {
+					continue
+				}
+				if msg, ok := m["message"].(string); ok {
+					messages = append(messages, msg)
 				}
 			}
 			if len(messages) > 0 {
@@ -330,8 +344,8 @@ func xDataID(body map[string]any) string {
 	switch id := data["id"].(type) {
 	case string:
 		return id
-	case float64:
-		return fmt.Sprintf("%.0f", id)
+	case json.Number: // doJSON decodes with UseNumber: the exact id string
+		return id.String()
 	default:
 		return ""
 	}
@@ -341,8 +355,10 @@ func xDataID(body map[string]any) string {
 // response.dig("errors").first.dig("message") || "Unknown error".
 func extractTweetErrorMessage(resp map[string]any) string {
 	if errs, ok := resp["errors"].([]any); ok && len(errs) > 0 {
-		if msg, ok := errs[0].(map[string]any)["message"].(string); ok && msg != "" {
-			return msg
+		if m, ok := errs[0].(map[string]any); ok {
+			if msg, ok := m["message"].(string); ok && msg != "" {
+				return msg
+			}
 		}
 	}
 	return "Unknown error"

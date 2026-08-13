@@ -61,6 +61,43 @@ func TestRenderNonAdminPageHasNoAdminChrome(t *testing.T) {
 	}
 }
 
+// The account page (/users/current/edit) renders inside the admin shell even
+// though its name does not start with "admin_" (Rails UsersController).
+func TestRenderAccountPageUsesAdminLayout(t *testing.T) {
+	data := struct {
+		Flash Flash
+		User  struct {
+			ID       int64
+			UserName string
+		}
+	}{}
+	data.User.ID = 1
+	data.User.UserName = "alice"
+
+	r, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var b strings.Builder
+	if err := r.Render(&b, "auth_password_edit", data); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	out := b.String()
+
+	wants := []string{
+		"admin-sidebar",          // admin shell sidebar
+		`<link rel="stylesheet" href="/assets/admin.css">`,
+		"<title>Account Settings</title>",
+		`action="/users/1"`,
+		`value="alice"`,
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\ngot:\n%s", want, out)
+		}
+	}
+}
+
 func TestRenderUnknownPage(t *testing.T) {
 	r, err := New()
 	if err != nil {

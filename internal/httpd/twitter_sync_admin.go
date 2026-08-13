@@ -86,7 +86,7 @@ func (s *Server) twitterSyncShow(w http.ResponseWriter, r *http.Request) {
 		lastSynced = time.Unix(syncRow.LastSyncedAt.Int64, 0).In(tzLocation(tz)).Format("January 2, 2006 15:04")
 	}
 	s.render(w, http.StatusOK, "admin_twitter_sync", twitterSyncPageData{
-		Flash:          PopFlash(r, w),
+		Flash:          s.PopFlash(r, w),
 		Sync:           syncRow,
 		Schedules:      twitterSyncSchedules,
 		LastSyncedLong: lastSynced,
@@ -97,7 +97,15 @@ func (s *Server) twitterSyncShow(w http.ResponseWriter, r *http.Request) {
 // twitterSyncUpdate handles POST /admin/twitter_sync, mirroring #update: the
 // permitted twitter_sync params overlay the row; changing username or
 // start_date resets the cursor (since_id/last_synced_at/last_error), and a
-// username change also clears the resolved user_id.
+// username change also clears the resolved user_id. The cursor fields and
+// user_id are only ever cleared here, never written back from the row read
+// above, so a sync run committing between the read and these writes is not
+// rolled back. All three writes commit in one transaction: if a later write
+// failed after the config had landed, an admin retry would read the new
+// username/start_date, skip the reset, and the new account would keep
+// syncing from the old cursor. The mirror direction — a sync run's writes
+// landing after this update — is covered by the CAS guards on
+// SetTwitterSyncSuccess/SetTwitterSyncUserID.
 func (s *Server) twitterSyncUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -135,7 +143,7 @@ func (s *Server) twitterSyncUpdate(w http.ResponseWriter, r *http.Request) {
 	if len(errs) > 0 {
 		msg := strings.Join(errs, ", ")
 		activity.Log(ctx, s.DB, "error", "failed", "twitter_sync", "error="+activity.Quote(msg))
-		SetFlash(w, templates.Flash{Alert: msg})
+		s.SetFlash(w, templates.Flash{Alert: msg})
 		http.Redirect(w, r, "/admin/twitter_sync", http.StatusFound)
 		return
 	}
@@ -143,36 +151,49 @@ func (s *Server) twitterSyncUpdate(w http.ResponseWriter, r *http.Request) {
 	newUsername := sql.NullString{String: username, Valid: username != ""}
 	usernameChanged := newUsername.String != syncRow.Username.String
 	cursorReset := usernameChanged || startDate.String != syncRow.StartDate.String
-	if usernameChanged {
-		syncRow.UserID = sql.NullString{}
-	}
-	if cursorReset {
-		syncRow.SinceID = sql.NullString{}
-		syncRow.LastSyncedAt = sql.NullInt64{}
-		syncRow.LastError = sql.NullString{}
-	}
-	syncRow.Enabled = enabled
-	syncRow.Username = newUsername
-	syncRow.StartDate = startDate
-	syncRow.SyncSchedule = syncSchedule
 
-	if err := s.Q.UpdateTwitterSyncConfig(ctx, query.UpdateTwitterSyncConfigParams{
-		Enabled:      syncRow.Enabled,
-		Username:     syncRow.Username,
-		UserID:       syncRow.UserID,
-		StartDate:    syncRow.StartDate,
-		SyncSchedule: syncRow.SyncSchedule,
-		SinceID:      syncRow.SinceID,
-		LastSyncedAt: syncRow.LastSyncedAt,
-		LastError:    syncRow.LastError,
-		UpdatedAt:    time.Now().Unix(),
+	now := time.Now().Unix()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		s.Log.Error("update twitter sync", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+	q := s.Q.WithTx(tx)
+	if err := q.UpdateTwitterSyncConfig(ctx, query.UpdateTwitterSyncConfigParams{
+		Enabled:      enabled,
+		Username:     newUsername,
+		StartDate:    startDate,
+		SyncSchedule: syncSchedule,
+		UpdatedAt:    now,
 	}); err != nil {
 		s.Log.Error("update twitter sync", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if cursorReset {
+		if err := q.ResetTwitterSyncCursor(ctx, now); err != nil {
+			s.Log.Error("reset twitter sync cursor", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+	if usernameChanged {
+		// The guard matches the username written above in this transaction.
+		if _, err := q.SetTwitterSyncUserID(ctx, query.SetTwitterSyncUserIDParams{UpdatedAt: now, ExpectedUsername: newUsername}); err != nil {
+			s.Log.Error("clear twitter sync user id", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		s.Log.Error("commit twitter sync update", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	activity.Log(ctx, s.DB, "info", "updated", "twitter_sync", "")
-	SetFlash(w, templates.Flash{Notice: "Twitter sync settings updated successfully."})
+	s.SetFlash(w, templates.Flash{Notice: "Twitter sync settings updated successfully."})
 	http.Redirect(w, r, "/admin/twitter_sync", http.StatusFound)
 }
 
@@ -195,13 +216,23 @@ func (s *Server) twitterSyncNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if syncRow.Enabled != 1 || syncRow.Username.String == "" || !crosspostEnabled {
-		SetFlash(w, templates.Flash{Alert: "Twitter sync is not enabled or the X/Twitter credentials are missing. Enable it in the settings before syncing."})
+		s.SetFlash(w, templates.Flash{Alert: "Twitter sync is not enabled or the X/Twitter credentials are missing. Enable it in the settings before syncing."})
 		http.Redirect(w, r, "/admin/twitter_sync", http.StatusFound)
 		return
 	}
 	syncer := s.TwitterSyncer()
-	go func() { _ = syncer.Run(context.Background()) }()
-	SetFlash(w, templates.Flash{Notice: "Twitter sync has been queued."})
+	// The bare goroutine has no recovery (unlike scheduler.run and the job
+	// worker, which recover around the same Run), so an unrecovered panic
+	// would crash the whole process. Convert it to a log line.
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.Log.Error("twitter sync panicked", "panic", r)
+			}
+		}()
+		_ = syncer.Run(context.Background())
+	}()
+	s.SetFlash(w, templates.Flash{Notice: "Twitter sync has been queued."})
 	http.Redirect(w, r, "/admin/twitter_sync", http.StatusFound)
 }
 

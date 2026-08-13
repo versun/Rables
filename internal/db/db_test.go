@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -163,6 +165,25 @@ func TestOpenIdempotent(t *testing.T) {
 	}
 }
 
+// TestOpenSpecialCharPath guards the net/url DSN construction: a data
+// directory whose name contains characters that are special in a file: URI
+// ("?", "%", space, non-ASCII) must open and land at the intended path.
+func TestOpenSpecialCharPath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "weird ?% dir 数据")
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	if _, err := os.Stat(filepath.Join(dir, "rables.db")); err != nil {
+		t.Fatalf("database file not at the expected path: %v", err)
+	}
+	var one int
+	if err := db.QueryRow("SELECT 1").Scan(&one); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+}
+
 // TestMigrationsValidate is the library-level equivalent of `goose validate`:
 // it collects/parses every migration from the embedded FS, then runs the full
 // Up -> Down -> Up cycle against a scratch database.
@@ -191,6 +212,114 @@ func TestMigrationsValidate(t *testing.T) {
 	}
 	if got := len(userObjects(t, db, "table")); got != len(wantTables) {
 		t.Errorf("tables after re-Up: %d, want %d", got, len(wantTables))
+	}
+}
+
+// TestOpenRestrictsPermissions checks that Open creates the data directory
+// 0700 and pins the database file (session tokens, API keys) to 0600.
+func TestOpenRestrictsPermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat data dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("data dir mode = %o, want 700", got)
+	}
+	info, err = os.Stat(filepath.Join(dir, "rables.db"))
+	if err != nil {
+		t.Fatalf("stat database: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("database mode = %o, want 600", got)
+	}
+}
+
+// TestOpenRestrictsExistingDatabase covers upgrades: a database file left
+// over at 0644 by an older release is tightened to 0600 on open.
+func TestOpenRestrictsExistingDatabase(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	path := filepath.Join(dir, "rables.db")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod 644: %v", err)
+	}
+
+	db, err = Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat database: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("database mode after reopen = %o, want 600", got)
+	}
+}
+
+// TestOpenRestrictsWALPermissions checks that the WAL sidecar files, which
+// hold all new writes (session pages included) while the DB runs, are pinned
+// to 0600 alongside the main database file.
+func TestOpenRestrictsWALPermissions(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	// Force a write so the -wal file exists while the connection is open.
+	_, err = db.Exec(
+		"INSERT INTO articles (title, slug, status, created_at, updated_at) VALUES ('t', 't', 1, 10, 20)",
+	)
+	if err != nil {
+		t.Fatalf("insert article: %v", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		info, err := os.Stat(filepath.Join(dir, "rables.db"+suffix))
+		if err != nil {
+			t.Fatalf("stat rables.db%s: %v", suffix, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("rables.db%s mode = %o, want 600", suffix, got)
+		}
+	}
+}
+
+// TestOpenRestrictsExistingDataDir covers upgrades: a data directory left at
+// 0755 is tightened to 0700 on open (MkdirAll alone is a no-op there).
+func TestOpenRestrictsExistingDataDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod 755: %v", err)
+	}
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat data dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("data dir mode = %o, want 700", got)
 	}
 }
 

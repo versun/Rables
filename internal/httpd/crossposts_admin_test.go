@@ -166,6 +166,18 @@ func TestAdminCrosspostsUpdateValidation(t *testing.T) {
 			wantAlert: "Client key can't be blank, Client secret can't be blank, Access token can't be blank",
 		},
 		{
+			name:     "whitespace-only credentials count as blank",
+			platform: "mastodon",
+			form: url.Values{
+				"crosspost[platform]":      {"mastodon"},
+				"crosspost[enabled]":       {"0", "1"},
+				"crosspost[client_key]":    {" "},
+				"crosspost[client_secret]": {"cs"},
+				"crosspost[access_token]":  {"tok"},
+			},
+			wantAlert: "Client key can't be blank",
+		},
+		{
 			name:     "max characters must be positive",
 			platform: "bluesky",
 			form: url.Values{
@@ -241,6 +253,27 @@ func TestAdminCrosspostsUpdateJunkMaxCharacters(t *testing.T) {
 	_, _, _, maxChars := crosspostRow(t, s, "bluesky")
 	if maxChars.Valid {
 		t.Errorf("max_characters = %v, want NULL", maxChars)
+	}
+}
+
+// TestAdminCrosspostsUpdateTrimsServerURL: the format validation parses the
+// trimmed server_url, so the stored value must be trimmed too — a padded URL
+// otherwise passes validation and only fails when the publish job requests it.
+func TestAdminCrosspostsUpdateTrimsServerURL(t *testing.T) {
+	s, h := newCrosspostsTestServer(t)
+	session := settingsSession(t, s)
+
+	form := url.Values{
+		"crosspost[platform]":   {"mastodon"},
+		"crosspost[server_url]": {"  https://mastodon.example  "},
+	}
+	rec := doRequest(t, h, http.MethodPost, "/admin/crossposts/mastodon", form, session)
+	if flash := flashOf(t, rec); flash.Alert != "" {
+		t.Fatalf("alert = %q, want none", flash.Alert)
+	}
+	_, serverURL, _, _ := crosspostRow(t, s, "mastodon")
+	if serverURL != "https://mastodon.example" {
+		t.Errorf("server_url = %q, want trimmed", serverURL)
 	}
 }
 
@@ -328,6 +361,37 @@ func TestAdminCrosspostsVerifyMastodon(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if out.Status != "error" || !strings.Contains(out.Message, "Verification failed: 401") {
+		t.Errorf("result = %+v", out)
+	}
+}
+
+// TestAdminCrosspostsVerifyTrimsServerURL: like the save path, the verify
+// handler must trim server_url, otherwise a padded URL reaches
+// http.NewRequestWithContext and verification falsely fails.
+func TestAdminCrosspostsVerifyTrimsServerURL(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"acct":"user"}`))
+	}))
+	t.Cleanup(fake.Close)
+
+	s, h := newCrosspostsTestServer(t)
+	session := settingsSession(t, s)
+
+	form := url.Values{
+		"crosspost[platform]":     {"mastodon"},
+		"crosspost[server_url]":   {"  " + fake.URL + "  "},
+		"crosspost[access_token]": {"tok"},
+	}
+	rec := doRequest(t, h, http.MethodPost, "/admin/crossposts/mastodon/verify", form, session)
+	var out struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Status != "success" || out.Message != "Verified Successfully!" {
 		t.Errorf("result = %+v", out)
 	}
 }

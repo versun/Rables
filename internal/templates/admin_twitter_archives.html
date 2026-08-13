@@ -58,7 +58,7 @@
           <span class="truncate" title="{{.SourceFilename}}">{{.SourceFilename}}</span>
         </td>
         <td>
-          {{if eq .Status "done"}}
+          {{if eq .Status "completed"}}
             <span class="badge badge-success">{{.StatusLabel}}</span>
           {{else if eq .Status "failed"}}
             <span class="badge badge-danger">{{.StatusLabel}}</span>

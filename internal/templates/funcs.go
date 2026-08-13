@@ -5,6 +5,7 @@ import (
 	"html"
 	"html/template"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,11 +30,28 @@ func FuncMap() template.FuncMap {
 // (settings.time_zone semantics) using a Go reference-time layout. An unknown
 // or empty zone falls back to UTC.
 func FormatTime(unix int64, tzName, layout string) string {
+	return time.Unix(unix, 0).In(Location(tzName)).Format(layout)
+}
+
+// locations caches LoadLocation results by zone name: the time package only
+// caches UTC/Local internally, so every other LoadLocation re-reads and parses
+// the zoneinfo file — costly on public list pages where FormatTime runs once
+// or twice per article. The UTC fallback is cached too, so a bogus configured
+// zone does not re-parse on every call.
+var locations sync.Map // zone name -> *time.Location
+
+// Location resolves the IANA time zone tzName (settings.time_zone semantics),
+// falling back to UTC for an unknown or empty zone.
+func Location(tzName string) *time.Location {
+	if loc, ok := locations.Load(tzName); ok {
+		return loc.(*time.Location)
+	}
 	loc, err := time.LoadLocation(tzName)
 	if err != nil {
 		loc = time.UTC
 	}
-	return time.Unix(unix, 0).In(loc).Format(layout)
+	locations.Store(tzName, loc)
+	return loc
 }
 
 // PageItem is one element of a pagination window: a page number, or a gap

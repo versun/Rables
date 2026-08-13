@@ -56,7 +56,7 @@ func (s *Server) settingsEditForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "admin_setting_edit", settingsPageData{
-		Flash:           PopFlash(r, w),
+		Flash:           s.PopFlash(r, w),
 		Setting:         st,
 		SocialLinksJSON: prettySocialLinks(st.SocialLinks.String),
 	})
@@ -101,7 +101,11 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(socialLinksJSON) != "" {
 		normalized, err := settings.NormalizeSocialLinks(socialLinksJSON)
 		if err != nil {
-			s.renderSettingsForm(w, submitted, socialLinksJSON, "Social links JSON is invalid: not a JSON object.")
+			// Show the actual failure (syntax error, non-object top level,
+			// malformed entry); the "settings: " package prefix is internal
+			// noise in an admin-facing flash.
+			detail := strings.TrimPrefix(err.Error(), "settings: ")
+			s.renderSettingsForm(w, submitted, socialLinksJSON, "Social links JSON is invalid: "+detail+".")
 			return
 		}
 		submitted.SocialLinks = sql.NullString{String: normalized, Valid: true}
@@ -133,7 +137,7 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	SetFlash(w, templates.Flash{Notice: "Setting was successfully updated."})
+	s.SetFlash(w, templates.Flash{Notice: "Setting was successfully updated."})
 	http.Redirect(w, r, "/admin/setting/edit", http.StatusFound)
 }
 

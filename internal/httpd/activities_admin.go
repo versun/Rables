@@ -53,7 +53,7 @@ func (s *Server) adminActivitiesIndex(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	s.render(w, http.StatusOK, "admin_activities", adminActivitiesData{
-		Flash: PopFlash(r, w),
+		Flash: s.PopFlash(r, w),
 		Logs:  logs,
 	})
 }

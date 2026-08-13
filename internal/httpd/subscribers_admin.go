@@ -212,7 +212,7 @@ func (s *Server) adminSubscribersIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, http.StatusOK, "admin_subscribers_index", adminSubscribersPage{
-		Flash:       PopFlash(r, w),
+		Flash:       s.PopFlash(r, w),
 		Status:      status,
 		TagIDs:      tagIDs,
 		IncludeAll:  includeAll,
@@ -246,7 +246,7 @@ func (s *Server) adminSubscribersDestroy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.logSubscriptionActivity(ctx, "deleted", "subscriber", 0, "email="+activityQuote(sub.Email))
-	SetFlash(w, templates.Flash{Notice: "订阅者已删除。"})
+	s.SetFlash(w, templates.Flash{Notice: "订阅者已删除。"})
 	http.Redirect(w, r, "/admin/subscribers", http.StatusSeeOther)
 }
 
@@ -261,7 +261,7 @@ func (s *Server) adminSubscribersBatchCreate(w http.ResponseWriter, r *http.Requ
 	ctx := r.Context()
 	emailsText := r.FormValue("emails_text")
 	if domain.IsBlank(emailsText) {
-		SetFlash(w, templates.Flash{Alert: "请输入邮箱地址。"})
+		s.SetFlash(w, templates.Flash{Alert: "请输入邮箱地址。"})
 		http.Redirect(w, r, "/admin/subscribers", http.StatusFound)
 		return
 	}
@@ -282,7 +282,9 @@ func (s *Server) adminSubscribersBatchCreate(w http.ResponseWriter, r *http.Requ
 		}
 		email, tagNames := "", []string(nil)
 		if len(parts) > 0 {
-			email, tagNames = parts[0], parts[1:]
+			// Normalize so the find-or-create below cannot fork one address
+			// into case-variant rows (see subscribersvc.NormalizeEmail).
+			email, tagNames = subscribersvc.NormalizeEmail(parts[0]), parts[1:]
 		}
 
 		if !subscribersvc.ValidEmail(email) {
@@ -316,7 +318,7 @@ func (s *Server) adminSubscribersBatchCreate(w http.ResponseWriter, r *http.Requ
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			if err := subscribersvc.ReplaceTags(ctx, s.Q, sub.ID, tagIDs); err != nil {
+			if err := subscribersvc.ReplaceTags(ctx, s.DB, sub.ID, tagIDs); err != nil {
 				s.Log.Error("replace subscriber tags", "error", err)
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
@@ -336,7 +338,7 @@ func (s *Server) adminSubscribersBatchCreate(w http.ResponseWriter, r *http.Requ
 					http.Error(w, "internal error", http.StatusInternalServerError)
 					return
 				}
-				if err := subscribersvc.ReplaceTags(ctx, s.Q, sub.ID, tagIDs); err != nil {
+				if err := subscribersvc.ReplaceTags(ctx, s.DB, sub.ID, tagIDs); err != nil {
 					s.Log.Error("replace subscriber tags", "error", err)
 					http.Error(w, "internal error", http.StatusInternalServerError)
 					return
@@ -352,7 +354,7 @@ func (s *Server) adminSubscribersBatchCreate(w http.ResponseWriter, r *http.Requ
 	if handled == 0 {
 		s.logSubscriptionActivity(ctx, "failed", "subscriber", 2,
 			fmt.Sprintf("error_count=%d errors=%s", errorCount, activityQuote(strings.Join(errs, "; "))))
-		SetFlash(w, templates.Flash{Alert: "添加失败: " + strings.Join(errs, "; ")})
+		s.SetFlash(w, templates.Flash{Alert: "添加失败: " + joinFlashErrors(errs)})
 		http.Redirect(w, r, "/admin/subscribers", http.StatusFound)
 		return
 	}
@@ -374,7 +376,7 @@ func (s *Server) adminSubscribersBatchCreate(w http.ResponseWriter, r *http.Requ
 	if errorCount > 0 {
 		notice += fmt.Sprintf(" %d 个失败。", errorCount)
 	}
-	SetFlash(w, templates.Flash{Notice: notice})
+	s.SetFlash(w, templates.Flash{Notice: notice})
 	http.Redirect(w, r, "/admin/subscribers", http.StatusFound)
 }
 
@@ -412,7 +414,7 @@ func (s *Server) adminSubscribersBatchConfirm(w http.ResponseWriter, r *http.Req
 		}
 		if err != nil {
 			s.Log.Error("get subscriber", "error", err)
-			SetFlash(w, templates.Flash{Alert: "批量确认失败: " + err.Error()})
+			s.SetFlash(w, templates.Flash{Alert: "批量确认失败: " + err.Error()})
 			http.Redirect(w, r, "/admin/subscribers", http.StatusFound)
 			return
 		}
@@ -425,14 +427,14 @@ func (s *Server) adminSubscribersBatchConfirm(w http.ResponseWriter, r *http.Req
 			ID:          sub.ID,
 		}); err != nil {
 			s.Log.Error("confirm subscriber", "error", err)
-			SetFlash(w, templates.Flash{Alert: "批量确认失败: " + err.Error()})
+			s.SetFlash(w, templates.Flash{Alert: "批量确认失败: " + err.Error()})
 			http.Redirect(w, r, "/admin/subscribers", http.StatusFound)
 			return
 		}
 		count++
 	}
 	s.logSubscriptionActivity(ctx, "updated", "subscriber", 0, fmt.Sprintf("count=%d", count))
-	SetFlash(w, templates.Flash{Notice: fmt.Sprintf("已确认 %d 个订阅者。", count)})
+	s.SetFlash(w, templates.Flash{Notice: fmt.Sprintf("已确认 %d 个订阅者。", count)})
 	http.Redirect(w, r, "/admin/subscribers", http.StatusFound)
 }
 
@@ -458,19 +460,19 @@ func (s *Server) adminSubscribersBatchDestroy(w http.ResponseWriter, r *http.Req
 			continue
 		} else if err != nil {
 			s.Log.Error("get subscriber", "error", err)
-			SetFlash(w, templates.Flash{Alert: "批量删除失败: " + err.Error()})
+			s.SetFlash(w, templates.Flash{Alert: "批量删除失败: " + err.Error()})
 			http.Redirect(w, r, "/admin/subscribers", http.StatusFound)
 			return
 		}
 		if err := subscribersvc.Destroy(ctx, s.DB, id); err != nil {
 			s.Log.Error("destroy subscriber", "error", err)
-			SetFlash(w, templates.Flash{Alert: "批量删除失败: " + err.Error()})
+			s.SetFlash(w, templates.Flash{Alert: "批量删除失败: " + err.Error()})
 			http.Redirect(w, r, "/admin/subscribers", http.StatusFound)
 			return
 		}
 		count++
 	}
 	s.logSubscriptionActivity(ctx, "deleted", "subscriber", 0, fmt.Sprintf("count=%d", count))
-	SetFlash(w, templates.Flash{Notice: fmt.Sprintf("已删除 %d 个订阅者。", count)})
+	s.SetFlash(w, templates.Flash{Notice: fmt.Sprintf("已删除 %d 个订阅者。", count)})
 	http.Redirect(w, r, "/admin/subscribers", http.StatusFound)
 }

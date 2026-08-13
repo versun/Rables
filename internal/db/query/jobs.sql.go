@@ -164,6 +164,76 @@ func (q *Queries) GetTwitterSync(ctx context.Context) (TwitterSync, error) {
 	return i, err
 }
 
+const listActiveImportJobPayloads = `-- name: ListActiveImportJobPayloads :many
+SELECT kind, payload FROM job_runs
+WHERE status IN ('queued', 'running')
+  AND kind IN ('import_db', 'import_rails', 'twitter_archive_import')
+`
+
+type ListActiveImportJobPayloadsRow struct {
+	Kind    string
+	Payload sql.NullString
+}
+
+// Startup orphan-upload cleanup (jobs.CleanupOrphanImportFiles): payloads of
+// still-active import jobs reference the data/imports files that must not be
+// deleted. The twitter_archive_import payload carries only an import_id; its
+// path lives in twitter_archive_imports.source_path.
+func (q *Queries) ListActiveImportJobPayloads(ctx context.Context) ([]ListActiveImportJobPayloadsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveImportJobPayloads)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveImportJobPayloadsRow
+	for rows.Next() {
+		var i ListActiveImportJobPayloadsRow
+		if err := rows.Scan(&i.Kind, &i.Payload); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listActiveTwitterArchiveImportPaths = `-- name: ListActiveTwitterArchiveImportPaths :many
+SELECT source_path FROM twitter_archive_imports
+WHERE source_path IS NOT NULL AND status IN ('queued', 'running')
+`
+
+// Source uploads of still-active imports; the startup orphan cleanup keeps
+// them even while their job row is missing (crash between the INSERT and the
+// enqueue). Startup recovery fails such rows once they fall behind the
+// cutoff, which unprotects the file on the next sweep.
+func (q *Queries) ListActiveTwitterArchiveImportPaths(ctx context.Context) ([]sql.NullString, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveTwitterArchiveImportPaths)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []sql.NullString
+	for rows.Next() {
+		var source_path sql.NullString
+		if err := rows.Scan(&source_path); err != nil {
+			return nil, err
+		}
+		items = append(items, source_path)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCommentFetchers = `-- name: ListCommentFetchers :many
 SELECT platform, comment_fetch_schedule FROM crossposts
 WHERE enabled = 1 AND auto_fetch_comments = 1
@@ -196,6 +266,41 @@ func (q *Queries) ListCommentFetchers(ctx context.Context) ([]ListCommentFetcher
 		return nil, err
 	}
 	return items, nil
+}
+
+const requeueStaleRunningJobRuns = `-- name: RequeueStaleRunningJobRuns :execrows
+UPDATE job_runs SET
+  status = CASE WHEN attempts + 1 >= ?1 THEN 'failed' ELSE 'queued' END,
+  attempts = attempts + 1,
+  last_error = CASE WHEN attempts + 1 >= ?1 THEN ?2 ELSE last_error END,
+  updated_at = ?3
+WHERE status = 'running' AND updated_at < ?4
+`
+
+type RequeueStaleRunningJobRunsParams struct {
+	MaxAttempts int64
+	CrashError  sql.NullString
+	Now         int64
+	Cutoff      int64
+}
+
+// Startup recovery: rows claimed (running) but untouched since :cutoff belong
+// to a dead process; requeue them so they run again. The requeue consumes an
+// attempt, and a row whose attempt budget is exhausted by it is failed
+// instead of requeued: the claim path never checks attempts, so a plain
+// requeue would let a job that reliably crashes the process (OOM/SIGKILL)
+// loop forever under Restart=always.
+func (q *Queries) RequeueStaleRunningJobRuns(ctx context.Context, arg RequeueStaleRunningJobRunsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requeueStaleRunningJobRuns,
+		arg.MaxAttempts,
+		arg.CrashError,
+		arg.Now,
+		arg.Cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const rescheduleJobRun = `-- name: RescheduleJobRun :exec

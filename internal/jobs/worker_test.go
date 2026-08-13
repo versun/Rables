@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -204,5 +205,130 @@ func TestWorkerStartPolls(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker did not execute the job within 5s")
+	}
+}
+
+// A handler aborted by shutdown (ctx cancelled, e.g. SIGTERM) did not fail:
+// the job is requeued without consuming an attempt or adding backoff, so
+// frequent deploys cannot push a healthy job to MaxAttempts. A real timeout
+// (context.DeadlineExceeded) still counts as a failure.
+func TestRunOnceCancellationVsFailure(t *testing.T) {
+	tests := []struct {
+		name         string
+		handlerErr   error
+		wantAttempts int64
+		wantDelay    time.Duration // 0 means immediately due again
+	}{
+		{"context.Canceled requeues without attempt", context.Canceled, 0, 0},
+		{"context.DeadlineExceeded counts as failure", context.DeadlineExceeded, 1, Backoff[0]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := openDB(t)
+			now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+			w := newTestWorker(d, now)
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			w.Register(KindExport, func(context.Context, json.RawMessage) error {
+				cancel() // simulate SIGTERM landing while the handler runs
+				return tt.handlerErr
+			})
+
+			id, err := NewEnqueuer(d).Enqueue(t.Context(), KindExport, nil, now)
+			if err != nil {
+				t.Fatalf("Enqueue: %v", err)
+			}
+			ran, err := w.RunOnce(ctx)
+			if err != nil || !ran {
+				t.Fatalf("RunOnce = (%v, %v), want (true, nil)", ran, err)
+			}
+			job := getJobRun(t, d, id)
+			if job.Status != "queued" {
+				t.Errorf("status = %q, want queued", job.Status)
+			}
+			if job.Attempts != tt.wantAttempts {
+				t.Errorf("attempts = %d, want %d", job.Attempts, tt.wantAttempts)
+			}
+			if want := now.Add(tt.wantDelay).Unix(); job.RunAt != want {
+				t.Errorf("run_at = %d, want now+%s (%d)", job.RunAt, tt.wantDelay, want)
+			}
+		})
+	}
+}
+
+// Only a cancellation of the worker's own ctx (shutdown) earns the free
+// requeue. A handler returning context.Canceled produced by an internal ctx
+// it cancelled itself — while the worker ctx is still alive — hit a real
+// failure: it must consume an attempt and back off, or it would be requeued
+// for free forever.
+func TestRunOnceHandlerInternalCancellationCountsAsFailure(t *testing.T) {
+	d := openDB(t)
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	w := newTestWorker(d, now)
+	w.Register(KindExport, func(context.Context, json.RawMessage) error {
+		return fmt.Errorf("inner ctx: %w", context.Canceled)
+	})
+
+	id, err := NewEnqueuer(d).Enqueue(t.Context(), KindExport, nil, now)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	ran, err := w.RunOnce(t.Context())
+	if err != nil || !ran {
+		t.Fatalf("RunOnce = (%v, %v), want (true, nil)", ran, err)
+	}
+	job := getJobRun(t, d, id)
+	if job.Status != "queued" {
+		t.Errorf("status = %q, want queued", job.Status)
+	}
+	if job.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (internal cancellation is a failure)", job.Attempts)
+	}
+	if want := now.Add(Backoff[0]).Unix(); job.RunAt != want {
+		t.Errorf("run_at = %d, want now+%s (%d)", job.RunAt, Backoff[0], want)
+	}
+}
+
+// The handler runs with the caller's ctx, but the post-run bookkeeping must
+// survive a cancellation that arrives mid-run (SIGTERM during a job):
+// otherwise the row would stay running until the startup reaper fires.
+func TestRunOnceBookkeepingSurvivesCancellation(t *testing.T) {
+	tests := []struct {
+		name       string
+		handlerErr error
+		wantStatus string
+	}{
+		{"failure is rescheduled", errors.New("boom"), "queued"},
+		{"success is completed", nil, "done"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := openDB(t)
+			now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+			w := newTestWorker(d, now)
+
+			ctx, cancel := context.WithCancel(t.Context())
+			w.Register(KindExport, func(context.Context, json.RawMessage) error {
+				cancel() // simulate SIGTERM landing while the handler runs
+				return tt.handlerErr
+			})
+
+			id, err := NewEnqueuer(d).Enqueue(t.Context(), KindExport, nil, now)
+			if err != nil {
+				t.Fatalf("Enqueue: %v", err)
+			}
+			ran, err := w.RunOnce(ctx)
+			if err != nil || !ran {
+				t.Fatalf("RunOnce = (%v, %v), want (true, nil)", ran, err)
+			}
+			job := getJobRun(t, d, id)
+			if job.Status != tt.wantStatus {
+				t.Errorf("status = %q, want %q (bookkeeping must outlive the cancelled ctx)", job.Status, tt.wantStatus)
+			}
+			if tt.handlerErr != nil && job.Attempts != 1 {
+				t.Errorf("attempts = %d, want 1", job.Attempts)
+			}
+		})
 	}
 }

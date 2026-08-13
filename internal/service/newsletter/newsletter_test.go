@@ -270,7 +270,6 @@ type fakeSMTPServer struct {
 	failAuth bool
 	auths    [][2]string // captured user/password pairs
 	mails    []string    // raw DATA payloads
-	quit     bool
 }
 
 func newFakeSMTPServer(t *testing.T, failAuth bool) *fakeSMTPServer {
@@ -554,5 +553,66 @@ func TestListmonkFetch(t *testing.T) {
 	}
 	if _, err := bad.FetchTemplates(t.Context()); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("FetchTemplates error = %v, want 401 detail", err)
+	}
+}
+
+func TestListmonkDefaultClientKeepAlive(t *testing.T) {
+	// NewUnstartedServer + Start: assigning ConnState after NewServer would
+	// race with the serving goroutine reading it on connection accept.
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"results":[]}}`)
+	}))
+
+	var mu sync.Mutex
+	conns := 0
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			mu.Lock()
+			conns++
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	// Two calls without an injected HTTPClient must share the default client
+	// and reuse its keep-alive connection instead of leaking one transport
+	// (plus its idle connection and goroutines) per call.
+	client := ListmonkClient{URL: srv.URL, Username: "admin", APIKey: "token"}
+	for i := 0; i < 2; i++ {
+		if _, err := client.FetchLists(t.Context()); err != nil {
+			t.Fatalf("FetchLists #%d: %v", i, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if conns != 1 {
+		t.Errorf("server saw %d connections, want 1 reused via the shared client", conns)
+	}
+}
+
+// TestRenderSourceReferenceUnsafeURL: a source_url persisted from an
+// attacker-controlled import (twittersync/railsmigrate) must not become an
+// href unless it is an absolute http(s) URL with a host — html.EscapeString
+// does not defang schemes. Mirrors TestBuildSourceReferenceUnsafeURL of the
+// public page path.
+func TestRenderSourceReferenceUnsafeURL(t *testing.T) {
+	article := query.Article{
+		SourceUrl:     sql.NullString{String: "javascript:alert(1)", Valid: true},
+		SourceAuthor:  sql.NullString{String: "alice", Valid: true},
+		SourceContent: sql.NullString{String: "quoted", Valid: true},
+	}
+	out := renderSourceReference(article)
+	if strings.Contains(out, "<a href=") {
+		t.Errorf("javascript: source_url rendered a link: %s", out)
+	}
+	if !strings.Contains(out, "alice") {
+		t.Error("author dropped together with the unsafe link")
+	}
+
+	article.SourceUrl = sql.NullString{String: "https://example.com/post", Valid: true}
+	out = renderSourceReference(article)
+	if !strings.Contains(out, `href="https://example.com/post"`) {
+		t.Errorf("https source_url not linked: %s", out)
 	}
 }

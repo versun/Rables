@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -95,7 +96,7 @@ func (s *Server) adminTwitterArchivesIndex(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.render(w, http.StatusOK, "admin_twitter_archives", adminTwitterArchivesData{
-		Flash:           PopFlash(r, w),
+		Flash:           s.PopFlash(r, w),
 		TimeZone:        st.TimeZone,
 		Counts:          counts,
 		LastImportedAt:  lastImported,
@@ -112,16 +113,32 @@ func (s *Server) adminTwitterArchivesIndex(w http.ResponseWriter, r *http.Reques
 func (s *Server) adminTwitterArchivesCreate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	fail := func(alert string) {
-		SetFlash(w, templates.Flash{Alert: alert})
+		s.SetFlash(w, templates.Flash{Alert: alert})
 		http.Redirect(w, r, "/admin/twitter_archives", http.StatusFound)
 	}
 
 	// Malformed requests (twitter_archive posted as a plain string) surface
-	// as a missing file, like the Rails controller's nil fallback.
+	// as a missing file, like the Rails controller's nil fallback. The body
+	// is capped like every other upload endpoint (archives carry media, so
+	// they get the Rails import's 4GB): without it one POST streams
+	// unbounded data into data/imports.
+	// Multi-GB uploads cannot fit the server-wide 30s ReadTimeout / 60s
+	// WriteTimeout.
+	s.clearRequestDeadlines(w)
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportRailsUploadSize)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		fail(twitterArchiveInvalidUploadAlert)
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			fail(migratesImportTooBigAlert)
+		} else {
+			fail(twitterArchiveInvalidUploadAlert)
+		}
 		return
 	}
+	// File parts above maxMemory spill to os.TempDir(); net/http never
+	// cleans them up. The upload is streamed into data/imports synchronously
+	// (storeTwitterArchiveUpload), so the deferred removal is safe.
+	defer r.MultipartForm.RemoveAll()
 	src, header, err := r.FormFile("twitter_archive[file]")
 	if err != nil {
 		fail(twitterArchiveInvalidUploadAlert)
@@ -188,13 +205,16 @@ func (s *Server) adminTwitterArchivesCreate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	SetFlash(w, templates.Flash{Notice: twitterArchiveSuccessNotice})
+	s.SetFlash(w, templates.Flash{Notice: twitterArchiveSuccessNotice})
 	http.Redirect(w, r, "/admin/twitter_archives", http.StatusFound)
 }
 
 // storeTwitterArchiveUpload streams the multipart upload to
 // data/imports/twitter_archive_<unix>_<rand>.zip (write_uploaded_zip of the
-// Rails submission, relocated from tmp/ to the data dir).
+// Rails submission, relocated from tmp/ to the data dir). Like
+// saveImportUpload it writes a .part temp file first and atomically renames
+// it once fully written, so a stalled upload can only be swept under its
+// temp name, never under the final name a job references.
 func (s *Server) storeTwitterArchiveUpload(src io.Reader) (string, error) {
 	dir := filepath.Join(s.Cfg.DataDir, "imports")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -205,17 +225,22 @@ func (s *Server) storeTwitterArchiveUpload(src io.Reader) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, fmt.Sprintf("twitter_archive_%d_%s.zip", time.Now().Unix(), hex.EncodeToString(rnd[:])))
-	dst, err := os.Create(path)
+	tempPath := path + ".part"
+	dst, err := os.Create(tempPath)
 	if err != nil {
 		return "", err
 	}
 	if _, err := io.Copy(dst, src); err != nil {
 		dst.Close()
-		os.Remove(path)
+		os.Remove(tempPath)
 		return "", err
 	}
 	if err := dst.Close(); err != nil {
-		os.Remove(path)
+		os.Remove(tempPath)
+		return "", err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		os.Remove(tempPath)
 		return "", err
 	}
 	return path, nil

@@ -31,8 +31,9 @@ var (
 	// gid://<app>/ActiveStorage::Blob/123[?expires_in]
 	blobGIDRe = regexp.MustCompile(`ActiveStorage::Blob/(\d+)`)
 	// [scheme://host]/rails/active_storage/{blobs|representations}/{redirect|proxy}/<signed_id>/...
-	// (old bodies carry both relative and absolute-with-host variants)
-	railsURLRe = regexp.MustCompile(`^(?:https?://[^/]+)?/rails/active_storage/(?:blobs|representations)/(?:redirect|proxy)/([^/"]+)`)
+	// (old bodies carry both relative and absolute-with-host variants; group 1
+	// is the optional host prefix, group 2 the signed id)
+	railsURLRe = regexp.MustCompile(`^(https?://[^/]+)?/rails/active_storage/(?:blobs|representations)/(?:redirect|proxy)/([^/"]+)`)
 )
 
 // KeptRef is one body reference that could not be rewritten; listed in the
@@ -49,10 +50,24 @@ type RewriteStats struct {
 	Kept      []KeptRef
 }
 
+// maxRewriteBodyBytes caps one body's size for the html.ParseFragment pass:
+// x/net/html bounds nesting depth but not the total node count, so a huge
+// body of flat sibling elements explodes into millions of *html.Node and can
+// OOM a small VPS (same rationale as domain's maxHTMLParseBytes and
+// transfer's MaxItemContentBytes). Over the cap the body is kept verbatim
+// and listed on the manual fixup list.
+const maxRewriteBodyBytes = 5 << 20
+
 // rewriteContent rewrites attachment references in one body. blobs maps old
-// blob id -> file info. Bodies without any marker are returned byte-identical.
-func rewriteContent(body string, blobs map[int64]blobRef, record string, stats *RewriteStats) string {
+// blob id -> file info; siteHost is the old settings.url host used to tell
+// same-site absolute URLs from foreign hotlinks. Bodies without any marker
+// are returned byte-identical.
+func rewriteContent(body string, blobs map[int64]blobRef, siteHost, record string, stats *RewriteStats) string {
 	if body == "" || !strings.Contains(body, "action-text-attachment") && !strings.Contains(body, "/rails/active_storage/") {
+		return body
+	}
+	if len(body) > maxRewriteBodyBytes {
+		stats.Kept = append(stats.Kept, KeptRef{Record: record, Reason: "body over rewrite size cap", Snippet: truncate(body, 200)})
 		return body
 	}
 	ctx := &html.Node{Type: html.ElementNode, DataAtom: atom.Body, Data: "body"}
@@ -67,7 +82,7 @@ func rewriteContent(body string, blobs map[int64]blobRef, record string, stats *
 	for _, n := range nodes {
 		container.AppendChild(n)
 	}
-	rewriteNode(container, blobs, record, stats)
+	rewriteNode(container, blobs, siteHost, record, stats)
 	var buf bytes.Buffer
 	for c := container.FirstChild; c != nil; c = c.NextSibling {
 		if err := html.Render(&buf, c); err != nil {
@@ -78,10 +93,10 @@ func rewriteContent(body string, blobs map[int64]blobRef, record string, stats *
 	return buf.String()
 }
 
-func rewriteNode(n *html.Node, blobs map[int64]blobRef, record string, stats *RewriteStats) {
+func rewriteNode(n *html.Node, blobs map[int64]blobRef, siteHost, record string, stats *RewriteStats) {
 	for c := n.FirstChild; c != nil; {
 		next := c.NextSibling
-		rewriteNode(c, blobs, record, stats)
+		rewriteNode(c, blobs, siteHost, record, stats)
 		c = next
 	}
 	if n.Type != html.ElementNode {
@@ -89,25 +104,34 @@ func rewriteNode(n *html.Node, blobs map[int64]blobRef, record string, stats *Re
 	}
 	switch n.Data {
 	case "action-text-attachment":
-		rewriteAttachment(n, blobs, record, stats)
+		rewriteAttachment(n, blobs, siteHost, record, stats)
 	case "img":
 		if src := attr(n, "src"); railsURLRe.MatchString(src) {
-			rewriteURLAttr(n, "src", src, blobs, record, stats)
+			rewriteURLAttr(n, "src", src, blobs, siteHost, record, stats)
 		}
 	case "a":
 		if href := attr(n, "href"); railsURLRe.MatchString(href) {
-			rewriteURLAttr(n, "href", href, blobs, record, stats)
+			rewriteURLAttr(n, "href", href, blobs, siteHost, record, stats)
 		}
 	}
 }
 
 // rewriteAttachment replaces an <action-text-attachment> element with an
 // <img> (image blobs) or an <a> (other blobs) per spec section 8.4.
-func rewriteAttachment(n *html.Node, blobs map[int64]blobRef, record string, stats *RewriteStats) {
+func rewriteAttachment(n *html.Node, blobs map[int64]blobRef, siteHost, record string, stats *RewriteStats) {
 	id, err := blobIDFromSGID(attr(n, "sgid"))
 	if err != nil {
-		// fall back to the url attribute, which carries the same signed id
-		id, err = blobIDFromSignedURL(attr(n, "url"))
+		// fall back to the url attribute, which carries the same signed id;
+		// as in rewriteURLAttr, a foreign-host absolute url is kept verbatim
+		val := attr(n, "url")
+		if m := railsURLRe.FindStringSubmatch(val); m != nil && m[1] != "" {
+			u, uerr := url.Parse(m[1])
+			if uerr != nil || siteHost == "" || !strings.EqualFold(u.Host, siteHost) {
+				keep(n, record, "external active_storage url", stats)
+				return
+			}
+		}
+		id, err = blobIDFromSignedURL(val)
 	}
 	if err != nil {
 		keep(n, record, "unresolvable sgid/url", stats)
@@ -137,8 +161,18 @@ func rewriteAttachment(n *html.Node, blobs map[int64]blobRef, record string, sta
 }
 
 // rewriteURLAttr points an old /rails/active_storage/... attribute at
-// /files/<key>, keeping every other attribute untouched.
-func rewriteURLAttr(n *html.Node, key, val string, blobs map[int64]blobRef, record string, stats *RewriteStats) {
+// /files/<key>, keeping every other attribute untouched. Absolute URLs are
+// rewritten only when their host matches the old site's settings url: blob
+// ids are per-site auto-increment integers, so a foreign hotlink's id would
+// hit an unrelated local blob; those stay verbatim on the manual fixup list.
+func rewriteURLAttr(n *html.Node, key, val string, blobs map[int64]blobRef, siteHost, record string, stats *RewriteStats) {
+	if m := railsURLRe.FindStringSubmatch(val); m != nil && m[1] != "" {
+		u, err := url.Parse(m[1])
+		if err != nil || siteHost == "" || !strings.EqualFold(u.Host, siteHost) {
+			keep(n, record, "external active_storage url", stats)
+			return
+		}
+	}
 	id, err := blobIDFromSignedURL(val)
 	if err != nil {
 		keep(n, record, "unresolvable signed url", stats)
@@ -193,9 +227,9 @@ func blobIDFromSignedURL(u string) (int64, error) {
 	if m == nil {
 		return 0, fmt.Errorf("not a rails active_storage url")
 	}
-	seg, err := url.PathUnescape(m[1])
+	seg, err := url.PathUnescape(m[2])
 	if err != nil {
-		seg = m[1]
+		seg = m[2]
 	}
 	payload, err := decodeSigned(seg)
 	if err != nil {

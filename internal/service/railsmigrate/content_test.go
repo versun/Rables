@@ -139,6 +139,14 @@ func TestRewriteContent(t *testing.T) {
 			rewritten: 1,
 		},
 		{
+			name:        "broken sgid with foreign host url kept verbatim",
+			body:        `<action-text-attachment sgid="bogus" url="https://other.example.com/rails/active_storage/blobs/redirect/` + makeSignedID(1) + `/pic.png"></action-text-attachment>`,
+			contains:    []string{`https://other.example.com/rails/active_storage/`},
+			notContains: []string{`/files/imgkey1111`},
+			rewritten:   0,
+			kept:        1,
+		},
+		{
 			name:      "broken sgid without url is kept",
 			body:      `<action-text-attachment sgid="bogus"></action-text-attachment>`,
 			contains:  []string{"action-text-attachment"},
@@ -158,6 +166,20 @@ func TestRewriteContent(t *testing.T) {
 			rewritten: 1,
 		},
 		{
+			name:      "absolute url on the old site host rewritten",
+			body:      `<img src="https://versun.me/rails/active_storage/blobs/redirect/` + makeSignedID(1) + `/pic.png"/>`,
+			contains:  []string{`<img src="/files/imgkey1111"/>`},
+			rewritten: 1,
+		},
+		{
+			name:        "foreign host url kept verbatim and listed",
+			body:        `<p><img src="https://other.example.com/rails/active_storage/blobs/redirect/` + makeSignedID(1) + `/pic.png"/></p>`,
+			contains:    []string{`https://other.example.com/rails/active_storage/`},
+			notContains: []string{`/files/imgkey1111`},
+			rewritten:   0,
+			kept:        1,
+		},
+		{
 			name:      "chinese text survives re-serialization",
 			body:      `<p>中文段落</p><action-text-attachment sgid="` + makeSGID("gid://rables/ActiveStorage::Blob/1?expires_in") + `"></action-text-attachment>`,
 			contains:  []string{"中文段落", `<img src="/files/imgkey1111"`},
@@ -167,7 +189,7 @@ func TestRewriteContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stats := &RewriteStats{}
-			got := rewriteContent(tt.body, blobs, "Article/1", stats)
+			got := rewriteContent(tt.body, blobs, "versun.me", "Article/1", stats)
 			if tt.want != "" && got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
@@ -193,5 +215,25 @@ func TestRewriteContent(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRewriteContentOverSizeCap(t *testing.T) {
+	body := `<p><img src="/rails/active_storage/blobs/redirect/` + makeSignedID(1) + `/pic.png"/></p>` +
+		strings.Repeat("x", maxRewriteBodyBytes)
+	stats := &RewriteStats{}
+	got := rewriteContent(body, map[int64]blobRef{1: {key: "imgkey1111", filename: "pic.png", contentType: "image/png"}}, "versun.me", "Article/1", stats)
+	if got != body {
+		t.Errorf("over-cap body not kept verbatim: got %d bytes, want %d", len(got), len(body))
+	}
+	if stats.Rewritten != 0 {
+		t.Errorf("rewritten = %d, want 0", stats.Rewritten)
+	}
+	if len(stats.Kept) != 1 {
+		t.Fatalf("kept = %d, want 1 (%+v)", len(stats.Kept), stats.Kept)
+	}
+	k := stats.Kept[0]
+	if k.Record != "Article/1" || k.Reason != "body over rewrite size cap" {
+		t.Errorf("unexpected kept ref: %+v", k)
 	}
 }

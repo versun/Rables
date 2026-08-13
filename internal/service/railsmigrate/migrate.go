@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,10 @@ type Options struct {
 	Out         io.Writer // report destination (required)
 	DataDir     string    // Go DATA_DIR, used by --verify-files
 	VerifyFiles bool      // check every files row has a disk file
+	// BeforeVerify runs after the transaction commits and before the files
+	// check: the import job uses it to restore blobs, so a failed migration
+	// leaves no orphan blobs behind and the check sees the restored files.
+	BeforeVerify func() error
 }
 
 // TableReport holds the per-table counts from the report (spec section 8.7).
@@ -110,6 +115,11 @@ type migrator struct {
 		typ string
 		id  int64
 	} // old rt id -> owner
+	// siteHost is the host of the old settings.url; absolute active_storage
+	// URLs in bodies are rewritten only when they match it (see
+	// rewriteURLAttr).
+	siteHost       string
+	siteHostLoaded bool
 }
 
 // oldTables lists every Rails table the migrator reads. Run refuses to start
@@ -198,14 +208,24 @@ func Run(ctx context.Context, oldDB, newDB *sql.DB, opts Options) (*Report, erro
 			return nil, fmt.Errorf("migrate %s: %w", s.name, err)
 		}
 	}
+	if err := m.fillTotals(ctx); err != nil {
+		m.rep.Print(opts.Out)
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
-	if err := m.fillTotals(ctx, newDB); err != nil {
-		return nil, err
+	// the transaction is already committed: even when a post-commit step
+	// fails, the admin still needs the per-table counts report
+	if opts.BeforeVerify != nil {
+		if err := opts.BeforeVerify(); err != nil {
+			m.rep.Print(opts.Out)
+			return nil, err
+		}
 	}
 	if opts.VerifyFiles {
 		if err := m.verifyFiles(ctx, newDB, opts.DataDir); err != nil {
+			m.rep.Print(opts.Out)
 			return nil, err
 		}
 	}
@@ -221,6 +241,22 @@ func (m *migrator) table(ctx context.Context, name, oldTable string, transformed
 	}
 	t := &TableReport{Table: name, Old: n, Transformed: transformed, Expected: n - transformed}
 	m.rep.Tables = append(m.rep.Tables, t)
+	return t, nil
+}
+
+// singletonTable wraps table for the CHECK (id = 1) config tables: only the
+// first old row is migrated (ORDER BY id LIMIT 1), so duplicate rows - a
+// Rails first_or_create race can leave them behind - count as transformed,
+// keeping Expected at 1 instead of falsely reporting a row count mismatch.
+func (m *migrator) singletonTable(ctx context.Context, name, oldTable string) (*TableReport, error) {
+	t, err := m.table(ctx, name, oldTable, 0)
+	if err != nil {
+		return nil, err
+	}
+	if t.Old > 1 {
+		t.Transformed = t.Old - 1
+		t.Expected = t.Old - t.Transformed
+	}
 	return t, nil
 }
 
@@ -256,10 +292,21 @@ func (m *migrator) insertSingleton(ctx context.Context, t *TableReport, query st
 	return nil
 }
 
-// fillTotals loads the post-run new-table counts.
-func (m *migrator) fillTotals(ctx context.Context, db *sql.DB) error {
+// expectCurrentSingleton covers a singleton table the old database has no row
+// for: the row the Go app ensured itself (settings, twitter syncs, ...) is the
+// expected end state, so the report expects what the new table already holds
+// instead of zero.
+func (m *migrator) expectCurrentSingleton(ctx context.Context, t *TableReport) error {
+	return m.tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+t.Table).Scan(&t.Expected)
+}
+
+// fillTotals loads the post-run new-table counts. It runs inside the
+// migration transaction: counting on the live database after the commit would
+// pick up rows committed in between (a public comment, a subscriber, the
+// twitter sync) and report a MISMATCH no re-run can clear.
+func (m *migrator) fillTotals(ctx context.Context) error {
 	for _, t := range m.rep.Tables {
-		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+t.Table).Scan(&t.NewTotal); err != nil {
+		if err := m.tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+t.Table).Scan(&t.NewTotal); err != nil {
 			return fmt.Errorf("count new %s: %w", t.Table, err)
 		}
 	}
@@ -436,7 +483,7 @@ func (m *migrator) contentHTML(c contentRecord, record string) sql.NullString {
 	if !src.Valid {
 		return sql.NullString{}
 	}
-	return sql.NullString{String: rewriteContent(src.String, m.blobs, record, &m.rep.Rewrite), Valid: true}
+	return sql.NullString{String: rewriteContent(src.String, m.blobs, m.siteHost, record, &m.rep.Rewrite), Valid: true}
 }
 
 func (m *migrator) articles(ctx context.Context) error {
@@ -445,6 +492,9 @@ func (m *migrator) articles(ctx context.Context) error {
 		return err
 	}
 	if err := m.loadBlobs(ctx); err != nil {
+		return err
+	}
+	if err := m.loadSiteHost(ctx); err != nil {
 		return err
 	}
 	rows, err := m.old.QueryContext(ctx, `SELECT a.id, a.title, a.slug, a.content_type, a.description, a.excerpt,
@@ -507,6 +557,9 @@ func (m *migrator) pages(ctx context.Context) error {
 		return err
 	}
 	if err := m.loadBlobs(ctx); err != nil {
+		return err
+	}
+	if err := m.loadSiteHost(ctx); err != nil {
 		return err
 	}
 	rows, err := m.old.QueryContext(ctx, `SELECT p.id, p.title, p.slug, p.content_type, p.html_content, rt.body,
@@ -843,6 +896,27 @@ func (m *migrator) loadBlobs(ctx context.Context) error {
 	return rows.Err()
 }
 
+// loadSiteHost reads the old settings url once, before bodies are rewritten.
+// Empty when the old site has no settings row (or no parseable host): every
+// absolute active_storage URL is then kept for manual fixup.
+func (m *migrator) loadSiteHost(ctx context.Context) error {
+	if m.siteHostLoaded {
+		return nil
+	}
+	m.siteHostLoaded = true
+	var raw sql.NullString
+	if err := m.old.QueryRowContext(ctx, "SELECT url FROM settings ORDER BY id LIMIT 1").Scan(&raw); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if u, err := url.Parse(raw.String); err == nil {
+		m.siteHost = u.Host
+	}
+	return nil
+}
+
 func (m *migrator) files(ctx context.Context) error {
 	t, err := m.table(ctx, "files", "active_storage_blobs", 0)
 	if err != nil {
@@ -1073,7 +1147,7 @@ func (m *migrator) staticFiles(ctx context.Context) error {
 // created the row), so a re-run stays idempotent.
 
 func (m *migrator) settings(ctx context.Context) error {
-	t, err := m.table(ctx, "settings", "settings", 0)
+	t, err := m.singletonTable(ctx, "settings", "settings")
 	if err != nil {
 		return err
 	}
@@ -1091,7 +1165,7 @@ func (m *migrator) settings(ctx context.Context) error {
 		&headCode, &customCSS, &toolCode, &giscus, &socialLinks, &setupCompleted,
 		&created, &updated); err != nil {
 		if err == sql.ErrNoRows {
-			return nil
+			return m.expectCurrentSingleton(ctx, t)
 		}
 		return err
 	}
@@ -1115,7 +1189,7 @@ func (m *migrator) settings(ctx context.Context) error {
 }
 
 func (m *migrator) newsletterSettings(ctx context.Context) error {
-	t, err := m.table(ctx, "newsletter_settings", "newsletter_settings", 0)
+	t, err := m.singletonTable(ctx, "newsletter_settings", "newsletter_settings")
 	if err != nil {
 		return err
 	}
@@ -1132,7 +1206,7 @@ func (m *migrator) newsletterSettings(ctx context.Context) error {
 		&smtpAddress, &smtpPort, &smtpUser, &smtpPassword, &smtpDomain,
 		&smtpAuth, &smtpStarttls, &created, &updated); err != nil {
 		if err == sql.ErrNoRows {
-			return nil
+			return m.expectCurrentSingleton(ctx, t)
 		}
 		return err
 	}
@@ -1215,7 +1289,7 @@ func (m *migrator) crossposts(ctx context.Context) error {
 }
 
 func (m *migrator) listmonks(ctx context.Context) error {
-	t, err := m.table(ctx, "listmonks", "listmonks", 0)
+	t, err := m.singletonTable(ctx, "listmonks", "listmonks")
 	if err != nil {
 		return err
 	}
@@ -1227,7 +1301,7 @@ func (m *migrator) listmonks(ctx context.Context) error {
 	var created, updated sql.NullString
 	if err := row.Scan(&urlCol, &username, &apiKey, &listID, &templateID, &enabled, &created, &updated); err != nil {
 		if err == sql.ErrNoRows {
-			return nil
+			return m.expectCurrentSingleton(ctx, t)
 		}
 		return err
 	}
@@ -1246,11 +1320,13 @@ func (m *migrator) listmonks(ctx context.Context) error {
 }
 
 func (m *migrator) twitterSyncs(ctx context.Context) error {
-	t, err := m.table(ctx, "twitter_syncs", "twitter_syncs", 0)
+	t, err := m.singletonTable(ctx, "twitter_syncs", "twitter_syncs")
 	if err != nil {
 		return err
 	}
-	row := m.old.QueryRowContext(ctx, `SELECT enabled, username, user_id, since_id, start_date,
+	// start_date is CAST too: its Rails decltype is `date`, which the driver
+	// scans as time.Time ("2026-06-17T00:00:00Z") instead of the stored text.
+	row := m.old.QueryRowContext(ctx, `SELECT enabled, username, user_id, since_id, CAST(start_date AS TEXT),
 		sync_schedule, CAST(last_synced_at AS TEXT), last_error,
 		CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
 		FROM twitter_syncs ORDER BY id LIMIT 1`)
@@ -1260,7 +1336,7 @@ func (m *migrator) twitterSyncs(ctx context.Context) error {
 	if err := row.Scan(&enabled, &username, &userID, &sinceID, &startDate,
 		&syncSchedule, &lastSyncedAt, &lastError, &created, &updated); err != nil {
 		if err == sql.ErrNoRows {
-			return nil
+			return m.expectCurrentSingleton(ctx, t)
 		}
 		return err
 	}
@@ -1413,6 +1489,7 @@ func (m *migrator) twitterArchiveImports(ctx context.Context) error {
 		return err
 	}
 	defer rows.Close()
+	var activeInserted []int64
 	for rows.Next() {
 		var id, progress, totalItems, tweets, followers, following, likes int64
 		var status, sourceFilename, sourcePath, statusMessage, errorMessage sql.NullString
@@ -1444,16 +1521,65 @@ func (m *migrator) twitterArchiveImports(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := m.insert(ctx, t, `INSERT OR IGNORE INTO twitter_archive_imports
+		// A backup taken while an archive import was queued/running carries
+		// that row with active_slot=1. Inserted as-is it would block new
+		// archive uploads (HasActiveTwitterArchiveImport) until startup
+		// recovery fails it, and its slot would collide with a live active
+		// row in idx_tai_active_slot — which INSERT OR IGNORE would silently
+		// swallow, dropping the row and reporting a MISMATCH. The slot is
+		// neutralized here (terminal rows always have a NULL slot) and the
+		// row is marked failed after the loop, like transfer's
+		// normalizeTwitterArchiveImports.
+		active := status.String == "queued" || status.String == "running"
+		slot := activeSlot
+		if active {
+			slot = sql.NullInt64{}
+		}
+		res, err := m.tx.ExecContext(ctx, `INSERT OR IGNORE INTO twitter_archive_imports
 			(id, status, progress, total_items_count, tweets_count, followers_count, following_count,
 			 likes_count, source_filename, source_path, status_message, error_message,
 			 queued_at, started_at, finished_at, active_slot, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, status.String, progress, totalItems, tweets, followers, following, likes,
 			sourceFilename.String, sourcePath, statusMessage, errorMessage,
-			queued, started, finished, activeSlot, c, u); err != nil {
+			queued, started, finished, slot, c, u)
+		if err != nil {
+			return err
+		}
+		aff, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if aff == 0 {
+			t.Skipped++
+		} else {
+			t.Inserted += aff
+			if active {
+				activeInserted = append(activeInserted, id)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Fail the just-inserted active rows (see above), scoped to the ids this
+	// run wrote so a pre-existing row is never touched.
+	if len(activeInserted) > 0 {
+		now := time.Now().Unix()
+		marks := make([]string, len(activeInserted))
+		args := make([]any, 0, len(activeInserted)+2)
+		args = append(args, now, now)
+		for i, id := range activeInserted {
+			marks[i] = "?"
+			args = append(args, id)
+		}
+		if _, err := m.tx.ExecContext(ctx, `UPDATE twitter_archive_imports
+			SET status = 'failed', status_message = 'Import failed',
+			    error_message = 'The backup was taken while this import was still active',
+			    finished_at = ?, updated_at = ?
+			WHERE id IN (`+strings.Join(marks, ", ")+`)`, args...); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }

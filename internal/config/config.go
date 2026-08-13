@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 )
 
 // Config holds process-wide settings sourced from the environment.
@@ -15,6 +16,15 @@ type Config struct {
 	HMACSecret         string // signs math-captcha tokens; required
 	ArticleRoutePrefix string // optional public route prefix for articles
 	LogLevel           slog.Level
+	// TrustXForwardedFor keys rate limits off the rightmost X-Forwarded-For
+	// hop — the one the reverse proxy itself appended — instead of
+	// RemoteAddr; enable only behind a reverse proxy that appends to the
+	// header (nginx proxy_add_x_forwarded_for, Cloudflare), never when
+	// clients reach the server directly.
+	TrustXForwardedFor bool
+	// SecureCookies adds the Secure attribute to the session and flash
+	// cookies; enable when the site is served over HTTPS.
+	SecureCookies bool
 }
 
 // Load reads configuration from the environment. HMAC_SECRET is required;
@@ -27,6 +37,8 @@ func Load() (Config, error) {
 		HMACSecret:         os.Getenv("HMAC_SECRET"),
 		ArticleRoutePrefix: os.Getenv("ARTICLE_ROUTE_PREFIX"),
 		LogLevel:           slog.LevelInfo,
+		TrustXForwardedFor: envBool("TRUST_X_FORWARDED_FOR"),
+		SecureCookies:      envBool("SECURE_COOKIES"),
 	}
 
 	if cfg.HMACSecret == "" {
@@ -49,6 +61,17 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envBool parses a boolean environment variable: "1", "true" or "yes"
+// (case-insensitive) are true; anything else, including unset, is false.
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseLevel(v string) (slog.Level, error) {

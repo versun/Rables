@@ -3,7 +3,9 @@ package templates
 import (
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestFormatTime(t *testing.T) {
@@ -33,6 +35,34 @@ func TestFormatTime(t *testing.T) {
 func TestFormatTimeLayoutPassthrough(t *testing.T) {
 	if got := FormatTime(1700000000, "UTC", "2006-01-02"); got != "2023-11-14" {
 		t.Errorf("date-only layout = %q, want 2023-11-14", got)
+	}
+}
+
+func TestLocationCacheHit(t *testing.T) {
+	first := Location("America/New_York")
+	if got := Location("America/New_York"); got != first {
+		t.Errorf("second Location call returned %p, want cached %p", got, first)
+	}
+	if got := Location("Not/AZone"); got != time.UTC {
+		t.Errorf("invalid zone = %v, want UTC", got)
+	}
+	if got := Location(""); got != time.UTC {
+		t.Errorf("empty zone = %v, want UTC", got)
+	}
+}
+
+func TestLocationConcurrent(t *testing.T) {
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = Location("Asia/Shanghai")
+		}()
+	}
+	wg.Wait()
+	if got := Location("Asia/Shanghai"); got.String() != "Asia/Shanghai" {
+		t.Errorf("Location = %v, want Asia/Shanghai", got)
 	}
 }
 

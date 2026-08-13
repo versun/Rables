@@ -117,6 +117,32 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
+DELETE FROM sessions WHERE created_at < ?
+`
+
+func (q *Queries) DeleteExpiredSessions(ctx context.Context, createdAt int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteExpiredSessions, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteOtherSessionsForUser = `-- name: DeleteOtherSessionsForUser :exec
+DELETE FROM sessions WHERE user_id = ? AND token != ?
+`
+
+type DeleteOtherSessionsForUserParams struct {
+	UserID int64
+	Token  string
+}
+
+func (q *Queries) DeleteOtherSessionsForUser(ctx context.Context, arg DeleteOtherSessionsForUserParams) error {
+	_, err := q.db.ExecContext(ctx, deleteOtherSessionsForUser, arg.UserID, arg.Token)
+	return err
+}
+
 const deleteSessionByToken = `-- name: DeleteSessionByToken :exec
 DELETE FROM sessions WHERE token = ?
 `

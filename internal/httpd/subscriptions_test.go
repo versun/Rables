@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -159,8 +160,14 @@ func TestSubscriptionCreate(t *testing.T) {
 	s, h := newSubscriptionTestServer(t)
 
 	rec := doRequest(t, h, http.MethodPost, "/subscriptions", validSubscriptionForm(t, "new@example.com", nil))
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
+	if rec.Code != http.StatusFound || locationPath(t, rec) != "/" {
 		t.Fatalf("status = %d location = %q, want 302 /", rec.Code, rec.Header().Get("Location"))
+	}
+	// The redirect target carries the cache-busting parameter so a browser
+	// holding a fresh cached copy of the index cannot serve the redirect
+	// from its cache and swallow the flash.
+	if loc := rec.Header().Get("Location"); !strings.HasPrefix(loc, "/?_=") {
+		t.Errorf("location = %q, want the cache-busting ?_= parameter", loc)
 	}
 	if flash := readFlash(t, rec); flash.Notice != "订阅成功！请检查您的邮箱并点击确认链接。" {
 		t.Errorf("notice = %q", flash.Notice)
@@ -230,7 +237,7 @@ func TestSubscriptionCreateCaptchaFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := doRequest(t, h, http.MethodPost, "/subscriptions", tt.form)
-			if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
+			if rec.Code != http.StatusFound || locationPath(t, rec) != "/" {
 				t.Fatalf("status = %d, want 302 /", rec.Code)
 			}
 			if flash := readFlash(t, rec); flash.Alert != tt.wantAlert {
@@ -358,6 +365,156 @@ func TestSubscriptionCreateMultipart(t *testing.T) {
 	}
 }
 
+// TestSubscriptionCreateMultipartMixedCaseContentType: MIME types are
+// case-insensitive (RFC 2045), so a mixed-case Multipart/Form-Data header
+// must still take the multipart branch — a case-sensitive dispatch fell
+// through to ParseForm, which never reads a multipart body, and the
+// submission failed validation on the "missing" email field.
+func TestSubscriptionCreateMultipartMixedCaseContentType(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for key, values := range validSubscriptionForm(t, "mixedcase@example.com", nil) {
+		for _, v := range values {
+			if err := mw.WriteField(key, v); err != nil {
+				t.Fatalf("write multipart field: %v", err)
+			}
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/subscriptions", &buf)
+	req.Header.Set("Content-Type", "Multipart/Form-Data; boundary="+mw.Boundary())
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode json: %v", err)
+	}
+	if !body.Success {
+		t.Errorf("json = %+v, want success", body)
+	}
+	if _, err := s.Q.GetSubscriberByEmail(t.Context(), "mixedcase@example.com"); err != nil {
+		t.Errorf("subscriber not stored from mixed-case multipart submission: %v", err)
+	}
+}
+
+// TestSubscriptionCreateBodyTooLarge: the subscription form carries only text
+// fields, so the whole request body is capped (http.MaxBytesReader, same as
+// the media upload). An oversized multipart body is rejected with 413
+// instead of spilling file parts into os.TempDir().
+func TestSubscriptionCreateBodyTooLarge(t *testing.T) {
+	_, h := newSubscriptionTestServer(t)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for key, values := range validSubscriptionForm(t, "big@example.com", nil) {
+		for _, v := range values {
+			if err := mw.WriteField(key, v); err != nil {
+				t.Fatalf("write multipart field: %v", err)
+			}
+		}
+	}
+	if err := mw.WriteField("note", strings.Repeat("a", 2<<20)); err != nil {
+		t.Fatalf("write multipart field: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/subscriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+}
+
+// TestSubscriptionCreateUrlencodedBodyTooLarge: the /subscriptions page posts
+// urlencoded, and the 1 MB cap must fire there too — ParseMultipartForm used
+// to return ErrNotMultipart for such bodies while discarding the
+// *http.MaxBytesError its internal ParseForm produced, so the handler ran on
+// query-only params instead of rejecting with 413.
+func TestSubscriptionCreateUrlencodedBodyTooLarge(t *testing.T) {
+	_, h := newSubscriptionTestServer(t)
+
+	rec := doRequest(t, h, http.MethodPost, "/subscriptions", url.Values{
+		"subscription[email]": {"big@example.com"},
+		"note":                {strings.Repeat("a", 2<<20)},
+	})
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+}
+
+// TestSubscriptionUnsubscribeBodyTooLarge: POST /unsubscribe carries only a
+// token, so the body is capped like subscriptionsCreate. An oversized
+// multipart body is rejected with 413 and spills nothing into os.TempDir().
+func TestSubscriptionUnsubscribeBodyTooLarge(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+	_, h := newSubscriptionTestServer(t)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("token", "abc"); err != nil {
+		t.Fatalf("write multipart field: %v", err)
+	}
+	fw, err := mw.CreateFormFile("file", "big.bin")
+	if err != nil {
+		t.Fatalf("create multipart file: %v", err)
+	}
+	if _, err := fw.Write(bytes.Repeat([]byte("a"), 2<<20)); err != nil {
+		t.Fatalf("write multipart file: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/unsubscribe", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("read temp dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("temp files left behind: %v", entries)
+	}
+}
+
+// TestSubscriptionUnsubscribeUrlencodedBodyTooLarge: same cap for the
+// urlencoded unsubscribe form.
+func TestSubscriptionUnsubscribeUrlencodedBodyTooLarge(t *testing.T) {
+	_, h := newSubscriptionTestServer(t)
+
+	rec := doRequest(t, h, http.MethodPost, "/unsubscribe", url.Values{
+		"token": {"abc"},
+		"note":  {strings.Repeat("a", 2<<20)},
+	})
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+}
+
 func TestSubscriptionCreateTagAssignment(t *testing.T) {
 	s, h := newSubscriptionTestServer(t)
 	tagA := insertTagRow(t, s, "Go")
@@ -392,11 +549,83 @@ func TestSubscriptionCreateTagAssignment(t *testing.T) {
 	}
 }
 
+// TestSubscriptionCreateDuplicateTagIDs: a crafted form can repeat
+// subscription[tag_ids][] values. Without dedupe, ReplaceTags' second
+// AddSubscriberTag hits UNIQUE(subscriber_id, tag_id) and rolls back, and a
+// new subscriber is left with the row committed but no confirmation email.
+func TestSubscriptionCreateDuplicateTagIDs(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	tagA := insertTagRow(t, s, "Go")
+	tagB := insertTagRow(t, s, "Rails")
+
+	rec := doRequest(t, h, http.MethodPost, "/subscriptions", validSubscriptionForm(t, "dup@example.com", url.Values{
+		"subscription[tag_ids][]": {strconv.FormatInt(tagA.ID, 10), strconv.FormatInt(tagA.ID, 10), strconv.FormatInt(tagB.ID, 10)},
+	}))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	sub, err := s.Q.GetSubscriberByEmail(t.Context(), "dup@example.com")
+	if err != nil {
+		t.Fatalf("subscriber not stored: %v", err)
+	}
+	if got := subscriberTagIDs(t, s, sub.ID); len(got) != 2 || got[0] != tagA.ID || got[1] != tagB.ID {
+		t.Errorf("tags = %v, want [%d %d]", got, tagA.ID, tagB.ID)
+	}
+	if runs := jobRunRows(t, s); len(runs) != 1 {
+		t.Errorf("jobs = %v, want 1 confirmation email", runs)
+	}
+}
+
+// TestExistingTagIDsDBError: a dangling id is dropped (ErrNoRows), but a
+// real DB failure (here: the tags table is gone) propagates instead of
+// silently dropping every selected tag.
+func TestExistingTagIDsDBError(t *testing.T) {
+	s, _ := newSubscriptionTestServer(t)
+	tagA := insertTagRow(t, s, "Go")
+
+	ids, err := s.existingTagIDs(t.Context(), []string{strconv.FormatInt(tagA.ID, 10), "99999"})
+	if err != nil {
+		t.Fatalf("existingTagIDs: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != tagA.ID {
+		t.Errorf("ids = %v, want [%d]", ids, tagA.ID)
+	}
+
+	if _, err := s.DB.Exec(`DROP TABLE tags`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	if _, err := s.existingTagIDs(t.Context(), []string{strconv.FormatInt(tagA.ID, 10)}); err == nil {
+		t.Error("existingTagIDs swallowed a DB error")
+	}
+}
+
+// TestSubscriptionCreateTagLookupError: when the tag lookup fails with a real
+// DB error, the subscription aborts with a 500 and no confirmation email —
+// the user must not get a success flash for a subscription that lost its
+// tags.
+func TestSubscriptionCreateTagLookupError(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	tagA := insertTagRow(t, s, "Go")
+	if _, err := s.DB.Exec(`DROP TABLE tags`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+
+	rec := doRequest(t, h, http.MethodPost, "/subscriptions", validSubscriptionForm(t, "unlucky@example.com", url.Values{
+		"subscription[tag_ids][]": {strconv.FormatInt(tagA.ID, 10)},
+	}))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if runs := jobRunRows(t, s); len(runs) != 0 {
+		t.Errorf("confirmation email sent despite the tag lookup failure: %v", runs)
+	}
+}
+
 func TestSubscriptionCreateAlreadySubscribed(t *testing.T) {
 	s, h := newSubscriptionTestServer(t)
 	tagA := insertTagRow(t, s, "Go")
 	sub := insertSubscriber(t, s, "active@example.com", true, false)
-	if err := subscribersvc.ReplaceTags(t.Context(), s.Q, sub.ID, []int64{tagA.ID}); err != nil {
+	if err := subscribersvc.ReplaceTags(t.Context(), s.DB, sub.ID, []int64{tagA.ID}); err != nil {
 		t.Fatalf("replace tags: %v", err)
 	}
 
@@ -410,6 +639,82 @@ func TestSubscriptionCreateAlreadySubscribed(t *testing.T) {
 	}
 	if runs := jobRunRows(t, s); len(runs) != 0 {
 		t.Errorf("confirmation email re-sent for an active subscriber: %v", runs)
+	}
+}
+
+// TestSubscriptionCreateCaseVariantAlreadySubscribed: SQLite matches email
+// with the BINARY collation, so without normalization a case variant of an
+// existing address would slip past the already-subscribed guard and insert a
+// duplicate row.
+func TestSubscriptionCreateCaseVariantAlreadySubscribed(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	insertSubscriber(t, s, "case@example.com", true, false)
+
+	rec := doRequest(t, h, http.MethodPost, "/subscriptions", validSubscriptionForm(t, " Case@Example.COM ", nil))
+	if flash := readFlash(t, rec); flash.Notice != "您已经订阅了我们的邮件列表。" {
+		t.Errorf("notice = %q", flash.Notice)
+	}
+	if got := subscriberCount(t, s); got != 1 {
+		t.Errorf("subscribers = %d, want 1 (no duplicate row)", got)
+	}
+	if runs := jobRunRows(t, s); len(runs) != 0 {
+		t.Errorf("confirmation email re-sent for an active subscriber: %v", runs)
+	}
+}
+
+// TestSubscriptionCreateLegacyMixedCaseEmail: rows imported verbatim from a
+// Rails dump can hold mixed-case emails. The lookup must match them
+// case-insensitively, otherwise a re-subscription under any other case would
+// slip past the guard and insert a duplicate row.
+func TestSubscriptionCreateLegacyMixedCaseEmail(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	now := time.Now().UTC().Unix()
+	// Insert a legacy row verbatim (bypassing subscribersvc.Create's
+	// normalization), as a Rails import would have produced it.
+	if _, err := s.DB.ExecContext(t.Context(),
+		`INSERT INTO subscribers (email, confirmation_token, unsubscribe_token, confirmed_at, created_at, updated_at)
+		 VALUES ('Legacy@Example.COM', 'ctok', 'utok', ?, ?, ?)`, now, now, now); err != nil {
+		t.Fatalf("insert legacy subscriber: %v", err)
+	}
+
+	rec := doRequest(t, h, http.MethodPost, "/subscriptions", validSubscriptionForm(t, "legacy@example.com", nil))
+	if flash := readFlash(t, rec); flash.Notice != "您已经订阅了我们的邮件列表。" {
+		t.Errorf("notice = %q", flash.Notice)
+	}
+	if got := subscriberCount(t, s); got != 1 {
+		t.Errorf("subscribers = %d, want 1 (no duplicate row)", got)
+	}
+}
+
+// TestGetSubscriberByEmailPrefersExactMatch: the email UNIQUE index uses the
+// BINARY collation, so a legacy mixed-case import and a normalized row for
+// the same address can coexist. The NOCASE lookup matches both, and without
+// the exact-match ordering it would return whichever row the scan hits first
+// (the older mixed-case row) — the already-subscribed guard and the
+// confirmation/reset emails would then act on the stale row.
+func TestGetSubscriberByEmailPrefersExactMatch(t *testing.T) {
+	s, _ := newSubscriptionTestServer(t)
+	now := time.Now().UTC().Unix()
+	// Insert both rows verbatim (bypassing subscribersvc.Create's
+	// normalization), the legacy mixed-case row first so it holds the
+	// smaller rowid a plain NOCASE scan would return.
+	if _, err := s.DB.ExecContext(t.Context(),
+		`INSERT INTO subscribers (email, confirmation_token, unsubscribe_token, created_at, updated_at)
+		 VALUES ('Exact@Example.COM', 'ctok1', 'utok1', ?, ?)`, now, now); err != nil {
+		t.Fatalf("insert legacy subscriber: %v", err)
+	}
+	if _, err := s.DB.ExecContext(t.Context(),
+		`INSERT INTO subscribers (email, confirmation_token, unsubscribe_token, created_at, updated_at)
+		 VALUES ('exact@example.com', 'ctok2', 'utok2', ?, ?)`, now, now); err != nil {
+		t.Fatalf("insert exact subscriber: %v", err)
+	}
+
+	sub, err := s.Q.GetSubscriberByEmail(t.Context(), "exact@example.com")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if sub.Email != "exact@example.com" {
+		t.Errorf("email = %q, want the exact-case row", sub.Email)
 	}
 }
 
@@ -441,6 +746,96 @@ func TestSubscriptionCreatePendingResubmit(t *testing.T) {
 	}
 	if runs := jobRunRows(t, s); len(runs) != 2 {
 		t.Errorf("jobs = %v, want 2 confirmation emails", runs)
+	}
+}
+
+// TestCreateSubscriberRace covers the TOCTOU recovery: when a concurrent
+// request wins the insert race, the UNIQUE violation on the email column
+// resolves to the existing row instead of a bare 500. The second direct
+// call deterministically hits the conflict path.
+func TestCreateSubscriberRace(t *testing.T) {
+	s, _ := newSubscriptionTestServer(t)
+
+	first, err := s.createSubscriber(t.Context(), "race@example.com")
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	second, err := s.createSubscriber(t.Context(), "race@example.com")
+	if err != nil {
+		t.Fatalf("racing create: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Errorf("racing create returned subscriber %d, want existing row %d", second.ID, first.ID)
+	}
+	if got := subscriberCount(t, s); got != 1 {
+		t.Errorf("subscribers = %d, want 1 (no duplicate row)", got)
+	}
+}
+
+// TestSubscriptionCreateRaceRecoversUnsubscribed covers the insert-race
+// recovery when the recovered row is confirmed but unsubscribed (e.g. a
+// concurrent import inserted it that way): like the direct re-subscribe
+// path, the confirmation state must reset and a fresh confirmation email
+// must go out — ConfirmSubscriber alone would leave unsubscribed_at set.
+// The race is staged by inserting the row inside an open transaction: the
+// handler's lookup misses the uncommitted row (found=false) while its own
+// insert blocks until the commit reveals the UNIQUE conflict.
+func TestSubscriptionCreateRaceRecoversUnsubscribed(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	form := validSubscriptionForm(t, "imported@example.com", nil)
+
+	now := time.Now().UTC().Unix()
+	tx, err := s.DB.Begin()
+	if err != nil {
+		t.Fatalf("begin holding transaction: %v", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO subscribers (email, confirmation_token, unsubscribe_token, confirmed_at, unsubscribed_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"imported@example.com", "old-confirmation-token", "old-unsubscribe-token", now, now, now, now); err != nil {
+		t.Fatalf("insert uncommitted subscriber: %v", err)
+	}
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- doRequest(t, h, http.MethodPost, "/subscriptions", form)
+	}()
+	// Give the handler time to pass its lookup before the commit unblocks
+	// its insert into a UNIQUE violation. (If the lookup ever ran after the
+	// commit, the direct re-subscribe path would produce the same state, so
+	// the assertions below hold either way.)
+	time.Sleep(500 * time.Millisecond)
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit holding transaction: %v", err)
+	}
+	rec := <-done
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	if flash := readFlash(t, rec); flash.Notice != "订阅成功！请检查您的邮箱并点击确认链接。" {
+		t.Fatalf("notice = %q", flash.Notice)
+	}
+	sub, err := s.Q.GetSubscriberByEmail(t.Context(), "imported@example.com")
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	// Confirmation state resets; a fresh confirmation token is issued, while
+	// the unsubscribe token is kept (old unsubscribe links stay valid).
+	if sub.ConfirmedAt.Valid || sub.UnsubscribedAt.Valid {
+		t.Errorf("confirmation state not reset: confirmed=%v unsubscribed=%v", sub.ConfirmedAt, sub.UnsubscribedAt)
+	}
+	if sub.ConfirmationToken.String == "old-confirmation-token" {
+		t.Error("confirmation_token was not regenerated")
+	}
+	if sub.UnsubscribeToken.String != "old-unsubscribe-token" {
+		t.Error("unsubscribe_token should be preserved")
+	}
+	if runs := jobRunRows(t, s); len(runs) != 1 || runs[0][0] != jobs.KindNewsletterConfirmation {
+		t.Errorf("jobs = %v, want one newsletter_confirmation", runs)
+	}
+	if got := subscriberCount(t, s); got != 1 {
+		t.Errorf("subscribers = %d, want 1 (no duplicate row)", got)
 	}
 }
 
@@ -479,6 +874,49 @@ func TestSubscriptionResubscribeAfterUnsubscribe(t *testing.T) {
 	rec = doRequest(t, h, http.MethodGet, "/confirm?token="+sub.ConfirmationToken.String, nil)
 	if !strings.Contains(rec.Body.String(), "订阅确认成功") {
 		t.Error("new confirmation token should confirm")
+	}
+}
+
+// TestSubscriptionResubscribeLegacyTokenless: an imported legacy row may
+// carry a blank confirmation token (imports keep token columns verbatim).
+// Re-subscribing must mint one — otherwise the confirmation email links an
+// empty token that /confirm deliberately rejects, and the address could
+// never confirm.
+func TestSubscriptionResubscribeLegacyTokenless(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	now := time.Now().UTC().Unix()
+	// Cover both legacy shapes: empty string and NULL.
+	for i, token := range []any{"", nil} {
+		email := "legacy" + strconv.Itoa(i) + "@example.com"
+		unsubscribeToken := "unsubscribe-token-" + strconv.Itoa(i)
+		if _, err := s.DB.Exec(
+			`INSERT INTO subscribers (email, confirmation_token, unsubscribe_token, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?)`, email, token, unsubscribeToken, now, now); err != nil {
+			t.Fatalf("insert legacy subscriber: %v", err)
+		}
+
+		rec := doRequest(t, h, http.MethodPost, "/subscriptions", validSubscriptionForm(t, email, nil))
+		if flash := readFlash(t, rec); flash.Notice != "订阅成功！请检查您的邮箱并点击确认链接。" {
+			t.Fatalf("token %v: notice = %q", token, flash.Notice)
+		}
+		sub, err := s.Q.GetSubscriberByEmail(t.Context(), email)
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if sub.ConfirmationToken.String == "" {
+			t.Fatalf("token %v: confirmation_token was not minted", token)
+		}
+		if sub.UnsubscribeToken.String != unsubscribeToken {
+			t.Errorf("token %v: unsubscribe_token should be preserved", token)
+		}
+		// The confirmation link from the email confirms the subscription.
+		rec = doRequest(t, h, http.MethodGet, "/confirm?token="+sub.ConfirmationToken.String, nil)
+		if !strings.Contains(rec.Body.String(), "订阅确认成功") {
+			t.Errorf("token %v: minted confirmation token should confirm", token)
+		}
+	}
+	if runs := jobRunRows(t, s); len(runs) != 2 {
+		t.Errorf("jobs = %v, want 2 confirmation emails", runs)
 	}
 }
 
@@ -545,6 +983,130 @@ func TestUnsubscribeGetVsPost(t *testing.T) {
 	rec = doRequest(t, h, http.MethodPost, "/unsubscribe", url.Values{"token": {"nope"}})
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "取消订阅失败") {
 		t.Errorf("POST invalid: status = %d, want 200 with failure page", rec.Code)
+	}
+}
+
+// TestSubscriptionPagesCacheControlFlash: the subscription pages embed a
+// per-request captcha token or render a token-bound result, so they stay
+// private with a short max-age; a response that renders a one-time flash
+// degrades to no-cache (same contract as the article pages).
+func TestSubscriptionPagesCacheControlFlash(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+
+	flashCookie := signedFlashCookie(t, s, templates.Flash{Notice: "subscribed"})
+
+	for _, tc := range []struct {
+		method, path string
+		form         url.Values
+	}{
+		{http.MethodGet, "/subscriptions", nil},
+		{http.MethodGet, "/confirm", nil},
+		{http.MethodGet, "/unsubscribe", nil},
+		{http.MethodPost, "/unsubscribe", url.Values{"token": {"nope"}}},
+	} {
+		rec := doRequest(t, h, tc.method, tc.path, tc.form)
+		if cc := rec.Header().Get("Cache-Control"); cc != "private, max-age=60" {
+			t.Errorf("%s %s Cache-Control = %q, want private, max-age=60", tc.method, tc.path, cc)
+		}
+		rec = doRequest(t, h, tc.method, tc.path, tc.form, flashCookie)
+		if cc := rec.Header().Get("Cache-Control"); cc != "private, no-cache" {
+			t.Errorf("%s %s Cache-Control with flash = %q, want private, no-cache", tc.method, tc.path, cc)
+		}
+	}
+}
+
+// TestSubscriptionPagesErrorNotCached: Cache-Control is set only after every
+// fallible query, because http.Error does not clear headers already set — a
+// 500 carrying a cacheable header would be stored by a CDN.
+func TestSubscriptionPagesErrorNotCached(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	if _, err := s.DB.Exec(`DROP TABLE subscribers`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+
+	for _, tc := range []struct {
+		method, path string
+		form         url.Values
+	}{
+		{http.MethodGet, "/confirm?token=abc", nil},
+		{http.MethodGet, "/unsubscribe?token=abc", nil},
+		{http.MethodPost, "/unsubscribe", url.Values{"token": {"abc"}}},
+	} {
+		rec := doRequest(t, h, tc.method, tc.path, tc.form)
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("%s %s status = %d, want 500", tc.method, tc.path, rec.Code)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "" {
+			t.Errorf("%s %s Cache-Control = %q, want empty on a 500", tc.method, tc.path, cc)
+		}
+	}
+}
+
+// TestSubscriptionPagesErrorKeepsFlash: PopFlash runs only after every
+// fallible query, so a 500 response must not carry the clearing Set-Cookie —
+// the one-time flash survives to render on the next successful page.
+func TestSubscriptionPagesErrorKeepsFlash(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	if _, err := s.DB.Exec(`DROP TABLE subscribers`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	flashCookie := signedFlashCookie(t, s, templates.Flash{Notice: "subscribed"})
+
+	for _, tc := range []struct {
+		method, path string
+		form         url.Values
+	}{
+		{http.MethodGet, "/confirm?token=abc", nil},
+		{http.MethodGet, "/unsubscribe?token=abc", nil},
+		{http.MethodPost, "/unsubscribe", url.Values{"token": {"abc"}}},
+	} {
+		rec := doRequest(t, h, tc.method, tc.path, tc.form, flashCookie)
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("%s %s status = %d, want 500", tc.method, tc.path, rec.Code)
+		}
+		if cleared := findCookie(rec, flashCookieName); cleared != nil {
+			t.Errorf("%s %s cleared the flash cookie on a 500: %+v", tc.method, tc.path, cleared)
+		}
+	}
+}
+
+// TestTokenlessConfirmAndUnsubscribe: a request without a token must never
+// resolve a subscriber — imports keep legacy token columns verbatim, so a
+// row whose stored token is the empty string would otherwise match a
+// tokenless lookup (leaking the email, or confirming/unsubscribing it).
+func TestTokenlessConfirmAndUnsubscribe(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	now := time.Now().UTC().Unix()
+	if _, err := s.DB.Exec(
+		`INSERT INTO subscribers (email, confirmation_token, unsubscribe_token, created_at, updated_at)
+		 VALUES (?, '', '', ?, ?)`, "legacy@example.com", now, now); err != nil {
+		t.Fatalf("insert legacy subscriber: %v", err)
+	}
+
+	// GET /confirm without a token renders the failure page.
+	rec := doRequest(t, h, http.MethodGet, "/confirm", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "订阅确认失败") {
+		t.Errorf("tokenless confirm: status = %d, want 200 with failure page", rec.Code)
+	}
+	// GET /unsubscribe without a token must not disclose the email.
+	rec = doRequest(t, h, http.MethodGet, "/unsubscribe", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "取消订阅失败") {
+		t.Errorf("tokenless unsubscribe form: status = %d, want 200 with failure page", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "legacy@example.com") {
+		t.Error("tokenless unsubscribe form leaked the subscriber email")
+	}
+	// POST /unsubscribe without a token unsubscribes nobody.
+	rec = doRequest(t, h, http.MethodPost, "/unsubscribe", url.Values{})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "取消订阅失败") {
+		t.Errorf("tokenless unsubscribe: status = %d, want 200 with failure page", rec.Code)
+	}
+	sub, err := s.Q.GetSubscriberByEmail(t.Context(), "legacy@example.com")
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if sub.ConfirmedAt.Valid || sub.UnsubscribedAt.Valid {
+		t.Error("tokenless request changed the subscriber state")
 	}
 }
 

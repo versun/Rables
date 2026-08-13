@@ -74,7 +74,7 @@
               </td>
               <td>
                 {{if .CommentableURL}}
-                  <a href="{{.CommentableURL}}" class="title-link" target="_blank">{{.TruncatedTitle}}</a>
+                  <a href="{{.CommentableURL}}" class="title-link" target="_blank" rel="noopener">{{.TruncatedTitle}}</a>
                 {{else}}
                   <small class="text-muted">—</small>
                 {{end}}
@@ -85,7 +85,7 @@
                   <br><small class="text-muted">{{.Comment.AuthorEmail.String}}</small>
                 {{end}}
                 {{if .Comment.AuthorUrl.Valid}}
-                  <br><small><a href="{{.Comment.AuthorUrl.String}}" target="_blank" class="text-muted">{{.Comment.AuthorUrl.String}}</a></small>
+                  <br><small><a href="{{.Comment.AuthorUrl.String}}" target="_blank" rel="noopener" class="text-muted">{{.Comment.AuthorUrl.String}}</a></small>
                 {{end}}
                 {{if .Comment.Platform.Valid}}
                   <br><small class="text-muted">via {{.PlatformTitle}}</small>

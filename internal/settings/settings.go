@@ -96,14 +96,25 @@ type SocialLink struct {
 type SocialLinks map[string]SocialLink
 
 // UnmarshalSocialLinks decodes the stored social_links JSON. An empty string
-// (NULL column) yields nil.
+// (NULL column) yields nil. Entries without the SocialLink shape are skipped,
+// like the Rails view ignoring links it cannot render, and a row that fails
+// to decode at all degrades to no links, so a malformed row stored before
+// validation tightened never takes down every public page.
 func UnmarshalSocialLinks(text string) (SocialLinks, error) {
 	if text == "" {
 		return nil, nil
 	}
-	var links SocialLinks
-	if err := json.Unmarshal([]byte(text), &links); err != nil {
-		return nil, fmt.Errorf("settings: decode social_links: %w", err)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &raw); err != nil {
+		return nil, nil
+	}
+	links := make(SocialLinks, len(raw))
+	for platform, value := range raw {
+		var link SocialLink
+		if err := json.Unmarshal(value, &link); err != nil {
+			continue
+		}
+		links[platform] = link
 	}
 	return links, nil
 }
@@ -131,7 +142,9 @@ func (c *Cache) SocialLinks(ctx context.Context) (SocialLinks, error) {
 
 // NormalizeSocialLinks validates the JSON submitted from the admin form and
 // returns it compact-encoded for storage. Like Rails' parse_social_links_json
-// the top level must be a JSON object; any object shape is accepted.
+// the top level must be a JSON object; each value must also have the
+// SocialLink shape ({url, icon}), since the public layout decodes into
+// SocialLinks and a malformed entry would fail every page.
 func NormalizeSocialLinks(raw string) (string, error) {
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
@@ -139,6 +152,21 @@ func NormalizeSocialLinks(raw string) (string, error) {
 	}
 	if parsed == nil { // "null" decodes without error into a nil map
 		return "", fmt.Errorf("settings: social links must be a JSON object")
+	}
+	var entries map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return "", fmt.Errorf("settings: invalid social links JSON: %w", err)
+	}
+	for platform, value := range entries {
+		// A null value decodes into a zero SocialLink without error, so it
+		// must be rejected explicitly instead of relying on the struct decode.
+		if string(value) == "null" {
+			return "", fmt.Errorf("settings: social link %q must be an object", platform)
+		}
+		var link SocialLink
+		if err := json.Unmarshal(value, &link); err != nil {
+			return "", fmt.Errorf("settings: invalid social link %q: %w", platform, err)
+		}
 	}
 	data, err := json.Marshal(parsed)
 	if err != nil {

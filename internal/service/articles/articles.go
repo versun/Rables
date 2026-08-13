@@ -9,12 +9,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"rables/internal/db/query"
 	"rables/internal/domain"
 	"rables/internal/jobs"
+	"rables/internal/service/media"
 	tagsvc "rables/internal/service/tags"
 )
 
@@ -161,20 +166,39 @@ func Save(ctx context.Context, db *sql.DB, existing *query.Article, p SaveParams
 	// Markdown articles store the source in content_markdown and the rendered
 	// HTML in content_html, so the sanitize/lazy-load write path and every
 	// content_html reader (public page, feed, newsletter, crosspost) treat
-	// them exactly like rich-text articles.
+	// them exactly like rich-text articles. Raw html articles skip that pass:
+	// content_type keeps only the "skip sanitize" semantic (0001), so the
+	// admin-entered HTML is stored verbatim.
 	isMarkdown := p.ContentType == string(domain.ContentTypeMarkdown)
 	body := p.ContentHTML
 	if isMarkdown {
 		body = domain.RenderMarkdown(body)
 	}
-	contentHTML := domain.AddLazyLoading(domain.SanitizeHTML(body))
+	contentHTML := body
+	if p.ContentType != string(domain.ContentTypeHTML) {
+		contentHTML = domain.AddLazyLoading(domain.SanitizeHTML(body))
+	}
 	excerpt := domain.BuildExcerpt(p.Description, contentHTML)
 
 	var errs []string
+	// A handwritten slug of only dots strips to "" in GenerateSlug; stored as
+	// a NULL slug, the article would be unreachable from routes and admin.
+	if domain.IsBlank(slug) {
+		errs = append(errs, "Slug can't be blank")
+	}
+	// GenerateSlug already strips URL-unsafe chars (CleanSlug); this guards
+	// against any future path letting one through, which would break the
+	// public route and admin links embedding the slug in a URL path.
+	if !domain.IsValidSlug(slug) {
+		errs = append(errs, "Slug is invalid")
+	}
 	if exists(slug) {
 		errs = append(errs, "Slug has already been taken")
 	}
-	if domain.IsReservedSlug(slug) {
+	// Admin batch actions are reserved too: POST /admin/posts/batch_destroy
+	// is a static chi route, so it would swallow the update (POST
+	// /admin/posts/{id}) of an article slugged "batch_destroy".
+	if domain.IsReservedSlug(slug) || slices.Contains(domain.AdminArticleBatchSlugs, slug) {
 		errs = append(errs, "Slug is reserved")
 	}
 	if p.Status == domain.StatusSchedule && p.ScheduledAt == nil {
@@ -213,7 +237,13 @@ func Save(ctx context.Context, db *sql.DB, existing *query.Article, p SaveParams
 
 	createdAt := p.CreatedAt
 	if createdAt.IsZero() {
-		createdAt = now
+		// A blank/unparseable created_at means "keep the stored value" on
+		// update; only a create falls back to now.
+		if existing != nil {
+			createdAt = time.Unix(existing.CreatedAt, 0).UTC()
+		} else {
+			createdAt = now
+		}
 	}
 	var scheduledAt sql.NullInt64
 	if p.ScheduledAt != nil {
@@ -407,8 +437,15 @@ func TransitionStatus(ctx context.Context, db *sql.DB, id int64, target domain.S
 
 // Destroy removes the article with its dependent rows (dependent: :destroy on
 // comments, article_tags, social_media_posts) and drops any queued
-// publish_article job for it.
-func Destroy(ctx context.Context, db *sql.DB, id int64) error {
+// publish_article job for it. Attached media follow has_rich_text's dependent
+// purge: the article's attachment rows go, and a file left without any
+// reference is deleted (variants first — files.variant_of
+// references the original under foreign_keys enforcement) with its disk blob
+// unlinked after commit. A file still referenced elsewhere — attached to
+// another record, used by a static_files entry, or embedded by its
+// /files/<key> URL in any stored content — keeps its row, its variants and
+// its blob.
+func Destroy(ctx context.Context, db *sql.DB, id int64, dataDir string) error {
 	q := query.New(db)
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -429,13 +466,116 @@ func Destroy(ctx context.Context, db *sql.DB, id int64) error {
 	if err := qtx.DeleteSocialMediaPostsByArticleID(ctx, id); err != nil {
 		return err
 	}
-	if err := CancelQueuedPublishJobs(ctx, qtx, id); err != nil {
-		return err
-	}
+	// Delete the article row up front: the content-reference check in the
+	// file sweep below must not count the doomed article's own body.
 	if err := qtx.DeleteArticle(ctx, id); err != nil {
 		return err
 	}
-	return tx.Commit()
+
+	type fileRef struct {
+		id  int64
+		key string
+	}
+	var doomed []fileRef // file rows deleted in the tx, unlinked after commit
+	attached, err := qtx.ListAttachmentFilesForRecord(ctx, query.ListAttachmentFilesForRecordParams{
+		RecordType: "Article",
+		RecordID:   id,
+	})
+	if err != nil {
+		return err
+	}
+	if err := qtx.DeleteAttachmentsForRecord(ctx, query.DeleteAttachmentsForRecordParams{
+		RecordType: "Article",
+		RecordID:   id,
+	}); err != nil {
+		return err
+	}
+	for _, f := range attached {
+		referenced, err := fileReferenced(ctx, qtx, f.ID, f.Key)
+		if err != nil {
+			return err
+		}
+		if referenced {
+			continue // still referenced elsewhere: keep row, variants and blob
+		}
+		variants, err := qtx.ListFileVariants(ctx, sql.NullInt64{Int64: f.ID, Valid: true})
+		if err != nil {
+			return err
+		}
+		refs := make([]fileRef, 0, len(variants))
+		shared := false
+		for _, v := range variants {
+			vReferenced, err := fileReferenced(ctx, qtx, v.ID, v.Key)
+			if err != nil {
+				return err
+			}
+			if vReferenced {
+				// A variant that is itself referenced pins its original via
+				// files.variant_of: keep the whole family.
+				shared = true
+				break
+			}
+			refs = append(refs, fileRef{id: v.ID, key: v.Key})
+		}
+		if shared {
+			continue
+		}
+		for _, ref := range refs {
+			if err := qtx.DeleteFile(ctx, ref.id); err != nil {
+				return err
+			}
+			doomed = append(doomed, ref)
+		}
+		if err := qtx.DeleteFile(ctx, f.ID); err != nil {
+			return err
+		}
+		doomed = append(doomed, fileRef{id: f.ID, key: f.Key})
+	}
+
+	if err := CancelQueuedPublishJobs(ctx, qtx, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Disk blobs are removed only after the transaction commits; failures are
+	// logged, never fatal (the purge_later semantics of the twitter archive
+	// importer). Only well-formed keys ever reach a disk path.
+	for _, ref := range doomed {
+		if !media.ValidKey(ref.key) {
+			slog.Warn("articles: skip blob removal, unsafe key", "key", ref.key)
+			continue
+		}
+		path := filepath.Join(dataDir, "files", ref.key[0:2], ref.key[2:4], ref.key)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("articles: remove destroyed article blob", "key", ref.key, "error", err)
+		}
+	}
+	return nil
+}
+
+// fileReferenced reports whether a files row is still referenced by an
+// attachment, a static_files entry or a /files/<key> URL in stored content.
+// static_files.file_id references files(id) under foreign_keys enforcement,
+// and a database import can merge a static file onto a row that is also
+// attached to a record, so both count; content embeds files by URL without
+// any attachment row (the model ReapOrphanFiles already uses), so a URL
+// reuse in another article, page, comment, setting or redirect counts too.
+func fileReferenced(ctx context.Context, q *query.Queries, id int64, key string) (bool, error) {
+	attached, err := q.CountAttachmentsForFile(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	static, err := q.CountStaticFilesForFile(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	content, err := q.CountFileKeyContentReferences(ctx, sql.NullString{String: key, Valid: true})
+	if err != nil {
+		return false, err
+	}
+	return attached+static+content > 0, nil
 }
 
 // CancelQueuedPublishJobs drops queued publish_article rows for the article

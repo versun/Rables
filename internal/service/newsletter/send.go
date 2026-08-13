@@ -108,7 +108,7 @@ func (s *sender) sendNewsletter(ctx context.Context, raw json.RawMessage) error 
 	case "native":
 		return s.sendNative(ctx, p.ArticleID, st)
 	case "listmonk":
-		return s.sendListmonk(ctx, p.ArticleID)
+		return s.sendListmonk(ctx, p.ArticleID, st)
 	default:
 		// Article#handle_newsletter only logs an unknown provider.
 		slog.Default().Warn("unknown newsletter provider", "provider", st.Provider)
@@ -214,11 +214,20 @@ func (s *sender) sendReplyNotification(ctx context.Context, raw json.RawMessage)
 		Text:    textBody,
 	}
 	if err := s.cfg.NewSender(ConfigFromSetting(st)).Send(ctx, msg); err != nil {
-		// log_failure of the job's rescue, minus the event notifications.
+		if errors.Is(err, context.Canceled) {
+			// Worker shutdown: return the error so the job is rescheduled
+			// instead of logged as a permanent failure, which would
+			// silently drop the notification.
+			return err
+		}
+		// The job rescues StandardError and only calls log_failure (minus the
+		// event notifications): swallow the error so the worker does not
+		// retry — a retry could duplicate a notification the SMTP server
+		// already accepted.
 		activity.Log(ctx, s.db, "error", "failed", "comment_reply_notification", fmt.Sprintf(
 			"email=%s error=%s comment_id=%d",
 			activity.Quote(parent.AuthorEmail.String), activity.Quote(err.Error()), comment.ID))
-		return fmt.Errorf("deliver reply notification for comment %d: %w", comment.ID, err)
+		return nil
 	}
 	activity.Log(ctx, s.db, "info", "sent", "comment_reply_notification", fmt.Sprintf(
 		"email=%s author=%s comment_id=%d",

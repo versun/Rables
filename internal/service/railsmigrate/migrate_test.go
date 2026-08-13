@@ -3,6 +3,7 @@ package railsmigrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -57,7 +58,7 @@ CREATE TABLE crossposts (id INTEGER PRIMARY KEY, platform TEXT, enabled INTEGER,
 CREATE TABLE listmonks (id INTEGER PRIMARY KEY, url TEXT, username TEXT, api_key TEXT, list_id INTEGER,
   template_id INTEGER, enabled INTEGER, created_at TEXT, updated_at TEXT);
 CREATE TABLE twitter_syncs (id INTEGER PRIMARY KEY, enabled INTEGER, username TEXT, user_id TEXT, since_id TEXT,
-  start_date TEXT, sync_schedule TEXT, last_synced_at TEXT, last_error TEXT, created_at TEXT, updated_at TEXT);
+  start_date date, sync_schedule TEXT, last_synced_at TEXT, last_error TEXT, created_at TEXT, updated_at TEXT);
 CREATE TABLE twitter_archive_tweets (id INTEGER PRIMARY KEY, tweet_id TEXT, screen_name TEXT, full_text TEXT,
   entry_type TEXT, tweeted_at TEXT, created_at TEXT, updated_at TEXT);
 CREATE TABLE twitter_archive_connections (id INTEGER PRIMARY KEY, account_id TEXT, screen_name TEXT,
@@ -449,5 +450,404 @@ func TestVerifyFiles(t *testing.T) {
 	}
 	if len(rep.Verified.Missing) != 2 {
 		t.Errorf("expected 2 missing files with one on disk, got %v", rep.Verified.Missing)
+	}
+}
+
+// BeforeVerify runs after the commit and before the files check: blobs the
+// hook restores must be seen by the verification.
+func TestBeforeVerify(t *testing.T) {
+	oldPath := buildFixture(t)
+	oldDB := openRO(t, oldPath)
+	dir := t.TempDir()
+	newDB, err := db.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newDB.Close()
+
+	hookRan := false
+	rep, err := Run(context.Background(), oldDB, newDB, Options{
+		Out:         io.Discard,
+		DataDir:     dir,
+		VerifyFiles: true,
+		BeforeVerify: func() error {
+			hookRan = true
+			p := filepath.Join(dir, "files", "aa", "aa")
+			if err := os.MkdirAll(p, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(p, "aaaa1111bbbb"), []byte("x"), 0o644)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hookRan {
+		t.Fatal("BeforeVerify hook did not run")
+	}
+	if rep.Verified == nil || len(rep.Verified.Missing) != 2 {
+		t.Errorf("expected the hook-restored blob to pass verification, got %+v", rep.Verified)
+	}
+}
+
+// A post-commit failure (BeforeVerify or the files check) must still print the
+// report: the transaction is already committed, so the admin needs the table
+// counts to reconcile the migration.
+func TestReportPrintedOnPostCommitFailure(t *testing.T) {
+	oldPath := buildFixture(t)
+	oldDB := openRO(t, oldPath)
+	newDB, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newDB.Close()
+
+	var out strings.Builder
+	_, err = Run(context.Background(), oldDB, newDB, Options{
+		Out:          &out,
+		BeforeVerify: func() error { return errors.New("boom") },
+	})
+	if err == nil {
+		t.Fatal("expected an error from BeforeVerify")
+	}
+	if !strings.Contains(out.String(), "RESULT:") {
+		t.Errorf("report should be printed even when a post-commit step fails, got:\n%s", out.String())
+	}
+}
+
+// A singleton the old database has no row for (e.g. twitter_syncs when the
+// Rails admin never touched it) while the Go app already ensured its own row
+// is the expected end state, not a mismatch.
+func TestRunSingletonMissingInOld(t *testing.T) {
+	oldPath := buildFixture(t)
+	old, err := sql.Open("sqlite", oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"settings", "newsletter_settings", "listmonks", "twitter_syncs"} {
+		if _, err := old.Exec("DELETE FROM " + table); err != nil {
+			t.Fatalf("clear old %s: %v", table, err)
+		}
+	}
+	old.Close()
+	oldDB := openRO(t, oldPath)
+	newDB, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newDB.Close()
+	// the live app ensures its singleton rows before the migration runs
+	for _, table := range []string{"settings", "newsletter_settings", "listmonks", "twitter_syncs"} {
+		if _, err := newDB.Exec("INSERT INTO " + table + " (id, created_at, updated_at) VALUES (1, 0, 0)"); err != nil {
+			t.Fatalf("ensure new %s: %v", table, err)
+		}
+	}
+
+	rep, err := Run(context.Background(), oldDB, newDB, Options{Out: io.Discard})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if rep.Mismatch() {
+		t.Fatalf("unexpected mismatch: %+v", rep.Tables)
+	}
+	for _, name := range []string{"settings", "newsletter_settings", "listmonks", "twitter_syncs"} {
+		tr := tableReport(rep, name)
+		if tr.Old != 0 || tr.NewTotal != 1 || tr.Expected != 1 {
+			t.Errorf("%s: old=%d total=%d expected=%d, want 0/1/1", name, tr.Old, tr.NewTotal, tr.Expected)
+		}
+	}
+}
+
+// A first_or_create race can leave duplicate rows in a Rails singleton
+// table; the migration still carries only the first row (ORDER BY id
+// LIMIT 1), so the extras count as transformed, not as a MISMATCH.
+func TestRunSingletonDuplicatesInOld(t *testing.T) {
+	oldPath := buildFixture(t)
+	old, err := sql.Open("sqlite", oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicates := []string{
+		`INSERT INTO settings VALUES (2, 'Dup', 'desc', 'versun', 'https://blog.test', 'UTC', NULL, NULL,
+		  NULL, NULL, NULL, 1, NULL, NULL, '` + ts1 + `', '` + ts1 + `')`,
+		`INSERT INTO newsletter_settings VALUES (2, 1, 'native', 'dup@x.test', 'smtp.x.test', 2525, 'u', 'p',
+		  'x.test', 'login', 0, '` + ts1 + `', '` + ts1 + `')`,
+		`INSERT INTO listmonks VALUES (2, 'https://lm2.test', 'api', 'key', 3, 2, 1, '` + ts1 + `', '` + ts1 + `')`,
+		`INSERT INTO twitter_syncs VALUES (2, 1, 'dup', '124', '457', '2025-01-02', 'hourly', '` + ts2 + `',
+		  NULL, '` + ts1 + `', '` + ts1 + `')`,
+	}
+	for _, s := range duplicates {
+		if _, err := old.Exec(s); err != nil {
+			t.Fatalf("duplicate fixture: %v\n%s", err, s)
+		}
+	}
+	old.Close()
+	oldDB := openRO(t, oldPath)
+	newDB, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newDB.Close()
+
+	rep, err := Run(context.Background(), oldDB, newDB, Options{Out: io.Discard})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if rep.Mismatch() {
+		t.Fatalf("unexpected mismatch: %+v", rep.Tables)
+	}
+	for _, name := range []string{"settings", "newsletter_settings", "listmonks", "twitter_syncs"} {
+		tr := tableReport(rep, name)
+		if tr.Old != 2 || tr.Inserted != 1 || tr.Transformed != 1 || tr.NewTotal != 1 || tr.Expected != 1 {
+			t.Errorf("%s: old=%d inserted=%d transformed=%d total=%d expected=%d, want 2/1/1/1/1",
+				name, tr.Old, tr.Inserted, tr.Transformed, tr.NewTotal, tr.Expected)
+		}
+	}
+}
+
+// A Rails backup taken while an archive import was queued/running must not
+// carry the stale active row into the new database as-is: it would block new
+// archive uploads (HasActiveTwitterArchiveImport) until the next restart's
+// recovery, and its active_slot would collide with a live active row, which
+// INSERT OR IGNORE would silently swallow (the dropped row then reports a
+// MISMATCH). The migration neutralizes the slot on insert and fails the row,
+// scoped to the ids inserted this run so a pre-existing row is never touched.
+func TestRunNormalizesActiveTwitterArchiveImport(t *testing.T) {
+	oldPath := buildFixture(t)
+	old, err := sql.Open("sqlite", oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// id 2: active in the backup; id 99: active in the backup too, but the
+	// new database already has that row (an earlier catch-up run carried it
+	// while it was still queued) — the normalization must not touch it.
+	stmts := []string{
+		`INSERT INTO twitter_archive_imports VALUES (2, 'running', 40, 0, 0, 0, 0, 0, 'big.zip', '/rails/imports/big.zip',
+		  'Importing tweets', NULL, '` + ts1 + `', '` + ts1 + `', NULL, 1, '` + ts1 + `', '` + ts1 + `')`,
+		`INSERT INTO twitter_archive_imports VALUES (99, 'running', 5, 0, 0, 0, 0, 0, 'live.zip', '/rails/imports/live.zip',
+		  'Reading archive', NULL, '` + ts1 + `', '` + ts1 + `', NULL, 1, '` + ts1 + `', '` + ts1 + `')`,
+	}
+	for _, s := range stmts {
+		if _, err := old.Exec(s); err != nil {
+			old.Close()
+			t.Fatalf("fixture: %v\n%s", err, s)
+		}
+	}
+	old.Close()
+	oldDB := openRO(t, oldPath)
+	newDB, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newDB.Close()
+	if _, err := newDB.Exec(`INSERT INTO twitter_archive_imports (id, status, source_filename, source_path, queued_at, active_slot, created_at, updated_at)
+		VALUES (99, 'queued', 'live.zip', '/data/imports/twitter_archive_live.zip', 1700000002, 1, 1700000002, 1700000002)`); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := Run(context.Background(), oldDB, newDB, Options{Out: io.Discard})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if rep.Mismatch() {
+		t.Fatalf("unexpected mismatch: %+v", rep.Tables)
+	}
+	tr := tableReport(rep, "twitter_archive_imports")
+	if tr.Inserted != 2 || tr.Skipped != 1 {
+		t.Errorf("twitter_archive_imports inserted=%d skipped=%d, want 2/1", tr.Inserted, tr.Skipped)
+	}
+
+	// The row active only in the backup was inserted, then failed with its
+	// slot released; the history values and source_path are kept.
+	var status, errMsg, srcPath string
+	var slot sql.NullInt64
+	if err := newDB.QueryRow(`SELECT status, error_message, source_path, active_slot FROM twitter_archive_imports WHERE id = 2`).
+		Scan(&status, &errMsg, &srcPath, &slot); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || errMsg == "" || srcPath != "/rails/imports/big.zip" || slot.Valid {
+		t.Errorf("import 2 = %q %q %q slot %v, want failed with an explanation, its path and a NULL slot",
+			status, errMsg, srcPath, slot)
+	}
+
+	// The pre-existing active row kept its status and slot (its insert was
+	// the ignored one, so the normalization never saw its id).
+	var liveStatus string
+	var liveSlot int64
+	if err := newDB.QueryRow(`SELECT status, active_slot FROM twitter_archive_imports WHERE id = 99`).Scan(&liveStatus, &liveSlot); err != nil {
+		t.Fatal(err)
+	}
+	if liveStatus != "queued" || liveSlot != 1 {
+		t.Errorf("pre-existing import 99 = %q slot %d, want queued with its slot", liveStatus, liveSlot)
+	}
+
+	// The completed history row came over untouched.
+	var doneStatus string
+	if err := newDB.QueryRow(`SELECT status FROM twitter_archive_imports WHERE id = 1`).Scan(&doneStatus); err != nil {
+		t.Fatal(err)
+	}
+	if doneStatus != "completed" {
+		t.Errorf("import 1 = %q, want completed", doneStatus)
+	}
+}
+
+// fillTotals counts inside the migration transaction, so the totals include
+// this run's own uncommitted writes. Counting on the live database after the
+// commit instead would leave a window where a concurrent write (a public
+// comment, a subscriber, the twitter sync) inflates NewTotal past Expected
+// and reports a MISMATCH no re-run can clear.
+func TestFillTotalsInsideTx(t *testing.T) {
+	newDB, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newDB.Close()
+	ctx := context.Background()
+
+	tx, err := newDB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	m := &migrator{tx: tx, rep: &Report{}}
+	tr := &TableReport{Table: "users", Old: 1, Expected: 1}
+	m.rep.Tables = append(m.rep.Tables, tr)
+	if _, err := m.tx.ExecContext(ctx,
+		"INSERT INTO users (id, user_name, password_digest, created_at, updated_at) VALUES (1, 'versun', 'digest', 0, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.fillTotals(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if tr.NewTotal != 1 {
+		t.Errorf("NewTotal = %d, want 1: the count must see the transaction's own writes", tr.NewTotal)
+	}
+}
+
+// A write committed to the live database while the migration runs (a public
+// comment, a new subscriber, the twitter sync) must not inflate the totals:
+// fillTotals counts inside the migration transaction, so the row never shows
+// up in NewTotal and the run stays free of MISMATCHes.
+func TestRunConcurrentWrite(t *testing.T) {
+	oldPath := buildFixture(t)
+	oldDB := openRO(t, oldPath)
+	newDB, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newDB.Close()
+	ctx := context.Background()
+	// scratch table for probing the migration's write lock
+	if _, err := newDB.Exec("CREATE TABLE probe (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	runDone := make(chan struct{})
+	wrote := make(chan error, 1)
+	go func() {
+		probe, err := newDB.Conn(ctx)
+		if err != nil {
+			wrote <- err
+			return
+		}
+		defer probe.Close()
+		if _, err := probe.ExecContext(ctx, "PRAGMA busy_timeout = 0"); err != nil {
+			wrote <- err
+			return
+		}
+		// a failing probe write means the migration transaction holds the
+		// write lock; the comment then queues behind it and commits right
+		// after the migration does
+	loop:
+		for {
+			select {
+			case <-runDone:
+				break loop
+			default:
+			}
+			if _, err := probe.ExecContext(ctx, "INSERT INTO probe VALUES (1)"); err != nil {
+				break
+			}
+			if _, err := probe.ExecContext(ctx, "DELETE FROM probe"); err != nil {
+				break
+			}
+			// Yield between probes: a hot loop can starve the migration's
+			// first write past its busy_timeout under parallel test load.
+			time.Sleep(time.Millisecond)
+		}
+		// The migration holds the write lock until it commits; retry the
+		// concurrent insert instead of racing a fixed busy_timeout.
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			_, err = newDB.ExecContext(ctx, `INSERT INTO comments
+			(commentable_type, commentable_id, article_id, author_name, content, status, created_at, updated_at)
+			VALUES ('Article', 1, 1, 'mallory', 'concurrent', 1, 0, 0)`)
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		wrote <- err
+	}()
+
+	rep, err := Run(ctx, oldDB, newDB, Options{Out: io.Discard})
+	close(runDone)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if err := <-wrote; err != nil {
+		t.Fatalf("concurrent write: %v", err)
+	}
+	if rep.Mismatch() {
+		t.Fatalf("concurrent write caused a mismatch: %+v", rep.Tables)
+	}
+	// the comment landed, but after the counts were taken
+	if tr := tableReport(rep, "comments"); tr.NewTotal != 3 {
+		t.Errorf("comments NewTotal = %d, want 3 (the concurrent row must not be counted)", tr.NewTotal)
+	}
+	var n int64
+	if err := newDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM comments WHERE author_name = 'mallory'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("concurrent comment rows = %d, want 1", n)
+	}
+}
+
+// A fillTotals failure (here: a table dropped from the new database) must
+// still print the per-table report, like the other post-migration failures.
+func TestFillTotalsErrorPrintsReport(t *testing.T) {
+	oldPath := buildFixture(t)
+	old, err := sql.Open("sqlite", oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// no old redirects rows: the migration step then never touches the new
+	// table, so the run reaches fillTotals before noticing it is gone
+	if _, err := old.Exec("DELETE FROM redirects"); err != nil {
+		old.Close()
+		t.Fatal(err)
+	}
+	old.Close()
+	oldDB := openRO(t, oldPath)
+	newDB, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newDB.Close()
+	if _, err := newDB.Exec("DROP TABLE redirects"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	_, err = Run(context.Background(), oldDB, newDB, Options{Out: &out})
+	if err == nil {
+		t.Fatal("expected an error from fillTotals")
+	}
+	if !strings.Contains(err.Error(), "count new redirects") {
+		t.Errorf("error should name the failed count, got: %v", err)
+	}
+	if !strings.Contains(out.String(), "RESULT:") {
+		t.Errorf("report should be printed even when fillTotals fails, got:\n%s", out.String())
 	}
 }

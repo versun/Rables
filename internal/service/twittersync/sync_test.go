@@ -1,15 +1,23 @@
 package twittersync
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,6 +110,11 @@ func newSyncer(database *sql.DB, dataDir string, srv *httptest.Server) *Syncer {
 	s := NewSyncer(database, dataDir)
 	s.SetBaseURL(srv.URL)
 	s.SetHTTPClient(srv.Client())
+	// Tests dial httptest servers on loopback: resolve every host to a
+	// public IP so the redirect SSRF guard lets the fixtures through.
+	s.SetLookupIP(func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	})
 	return s
 }
 
@@ -467,6 +480,203 @@ func TestFollowRedirectSchemeGuard(t *testing.T) {
 	}
 }
 
+// TestFollowRedirectHopLimit: the redirect budget buys hops, not a discarded
+// final HEAD — a chain of exactly redirectLimit redirects resolves to the
+// last target with exactly redirectLimit requests.
+func TestFollowRedirectHopLimit(t *testing.T) {
+	database := newTestDB(t)
+	var hits atomic.Int64
+	mux := http.NewServeMux()
+	for i := 0; i <= redirectLimit; i++ {
+		mux.HandleFunc(fmt.Sprintf("/hop/%d", i), func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			if i < redirectLimit {
+				w.Header().Set("Location", fmt.Sprintf("/hop/%d", i+1))
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	s := newSyncer(database, t.TempDir(), srv)
+
+	want := srv.URL + fmt.Sprintf("/hop/%d", redirectLimit)
+	if got := s.followRedirect(context.Background(), srv.URL+"/hop/0", redirectLimit); got != want {
+		t.Errorf("followRedirect = %q, want %q (%d hops followed)", got, want, redirectLimit)
+	}
+	if got := hits.Load(); got != int64(redirectLimit) {
+		t.Errorf("HEAD requests = %d, want %d (no wasted request)", got, redirectLimit)
+	}
+}
+
+// TestFollowRedirectBlockedTarget: a redirect chain that lands on an
+// internal address (literal or DNS-resolved) is refused before any request
+// to it, and followRedirect returns "" so the caller keeps the t.co link —
+// the blocked URL must not leak into the article content.
+func TestFollowRedirectBlockedTarget(t *testing.T) {
+	database := newTestDB(t)
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		switch r.URL.Path {
+		case "/literal":
+			w.Header().Set("Location", "http://169.254.169.254/latest/meta-data")
+		case "/named":
+			w.Header().Set("Location", "http://metadata.internal/latest")
+		}
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	s := newSyncer(database, t.TempDir(), srv)
+	// The guard must see the real target: IP literals pass through to the
+	// blocklist check, names resolve to a public IP (metadata.internal to
+	// the link-local metadata address).
+	s.SetLookupIP(func(_ context.Context, host string) ([]netip.Addr, error) {
+		if addr, err := netip.ParseAddr(host); err == nil {
+			return []netip.Addr{addr}, nil
+		}
+		if host == "metadata.internal" {
+			return []netip.Addr{netip.MustParseAddr("169.254.169.254")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	})
+	// t.co is not routable in tests: rewrite the host to the fake server.
+	target, _ := url.Parse(srv.URL)
+	s.SetHTTPClient(&http.Client{Transport: rewriteHostTransport{
+		base: http.DefaultTransport, fromHost: "t.co", scheme: target.Scheme, host: target.Host,
+	}})
+
+	for _, short := range []string{"https://t.co/literal", "https://t.co/named"} {
+		if got := s.followRedirect(context.Background(), short, redirectLimit); got != "" {
+			t.Errorf("followRedirect(%q) = %q, want \"\" (blocked target keeps the t.co link)", short, got)
+		}
+	}
+	if got := hits.Load(); got != 2 {
+		t.Errorf("HEAD requests = %d, want 2 (internal targets never requested)", got)
+	}
+}
+
+// TestFollowRedirectLastHopScreened: a chain of exactly redirectLimit
+// redirects exhausts the hop budget, so the final target never gets a HEAD —
+// but it is still screened, and an internal address there yields "" instead
+// of leaking into the article content.
+func TestFollowRedirectLastHopScreened(t *testing.T) {
+	database := newTestDB(t)
+	var hits atomic.Int64
+	mux := http.NewServeMux()
+	for i := 0; i < redirectLimit; i++ {
+		mux.HandleFunc(fmt.Sprintf("/hop/%d", i), func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			if i < redirectLimit-1 {
+				w.Header().Set("Location", fmt.Sprintf("/hop/%d", i+1))
+			} else {
+				w.Header().Set("Location", "http://169.254.169.254/latest/meta-data")
+			}
+			w.WriteHeader(http.StatusFound)
+		})
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	s := newSyncer(database, t.TempDir(), srv)
+	// The guard must see the real target: IP literals pass through to the
+	// blocklist check, names resolve to a public IP so the hops pass.
+	s.SetLookupIP(func(_ context.Context, host string) ([]netip.Addr, error) {
+		if addr, err := netip.ParseAddr(host); err == nil {
+			return []netip.Addr{addr}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	})
+	// t.co is not routable in tests: rewrite the host to the fake server.
+	target, _ := url.Parse(srv.URL)
+	s.SetHTTPClient(&http.Client{Transport: rewriteHostTransport{
+		base: http.DefaultTransport, fromHost: "t.co", scheme: target.Scheme, host: target.Host,
+	}})
+
+	if got := s.followRedirect(context.Background(), "https://t.co/hop/0", redirectLimit); got != "" {
+		t.Errorf("followRedirect = %q, want \"\" (blocked final target keeps the t.co link)", got)
+	}
+	if got := hits.Load(); got != int64(redirectLimit) {
+		t.Errorf("HEAD requests = %d, want %d (blocked final target never requested)", got, redirectLimit)
+	}
+}
+
+// TestResolveTcoLinksBudget: one text resolves at most tcoResolveBudget
+// distinct short links via HEAD; links past the budget keep their t.co
+// text, so a link-stuffed tweet cannot stall the sync.
+func TestResolveTcoLinksBudget(t *testing.T) {
+	database := newTestDB(t)
+	hits := atomic.Int64{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if !strings.HasPrefix(r.URL.Path, "/dest/") {
+			w.Header().Set("Location", "/dest"+r.URL.Path)
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	s := newSyncer(database, t.TempDir(), srv)
+	// t.co is not routable in tests: rewrite the host to the fake server.
+	target, _ := url.Parse(srv.URL)
+	s.SetHTTPClient(&http.Client{Transport: rewriteHostTransport{
+		base: http.DefaultTransport, fromHost: "t.co", scheme: target.Scheme, host: target.Host,
+	}})
+
+	links := make([]string, 0, tcoResolveBudget+5)
+	wantParts := make([]string, 0, tcoResolveBudget+5)
+	for i := 0; i < tcoResolveBudget+5; i++ {
+		short := fmt.Sprintf("https://t.co/l%02d", i)
+		links = append(links, short)
+		if i < tcoResolveBudget {
+			wantParts = append(wantParts, fmt.Sprintf("https://t.co/dest/l%02d", i))
+		} else {
+			wantParts = append(wantParts, short)
+		}
+	}
+	got := s.resolveTcoLinks(context.Background(), strings.Join(links, " "), apiTweet{ID: "1"}, "")
+	if want := strings.Join(wantParts, " "); got != want {
+		t.Errorf("resolveTcoLinks = %q, want %q (links past the budget keep their t.co text)", got, want)
+	}
+	if got := hits.Load(); got != int64(2*tcoResolveBudget) {
+		t.Errorf("HEAD requests = %d, want %d (budget %d x 2 hops)", got, 2*tcoResolveBudget, tcoResolveBudget)
+	}
+}
+
+// TestResolveTcoLinksMemo: a repeated short link is followed once per text —
+// the memo keeps duplicates from spending the budget and the network twice.
+func TestResolveTcoLinksMemo(t *testing.T) {
+	database := newTestDB(t)
+	hits := atomic.Int64{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path == "/dup" {
+			w.Header().Set("Location", "/final")
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	s := newSyncer(database, t.TempDir(), srv)
+	// t.co is not routable in tests: rewrite the host to the fake server.
+	target, _ := url.Parse(srv.URL)
+	s.SetHTTPClient(&http.Client{Transport: rewriteHostTransport{
+		base: http.DefaultTransport, fromHost: "t.co", scheme: target.Scheme, host: target.Host,
+	}})
+
+	text := "one https://t.co/dup two https://t.co/dup three https://t.co/dup"
+	want := "one https://t.co/final two https://t.co/final three https://t.co/final"
+	if got := s.resolveTcoLinks(context.Background(), text, apiTweet{ID: "1"}, ""); got != want {
+		t.Errorf("resolveTcoLinks = %q, want %q", got, want)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Errorf("HEAD requests = %d, want 2 (memoized duplicate)", got)
+	}
+}
+
 func TestRunMediaDownload(t *testing.T) {
 	database := newTestDB(t)
 	enableSync(t, database, "alice")
@@ -555,9 +765,368 @@ func TestRunMediaDownload(t *testing.T) {
 	}
 }
 
+// TestDownloadMediaSizeLimit refuses an over-100MB download instead of
+// storing a truncated, permanently corrupt file.
+func TestDownloadMediaSizeLimit(t *testing.T) {
+	database := newTestDB(t)
+	dataDir := t.TempDir()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		chunk := make([]byte, 1<<20)
+		for i := 0; i < maxMediaBytes/(1<<20)+1; i++ {
+			_, _ = w.Write(chunk)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	s := newSyncer(database, dataDir, srv)
+
+	if _, err := s.downloadMedia(context.Background(), srv.URL+"/vid/big.mp4", "video/mp4", "999"); err == nil ||
+		!strings.Contains(err.Error(), "100MB") {
+		t.Fatalf("err = %v, want the 100MB limit", err)
+	}
+	var n int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("files rows = %d, want 0 (oversized media must not be stored)", n)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "files")); !os.IsNotExist(err) {
+		t.Errorf("media blob left on disk after a refused download")
+	}
+}
+
+// TestDownloadMediaStripsQueryFromFilename: video variant URLs carry a query
+// string (?tag=12); the stored filename takes its extension from the URL path
+// only, so no query text leaks into it.
+func TestDownloadMediaStripsQueryFromFilename(t *testing.T) {
+	database := newTestDB(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("mp4-bytes"))
+	}))
+	t.Cleanup(srv.Close)
+	s := newSyncer(database, t.TempDir(), srv)
+
+	stored, err := s.downloadMedia(context.Background(), srv.URL+"/vid/clip.mp4?tag=12", "video/mp4", "999")
+	if err != nil {
+		t.Fatalf("downloadMedia: %v", err)
+	}
+	if ext := filepath.Ext(stored.filename); ext != ".mp4" {
+		t.Errorf("filename = %q, want a plain .mp4 extension, got %q", stored.filename, ext)
+	}
+}
+
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// noisyJPEG encodes an image whose variant re-encode is guaranteed to be
+// smaller than the original (random noise does not compress well), so Store
+// also creates a variant row/blob for it.
+func noisyJPEG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2048, 2048))
+	if _, err := rand.Read(img.Pix); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 100}); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// countBlobs returns the number of regular files under <dataDir>/files.
+func countBlobs(t *testing.T, dataDir string) int {
+	t.Helper()
+	n := 0
+	err := filepath.WalkDir(filepath.Join(dataDir, "files"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type().IsRegular() {
+			n++
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("walk blobs: %v", err)
+	}
+	return n
+}
+
+// TestRunMediaReclaimedWhenArchiveFails: when the archive transaction fails
+// after the tweet's media was stored (here the social_media_posts insert is
+// forced to fail), the article rolls back and the stored media rows and
+// blobs are reclaimed instead of staying orphaned.
+func TestRunMediaReclaimedWhenArchiveFails(t *testing.T) {
+	database := newTestDB(t)
+	enableSync(t, database, "alice")
+	dataDir := t.TempDir()
+
+	tweet := tweetJSON(501, "with media")
+	tweet["attachments"] = map[string]any{"media_keys": []string{"mk_photo"}}
+	var mediaSrv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/by/username/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"id":"42"}}`)
+	})
+	mux.HandleFunc("/users/42/tweets", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"data": []map[string]any{tweet},
+			"includes": map[string]any{"media": []map[string]any{
+				{"media_key": "mk_photo", "type": "photo", "url": mediaSrv.URL + "/img/pic.jpg"},
+			}},
+			"meta": map[string]any{"result_count": 1},
+		})
+	})
+	mux.HandleFunc("/img/pic.jpg", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(noisyJPEG(t))
+	})
+	mediaSrv = httptest.NewServer(mux)
+	t.Cleanup(mediaSrv.Close)
+	s := newSyncer(database, dataDir, mediaSrv)
+
+	// Force the social_media_posts write to abort the archive transaction.
+	if _, err := database.Exec(`CREATE TRIGGER fail_social_post BEFORE INSERT ON social_media_posts
+		BEGIN SELECT RAISE(ABORT, 'forced social post failure'); END;`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if articleExists(t, database, "tweet-501") {
+		t.Error("article committed despite the failed archive transaction")
+	}
+	var files int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&files); err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if files != 0 {
+		t.Errorf("files rows = %d, want 0 (orphan media reclaimed)", files)
+	}
+	if n := countBlobs(t, dataDir); n != 0 {
+		t.Errorf("blobs on disk = %d, want 0 (orphan media reclaimed)", n)
+	}
+	// Poison-tweet semantics are unchanged: since_id advances past the tweet.
+	if row := getSyncRow(t, database); row.SinceID.String != "501" {
+		t.Errorf("since_id = %q, want 501", row.SinceID.String)
+	}
+
+	// Sanity: with the failure gone, the same setup archives the tweet and
+	// its media (original + variant), proving the zero counts above came
+	// from the reclaim and not from a failed download.
+	if _, err := database.Exec(`DROP TRIGGER fail_social_post`); err != nil {
+		t.Fatalf("drop trigger: %v", err)
+	}
+	if _, err := database.Exec(`UPDATE twitter_syncs SET since_id = NULL`); err != nil {
+		t.Fatalf("reset since_id: %v", err)
+	}
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if !articleExists(t, database, "tweet-501") {
+		t.Error("tweet-501 not archived after the failure was removed")
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&files); err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if files != 2 {
+		t.Errorf("files rows = %d, want 2 (original + variant)", files)
+	}
+}
+
+// TestRunMediaReclaimedWhenAttachmentFails: when an attachment insert fails
+// inside the archive transaction, the transaction rolls back and the stored
+// media rows and blobs are reclaimed — committing would leave the media
+// without an attachment reference, orphaned forever.
+func TestRunMediaReclaimedWhenAttachmentFails(t *testing.T) {
+	database := newTestDB(t)
+	enableSync(t, database, "alice")
+	dataDir := t.TempDir()
+
+	tweet := tweetJSON(501, "with media")
+	tweet["attachments"] = map[string]any{"media_keys": []string{"mk_photo"}}
+	var mediaSrv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/by/username/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"id":"42"}}`)
+	})
+	mux.HandleFunc("/users/42/tweets", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"data": []map[string]any{tweet},
+			"includes": map[string]any{"media": []map[string]any{
+				{"media_key": "mk_photo", "type": "photo", "url": mediaSrv.URL + "/img/pic.jpg"},
+			}},
+			"meta": map[string]any{"result_count": 1},
+		})
+	})
+	mux.HandleFunc("/img/pic.jpg", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(noisyJPEG(t))
+	})
+	mediaSrv = httptest.NewServer(mux)
+	t.Cleanup(mediaSrv.Close)
+	s := newSyncer(database, dataDir, mediaSrv)
+
+	// Force the attachment write to abort the archive transaction.
+	if _, err := database.Exec(`CREATE TRIGGER fail_attachment BEFORE INSERT ON attachments
+		BEGIN SELECT RAISE(ABORT, 'forced attachment failure'); END;`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if articleExists(t, database, "tweet-501") {
+		t.Error("article committed despite the failed attachment insert")
+	}
+	var files int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&files); err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if files != 0 {
+		t.Errorf("files rows = %d, want 0 (orphan media reclaimed)", files)
+	}
+	if n := countBlobs(t, dataDir); n != 0 {
+		t.Errorf("blobs on disk = %d, want 0 (orphan media reclaimed)", n)
+	}
+	// Poison-tweet semantics are unchanged: since_id advances past the tweet.
+	if row := getSyncRow(t, database); row.SinceID.String != "501" {
+		t.Errorf("since_id = %q, want 501", row.SinceID.String)
+	}
+
+	// Sanity: with the failure gone, the same setup archives the tweet and
+	// attaches its media, proving the zero counts above came from the
+	// reclaim and not from a failed download.
+	if _, err := database.Exec(`DROP TRIGGER fail_attachment`); err != nil {
+		t.Fatalf("drop trigger: %v", err)
+	}
+	if _, err := database.Exec(`UPDATE twitter_syncs SET since_id = NULL`); err != nil {
+		t.Fatalf("reset since_id: %v", err)
+	}
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	article := articleBySlug(t, database, "tweet-501")
+	if err := database.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&files); err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if files != 2 {
+		t.Errorf("files rows = %d, want 2 (original + variant)", files)
+	}
+	var attachments int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM attachments WHERE record_type = 'Article' AND record_id = ? AND name = 'embeds'`, article.ID).Scan(&attachments); err != nil {
+		t.Fatalf("count attachments: %v", err)
+	}
+	if attachments != 1 {
+		t.Errorf("attachments = %d, want 1", attachments)
+	}
+}
+
+// TestRunCursorWriteDiscardedAfterAdminReset: the admin changes start_date
+// while a run is in flight (the config overlay + cursor reset of
+// twitterSyncUpdate). The run's closing SetTwitterSyncSuccess still computes
+// its cursor from the values read at run start, so the CAS guard rejects it:
+// the reset must stand — writing the old cursor back would silently skip the
+// backfill the reset was meant to trigger. The tweets the run already
+// archived stay (slug dedup prevents re-archiving).
+func TestRunCursorWriteDiscardedAfterAdminReset(t *testing.T) {
+	database := newTestDB(t)
+	enableSync(t, database, "alice")
+	var once sync.Once
+	fx := &fakeX{t: t, userID: "42", pages: [][]map[string]any{{tweetJSON(11, "hello")}}}
+	fx.onTimeline = func() {
+		once.Do(func() {
+			if _, err := database.Exec(`UPDATE twitter_syncs SET start_date = '2024-06-01',
+				since_id = NULL, last_synced_at = NULL, last_error = NULL`); err != nil {
+				t.Errorf("admin reset: %v", err)
+			}
+		})
+	}
+	s := newSyncer(database, t.TempDir(), fx.server())
+
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !articleExists(t, database, "tweet-11") {
+		t.Error("tweet-11 not archived (archived tweets survive a discarded cursor write)")
+	}
+	row := getSyncRow(t, database)
+	if row.SinceID.Valid {
+		t.Errorf("since_id = %q, want NULL (stale cursor write must be discarded)", row.SinceID.String)
+	}
+	if row.LastSyncedAt.Valid {
+		t.Error("last_synced_at stamped despite the discarded write")
+	}
+	if row.StartDate.String != "2024-06-01" {
+		t.Errorf("start_date = %q, want the admin's 2024-06-01", row.StartDate.String)
+	}
+	// The user_id write happened before the reset and the username did not
+	// change, so its guard lets it through.
+	if row.UserID.String != "42" {
+		t.Errorf("user_id = %q, want 42 (username unchanged, write allowed)", row.UserID.String)
+	}
+}
+
+// TestRunUserIDWriteDiscardedAfterUsernameChange: the admin switches the
+// account while the users/by/username lookup is in flight. The resolved id
+// belongs to the old account; the CAS guard on SetTwitterSyncUserID drops it
+// (leaving the admin's clear in place) and the run aborts quietly instead of
+// syncing the old timeline under the new username.
+func TestRunUserIDWriteDiscardedAfterUsernameChange(t *testing.T) {
+	database := newTestDB(t)
+	enableSync(t, database, "alice")
+	var once sync.Once
+	var timelineHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/users/by/username/"):
+			once.Do(func() {
+				// twitterSyncUpdate's net effect on a username change: config
+				// overlay + cursor reset + user_id clear.
+				if _, err := database.Exec(`UPDATE twitter_syncs SET username = 'bob',
+					since_id = NULL, last_synced_at = NULL, last_error = NULL, user_id = NULL`); err != nil {
+					t.Errorf("admin update: %v", err)
+				}
+			})
+			fmt.Fprint(w, `{"data":{"id":"42"}}`) // id of the OLD account
+		case strings.HasPrefix(r.URL.Path, "/users/"):
+			timelineHits.Add(1)
+			writeJSON(w, map[string]any{"data": []map[string]any{tweetJSON(11, "old account tweet")}, "meta": map[string]any{"result_count": 1}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	s := newSyncer(database, t.TempDir(), srv)
+
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	row := getSyncRow(t, database)
+	if row.Username.String != "bob" {
+		t.Errorf("username = %q, want bob (admin update stands)", row.Username.String)
+	}
+	if row.UserID.Valid {
+		t.Errorf("user_id = %q, want NULL (stale id of the old account discarded)", row.UserID.String)
+	}
+	if got := timelineHits.Load(); got != 0 {
+		t.Errorf("timeline requests = %d, want 0 (run aborted before syncing the old account)", got)
+	}
+	if articleExists(t, database, "tweet-11") {
+		t.Error("old account tweet archived under the new username")
+	}
+	if row.LastError.Valid {
+		t.Errorf("last_error = %q, want NULL (a config change aborts quietly, not a failure)", row.LastError.String)
+	}
 }
 
 func TestRunUserNotFound(t *testing.T) {

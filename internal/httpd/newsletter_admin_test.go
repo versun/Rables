@@ -205,6 +205,35 @@ func TestNewsletterPasswordPlaceholder(t *testing.T) {
 	}
 }
 
+// TestNewsletterPasswordPlaceholderWithoutStored: with no stored password, the
+// masked placeholder (or a blank field) must not be persisted as the password.
+func TestNewsletterPasswordPlaceholderWithoutStored(t *testing.T) {
+	s, h := newNewsletterTestServer(t)
+	session := settingsSession(t, s)
+	ctx := t.Context()
+
+	for _, keep := range []string{"••••••••", ""} {
+		form := url.Values{
+			"tab":                                {"native"},
+			"newsletter_setting[smtp_address]":   {"smtp.example.com"},
+			"newsletter_setting[smtp_port]":      {"587"},
+			"newsletter_setting[smtp_user_name]": {"mailer"},
+			"newsletter_setting[smtp_password]":  {keep},
+			"newsletter_setting[from_email]":     {"news@example.com"},
+		}
+		if rec := doRequest(t, h, http.MethodPost, "/admin/newsletter", form, session); rec.Code != http.StatusFound {
+			t.Fatalf("placeholder %q: status = %d", keep, rec.Code)
+		}
+		st, err := s.NewsletterSetting(ctx)
+		if err != nil {
+			t.Fatalf("load setting: %v", err)
+		}
+		if st.SmtpPassword.Valid {
+			t.Errorf("placeholder %q: password = %q, want unset", keep, st.SmtpPassword.String)
+		}
+	}
+}
+
 // TestNewsletterUpdateValidation: model validation failures re-render with
 // 422 and the Rails error messages.
 func TestNewsletterUpdateValidation(t *testing.T) {
@@ -487,6 +516,33 @@ func TestNewsletterVerifySMTP(t *testing.T) {
 	if rec.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(rec.Body.String(), "Connection refused") {
 		t.Errorf("refused: status = %d body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestNewsletterVerifySMTPStartTLSCheckbox: a checked Rails check_box posts
+// the hidden "0" before the checkbox "1" and the last value wins, so the
+// probe must run with STARTTLS enabled — the fake server does not advertise
+// it, so the handshake fails. Reading the first value would probe with the
+// opposite of the configuration the admin sees.
+func TestNewsletterVerifySMTPStartTLSCheckbox(t *testing.T) {
+	s, h := newNewsletterTestServer(t)
+	session := settingsSession(t, s)
+
+	srv := newFakeVerifySMTPServer(t, false)
+	host, port := srv.hostPort()
+
+	rec := doRequest(t, h, http.MethodPost, "/admin/newsletter/verify", url.Values{
+		"smtp_address":         {host},
+		"smtp_port":            {port},
+		"smtp_user_name":       {"mailer"},
+		"smtp_password":        {"secret-pw"},
+		"smtp_enable_starttls": {"0", "1"},
+		"from_email":           {"news@example.com"},
+	}, session)
+	if rec.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(rec.Body.String(), "STARTTLS is not supported") {
+		t.Errorf("checked STARTTLS: status = %d body = %s, want 422 STARTTLS unsupported",
+			rec.Code, rec.Body.String())
 	}
 }
 

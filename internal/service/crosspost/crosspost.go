@@ -36,6 +36,7 @@ import (
 	"rables/internal/kv"
 	"rables/internal/service/activity"
 	"rables/internal/service/media"
+	"rables/internal/ssrf"
 )
 
 // Platform is one crosspost target (mastodon, bluesky, ...). Implementations
@@ -113,37 +114,53 @@ func IsTransient(err error) bool {
 // transientNetError maps Go network errors onto the TransientNetworkErrors
 // whitelist: Timeout::Error, SocketError and SystemCallError (net.Error,
 // os.SyscallError, syscall.Errno), EOFError (io.EOF & co.) and
-// OpenSSL::SSL::SSLError (TLS record/certificate errors). Anything else is
-// returned unchanged.
+// OpenSSL::SSL::SSLError (TLS record/certificate errors). http.Client.Do
+// always wraps its failures in *url.Error — which itself implements
+// net.Error — so the inner error is what gets classified. context.Canceled
+// (worker shutdown) is never transient. Anything else is returned unchanged.
 func transientNetError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, context.Canceled) { // worker shutdown: do not retry
+		return err
+	}
+	// Unwrap *url.Error to classify the error it carries; errors.As on the
+	// wrapper would match net.Error for every failure.
+	classify := err
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		classify = urlErr.Err
+	}
 	var netErr net.Error // timeouts, *net.OpError socket errors, *net.DNSError
-	if errors.As(err, &netErr) {
+	if errors.As(classify, &netErr) {
 		return TransientError{Err: err}
 	}
 	var sysErr *os.SyscallError
-	if errors.As(err, &sysErr) {
+	if errors.As(classify, &sysErr) {
 		return TransientError{Err: err}
 	}
 	var errno syscall.Errno
-	if errors.As(err, &errno) {
+	if errors.As(classify, &errno) {
 		return TransientError{Err: err}
 	}
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+	if errors.Is(classify, io.EOF) || errors.Is(classify, io.ErrUnexpectedEOF) {
 		return TransientError{Err: err}
 	}
 	var recordErr tls.RecordHeaderError
-	if errors.As(err, &recordErr) {
+	if errors.As(classify, &recordErr) {
 		return TransientError{Err: err}
 	}
 	var hostErr x509.HostnameError
-	if errors.As(err, &hostErr) {
+	if errors.As(classify, &hostErr) {
 		return TransientError{Err: err}
 	}
 	var authErr x509.UnknownAuthorityError
-	if errors.As(err, &authErr) {
+	if errors.As(classify, &authErr) {
+		return TransientError{Err: err}
+	}
+	var invalidErr x509.CertificateInvalidError // expired / wrong-purpose certs
+	if errors.As(classify, &invalidErr) {
 		return TransientError{Err: err}
 	}
 	return err
@@ -154,7 +171,11 @@ func transientNetError(err error) error {
 var defaultHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 // downloadClient fetches remote images, mirroring HttpRedirectHandler:
-// MAX_REDIRECTS hops, http(s) only, and no https -> http downgrade.
+// MAX_REDIRECTS hops, http(s) only, and no https -> http downgrade. Every
+// redirect hop is re-checked against the SSRF guard: a public host may
+// legitimately 302 to an internal address. The check and the dial resolve
+// DNS independently, so each hop carries the same small rebinding (TOCTOU)
+// window noted on downloadRemoteImage.
 var downloadClient = &http.Client{
 	Timeout: 15 * time.Second,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -167,12 +188,25 @@ var downloadClient = &http.Client{
 		if from := via[len(via)-1].URL; from.Scheme == "https" && req.URL.Scheme == "http" {
 			return fmt.Errorf("refusing redirect that downgrades https to http: %s", req.URL)
 		}
+		if !ssrf.SafeRemoteURL(req.Context(), req.URL.String(), nil) {
+			return fmt.Errorf("refusing redirect to blocked address: %s", req.URL)
+		}
 		return nil
 	},
 }
 
 // maxDownloadBytes mirrors HttpRedirectHandler::MAX_DOWNLOAD_BYTES.
 const maxDownloadBytes = 20 * 1024 * 1024
+
+// maxRemoteImageAttempts bounds how many remote downloads collectImages
+// starts while scanning an article's <img> srcs. A failed download skips the
+// image without counting toward the 4-image limit, so without this cap an
+// imported article full of dead remote srcs would burn the download client
+// timeout on every one of them and block the worker for many minutes. The
+// budget allows a few dead links while still leaving room to collect the 4
+// images; srcs past the budget keep their original URL, exactly like a
+// per-image failure.
+const maxRemoteImageAttempts = 8
 
 // tokenCache is the kv-backed slice of Rails.cache the bluesky platform needs.
 type tokenCache interface {
@@ -200,6 +234,9 @@ type Dispatcher struct {
 
 	q   *query.Queries
 	now func() time.Time
+	// lookupIP resolves remote image hosts for the SSRF guard (tests stub
+	// it); nil uses the system resolver.
+	lookupIP ssrf.LookupFunc
 }
 
 // NewDispatcher builds a Dispatcher rooted at the data directory.
@@ -291,6 +328,12 @@ func (d *Dispatcher) Handle(ctx context.Context, raw json.RawMessage) error {
 		}
 		postURL, err := platform.Post(ctx, cfg, in)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				// Worker shutdown: return the error so the job is rescheduled
+				// instead of logged as a permanent failure, which would
+				// silently drop the post.
+				return err
+			}
 			if IsTransient(err) {
 				return err
 			}
@@ -301,7 +344,11 @@ func (d *Dispatcher) Handle(ctx context.Context, raw json.RawMessage) error {
 			continue
 		}
 		if err := d.recordURL(ctx, article.ID, name, postURL); err != nil {
-			return err
+			// The post is already public on the platform; returning the error
+			// would retry the job, and with no recorded URL the retry would
+			// post a duplicate. Log the failure and move on instead.
+			d.logActivity(ctx, "error", "failed", name, article, postURL, err.Error())
+			continue
 		}
 		posted[name] = postURL
 		d.logActivity(ctx, "info", "posted", name, article, postURL, "")
@@ -329,6 +376,12 @@ func (d *Dispatcher) Handle(ctx context.Context, raw json.RawMessage) error {
 // unconditionally is equivalent here because a URL newer than requestedAt
 // can only come from an earlier execution of this same request (or a racing
 // job for the same article+platform).
+//
+// Both timestamps are Unix seconds, so a brand-new crosspost request issued
+// in the same wall-clock second as a successful post is also skipped. That
+// window is accepted deliberately: the guard fails toward not posting
+// (never toward a duplicate public post), and a same-second re-request is
+// almost always a double-click or fast retry where skipping is desired.
 func (d *Dispatcher) urlRecordedSince(ctx context.Context, articleID int64, platform string, requestedAt int64) (bool, error) {
 	posts, err := d.q.ListFetchableSocialPostsByPlatform(ctx, query.ListFetchableSocialPostsByPlatformParams{
 		ArticleID: articleID, Platform: platform,
@@ -411,7 +464,8 @@ func (d *Dispatcher) siteURL(ctx context.Context) (string, error) {
 // collectImages ports Article#all_image_attachments(4): attached image files
 // first (deduplicated by file id), then <img> srcs from the HTML — local
 // /files/<key> reads or remote downloads. Failures skip the image, like the
-// Rails per-image rescues.
+// Rails per-image rescues. Remote downloads stop after maxRemoteImageAttempts
+// so an article full of dead links cannot stall the worker.
 func (d *Dispatcher) collectImages(ctx context.Context, article query.Article) []Image {
 	const limit = 4
 	var images []Image
@@ -425,6 +479,9 @@ func (d *Dispatcher) collectImages(ctx context.Context, article query.Article) [
 		if len(images) >= limit {
 			break
 		}
+		if seen[f.ID] { // Rails legacy data can attach one file under several names
+			continue
+		}
 		seen[f.ID] = true
 		if img, ok := d.loadLocalImage(f); ok {
 			images = append(images, img)
@@ -432,6 +489,7 @@ func (d *Dispatcher) collectImages(ctx context.Context, article query.Article) [
 	}
 
 	if len(images) < limit {
+		attempts := 0
 		for _, src := range imageSrcs(article.ContentHtml.String) {
 			if len(images) >= limit {
 				break
@@ -446,6 +504,10 @@ func (d *Dispatcher) collectImages(ctx context.Context, article query.Article) [
 				}
 				continue
 			}
+			if attempts >= maxRemoteImageAttempts {
+				continue // over budget: skip like a per-image failure; local srcs still collect
+			}
+			attempts++
 			if img, ok := d.downloadRemoteImage(ctx, src); ok {
 				images = append(images, img)
 			}
@@ -490,9 +552,17 @@ func (d *Dispatcher) localFileBySrc(ctx context.Context, src string) (query.File
 }
 
 // downloadRemoteImage ports HttpRedirectHandler#download_remote_image_with_redirect:
-// relative URLs resolve against the site URL, bodies are capped at 20MB, and
-// any failure skips the image (the Rails concern rescues everything,
-// including timeouts).
+// relative URLs resolve against the site URL (a scheme-relative //host/path
+// src inherits the site scheme, like URI.join), bodies are capped at 20MB,
+// and any failure skips the image (the Rails concern rescues everything,
+// including timeouts). The SSRF guard refuses internal-network targets before
+// any request goes out (imported articles keep remote <img> srcs untouched).
+// Note the check and the dial resolve DNS independently, leaving a small
+// rebinding (TOCTOU) window between the two — the trade-off the project-wide
+// SSRF guard already accepts everywhere it is used. It bites harder on this
+// path than elsewhere: the downloaded bytes are uploaded to the crosspost
+// platform, so a rebound hit would exfiltrate internal content to a third
+// party, not just read it server-side.
 func (d *Dispatcher) downloadRemoteImage(ctx context.Context, imageURL string) (Image, bool) {
 	if imageURL == "" {
 		return Image{}, false
@@ -502,10 +572,28 @@ func (d *Dispatcher) downloadRemoteImage(ctx context.Context, imageURL string) (
 		if err != nil || siteURL == "" {
 			siteURL = "http://localhost:3000"
 		}
-		imageURL = strings.TrimSuffix(siteURL, "/") + imageURL
+		// settings.url is stored verbatim and may lack a scheme
+		// ("example.com") — normalize like BuildPostURL so the join
+		// below yields an http(s) URL instead of a rejected bare host.
+		if !strings.HasPrefix(siteURL, "http://") && !strings.HasPrefix(siteURL, "https://") {
+			siteURL = "https://" + siteURL
+		}
+		if strings.HasPrefix(imageURL, "//") {
+			scheme := "http"
+			if u, perr := url.Parse(siteURL); perr == nil && u.Scheme != "" {
+				scheme = u.Scheme
+			}
+			imageURL = scheme + ":" + imageURL
+		} else {
+			imageURL = strings.TrimSuffix(siteURL, "/") + imageURL
+		}
 	}
 	u, err := url.Parse(imageURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return Image{}, false
+	}
+	if !ssrf.SafeRemoteURL(ctx, imageURL, d.lookupIP) {
+		d.Log.Warn("crosspost: remote image blocked by SSRF guard", "url", imageURL)
 		return Image{}, false
 	}
 	client := d.HTTPClient

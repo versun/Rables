@@ -24,6 +24,9 @@ ENV ADDR=:8080 \
 # HMAC_SECRET is required and injected at runtime (-e HMAC_SECRET=...).
 
 EXPOSE 8080
-VOLUME ["/data"]
+# /data holds all runtime state (SQLite DB + uploaded files). Mount it to a
+# named volume or bind mount so data survives container replacement, e.g.:
+#   docker run -v rables-data:/data ...
+# For a bind mount, the host dir must be writable by uid 65532 (nonroot).
 USER nonroot
 ENTRYPOINT ["/usr/local/bin/rables-server"]

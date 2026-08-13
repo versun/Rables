@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	subscribersvc "rables/internal/service/subscribers"
 )
@@ -41,7 +42,7 @@ func TestAdminSubscribersIndexFilters(t *testing.T) {
 	active := insertSubscriber(t, s, "active@example.com", true, false)
 	insertSubscriber(t, s, "pending@example.com", false, false)
 	insertSubscriber(t, s, "gone@example.com", true, true)
-	if err := subscribersvc.ReplaceTags(t.Context(), s.Q, active.ID, []int64{tag.ID}); err != nil {
+	if err := subscribersvc.ReplaceTags(t.Context(), s.DB, active.ID, []int64{tag.ID}); err != nil {
 		t.Fatalf("assign tag: %v", err)
 	}
 
@@ -109,7 +110,7 @@ func TestAdminSubscribersDestroy(t *testing.T) {
 	session := tagsSessionCookie(t, s)
 	tag := insertTagRow(t, s, "Go")
 	sub := insertSubscriber(t, s, "doomed@example.com", true, false)
-	if err := subscribersvc.ReplaceTags(t.Context(), s.Q, sub.ID, []int64{tag.ID}); err != nil {
+	if err := subscribersvc.ReplaceTags(t.Context(), s.DB, sub.ID, []int64{tag.ID}); err != nil {
 		t.Fatalf("assign tag: %v", err)
 	}
 
@@ -217,6 +218,89 @@ func TestAdminSubscribersBatchCreateFailures(t *testing.T) {
 	}
 	if got := subscriberCount(t, s); got != 0 {
 		t.Errorf("subscribers = %d, want 0", got)
+	}
+}
+
+// TestAdminSubscribersBatchCreateErrorFlashTruncated: with more invalid lines
+// than flashErrorLimit, the flash lists only the first ones plus a
+// remainder count — joining them all would overflow cookie/proxy header
+// limits and lose the flash entirely. The activity log keeps the full list.
+func TestAdminSubscribersBatchCreateErrorFlashTruncated(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	session := tagsSessionCookie(t, s)
+
+	lines := make([]string, 0, flashErrorLimit+15)
+	for i := 0; i < flashErrorLimit+15; i++ {
+		lines = append(lines, "bad"+strconv.Itoa(i))
+	}
+	rec := doRequest(t, h, http.MethodPost, "/admin/subscribers/batch_create",
+		url.Values{"emails_text": {strings.Join(lines, "\n")}}, session)
+
+	want := make([]string, 0, flashErrorLimit)
+	for i := 0; i < flashErrorLimit; i++ {
+		want = append(want, "无效的邮箱格式: bad"+strconv.Itoa(i))
+	}
+	wantAlert := "添加失败: " + strings.Join(want, "; ") + "; …以及其余 15 条"
+	if flash := readFlash(t, rec); flash.Alert != wantAlert {
+		t.Errorf("alert = %q, want %q", flash.Alert, wantAlert)
+	}
+
+	// The complete error list stays in the activity log.
+	var desc string
+	if err := s.DB.QueryRow(`SELECT description FROM activity_logs ORDER BY id DESC LIMIT 1`).Scan(&desc); err != nil {
+		t.Fatalf("read activity log: %v", err)
+	}
+	if !strings.Contains(desc, "无效的邮箱格式: bad24") {
+		t.Errorf("activity log missing the truncated entries: %q", desc)
+	}
+}
+
+// TestAdminSubscribersBatchCreateErrorFlashBounded: a single giant invalid
+// line must not overflow the flash cookie — each error entry embeds the raw
+// input line, so entries are capped at flashErrorEntryRunes runes.
+func TestAdminSubscribersBatchCreateErrorFlashBounded(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	session := tagsSessionCookie(t, s)
+
+	giant := strings.Repeat("a", 1<<20)
+	rec := doRequest(t, h, http.MethodPost, "/admin/subscribers/batch_create",
+		url.Values{"emails_text": {giant}}, session)
+
+	flash := readFlash(t, rec)
+	if !strings.HasPrefix(flash.Alert, "添加失败: 无效的邮箱格式: ") {
+		t.Errorf("alert prefix = %q", flash.Alert[:min(len(flash.Alert), 80)])
+	}
+	if got := len(flash.Alert); got > 512 {
+		t.Errorf("alert length = %d bytes, want bounded (a %d-byte line was submitted)", got, len(giant))
+	}
+	if !strings.HasSuffix(flash.Alert, "...") {
+		t.Errorf("alert should end with an ellipsis, got suffix %q", flash.Alert[max(0, len(flash.Alert)-20):])
+	}
+}
+
+// TestAdminSubscribersBatchCreateErrorFlashBoundedBytes: rune caps alone do
+// not bound the flash cookie — 10 entries x 200 CJK runes is ~6KB UTF-8,
+// which overflows cookie/proxy limits after JSON escaping and base64. The
+// joined flash must stay within flashMaxBytes bytes and valid UTF-8.
+func TestAdminSubscribersBatchCreateErrorFlashBoundedBytes(t *testing.T) {
+	s, h := newSubscriptionTestServer(t)
+	session := tagsSessionCookie(t, s)
+
+	lines := make([]string, 0, flashErrorLimit)
+	for i := 0; i < flashErrorLimit; i++ {
+		lines = append(lines, strings.Repeat("不", flashErrorEntryRunes))
+	}
+	rec := doRequest(t, h, http.MethodPost, "/admin/subscribers/batch_create",
+		url.Values{"emails_text": {strings.Join(lines, "\n")}}, session)
+
+	flash := readFlash(t, rec)
+	// "添加失败: " prefix plus the capped join (the remainder suffix only
+	// appears past flashErrorLimit lines and is a few bytes).
+	if got := len(flash.Alert); got > flashMaxBytes+64 {
+		t.Errorf("alert length = %d bytes, want bounded for all-CJK input", got)
+	}
+	if !utf8.ValidString(flash.Alert) {
+		t.Errorf("alert is not valid UTF-8 (truncation split a multi-byte character)")
 	}
 }
 

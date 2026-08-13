@@ -20,6 +20,26 @@ import (
 // any cost, so existing digests stay compatible.
 const bcryptCost = 10
 
+// sessionTTL bounds how long a session stays valid: RequireAuth rejects (and
+// deletes) sessions older than this, and the login cookie's MaxAge matches so
+// the browser drops it at the same time. The scheduler's deleteExpiredSessions
+// task sweeps rows that never get visited again.
+const sessionTTL = 30 * 24 * time.Hour
+
+// dummyPasswordDigest stands in for the user digest when the login username
+// does not exist: the login handler still runs one bcrypt comparison against
+// it, so the response time does not reveal whether the username was valid.
+// Cost 12 matches the Rails-migrated digests (has_secure_password's default),
+// so the dummy comparison takes the same time as one against a real digest.
+// Generated once at package init.
+var dummyPasswordDigest = func() []byte {
+	digest, err := bcrypt.GenerateFromPassword([]byte("dummy-password"), 12)
+	if err != nil {
+		panic(err)
+	}
+	return digest
+}()
+
 // loginPageData feeds auth_login.html.
 type loginPageData struct {
 	Flash    templates.Flash
@@ -29,23 +49,34 @@ type loginPageData struct {
 // loginForm renders GET /session/new.
 func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "auth_login", loginPageData{
-		Flash:    PopFlash(r, w),
+		Flash:    s.PopFlash(r, w),
 		UserName: r.URL.Query().Get("user_name"),
 	})
 }
 
 // login handles POST /session, mirroring SessionsController#create.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if !parseCappedForm(w, r) {
 		return
 	}
 	userName := normalizeUserName(r.FormValue("user_name"))
 	password := r.FormValue("password")
 
 	user, err := s.Q.GetUserByUserName(r.Context(), userName)
-	if err != nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordDigest), []byte(password)) != nil {
-		SetFlash(w, templates.Flash{Alert: "Try another username or password."})
+	// Compare against a dummy digest when the user is missing so unknown
+	// usernames cost the same bcrypt time as wrong passwords (no user
+	// enumeration via timing). Any lookup error lands here too and reports
+	// as a plain bad-credentials failure, as before.
+	digest := dummyPasswordDigest
+	if err == nil {
+		digest = []byte(user.PasswordDigest)
+	}
+	match := bcrypt.CompareHashAndPassword(digest, []byte(password)) == nil
+	// A failed lookup must never authenticate, even when the comparison
+	// matches (the password literally equals the dummy's): a zero-value
+	// user would fall through to startSession and 500 on the sessions FK.
+	if err != nil || !match {
+		s.SetFlash(w, templates.Flash{Alert: "Try another username or password."})
 		http.Redirect(w, r, "/session/new", http.StatusFound)
 		return
 	}
@@ -69,7 +100,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 			s.Log.Error("delete session", "error", err)
 		}
 	}
-	clearSessionCookie(w)
+	clearSessionCookie(w, s.Cfg.SecureCookies)
 	s.InvalidateSetupCache()
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -85,7 +116,7 @@ type passwordPageData struct {
 func (s *Server) userEditForm(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUser(r)
 	s.render(w, http.StatusOK, "auth_password_edit", passwordPageData{
-		Flash: PopFlash(r, w),
+		Flash: s.PopFlash(r, w),
 		User:  user,
 	})
 }
@@ -95,8 +126,7 @@ func (s *Server) userEditForm(w http.ResponseWriter, r *http.Request) {
 // requires the current password; a blank new password leaves it unchanged.
 func (s *Server) userUpdate(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUser(r)
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if !parseCappedForm(w, r) {
 		return
 	}
 	userName := normalizeUserName(r.FormValue("user_name"))
@@ -156,7 +186,21 @@ func (s *Server) userUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	SetFlash(w, templates.Flash{Notice: "Account was successfully updated."})
+	// A password change revokes the user's other sessions: a stolen cookie
+	// must stop working once the owner resets the password. The current
+	// session survives so the owner stays logged in.
+	if password != "" {
+		if cookie, err := r.Cookie(sessionCookieName); err == nil {
+			if err := s.Q.DeleteOtherSessionsForUser(r.Context(), query.DeleteOtherSessionsForUserParams{
+				UserID: user.ID,
+				Token:  cookie.Value,
+			}); err != nil {
+				s.Log.Error("delete other sessions", "error", err)
+			}
+		}
+	}
+
+	s.SetFlash(w, templates.Flash{Notice: "Account was successfully updated."})
 	http.Redirect(w, r, "/admin/posts", http.StatusFound)
 }
 
@@ -187,13 +231,15 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, user query
 		Name:     sessionCookieName,
 		Value:    token,
 		Path:     "/",
+		MaxAge:   int(sessionTTL.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   s.Cfg.SecureCookies,
 	})
 	return nil
 }
 
-func clearSessionCookie(w http.ResponseWriter) {
+func clearSessionCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
@@ -201,6 +247,7 @@ func clearSessionCookie(w http.ResponseWriter) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
 	})
 }
 

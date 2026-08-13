@@ -94,6 +94,17 @@ func classifySMTPError(err error) error {
 	return err
 }
 
+// defaultListmonkClient is shared by every ListmonkClient call that does not
+// inject its own client: a per-call client would abandon its transport's idle
+// keep-alive connections (and the goroutines holding them) after each call.
+var defaultListmonkClient = &http.Client{
+	Timeout: 15 * time.Second, // whole request, including the body read
+	Transport: &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 10 * time.Second,
+	},
+}
+
 // ListmonkClient is a basic-auth client for the listmonk API subset used by
 // the admin page (app/models/listmonk.rb).
 type ListmonkClient struct {
@@ -179,13 +190,7 @@ func (c ListmonkClient) get(ctx context.Context, rawURL string, out any) error {
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: 15 * time.Second, // whole request, including the body read
-			Transport: &http.Transport{
-				DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-				ResponseHeaderTimeout: 10 * time.Second,
-			},
-		}
+		httpClient = defaultListmonkClient
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {

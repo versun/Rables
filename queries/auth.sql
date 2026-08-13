@@ -27,6 +27,12 @@ SELECT * FROM sessions WHERE token = ?;
 -- name: DeleteSessionByToken :exec
 DELETE FROM sessions WHERE token = ?;
 
+-- name: DeleteOtherSessionsForUser :exec
+DELETE FROM sessions WHERE user_id = ? AND token != ?;
+
+-- name: DeleteExpiredSessions :execrows
+DELETE FROM sessions WHERE created_at < ?;
+
 -- name: GetSettings :one
 SELECT * FROM settings WHERE id = 1;
 

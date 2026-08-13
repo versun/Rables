@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -68,6 +69,7 @@ func (row adminPageRow) TruncatedRedirect() string {
 // adminPagesIndex renders GET /admin/pages, mirroring
 // Admin::PagesController#index: optional status filter, page_order DESC,
 // 100 per page. (load_comment_counts returns {} for Page, so no counts here.)
+// Invalid page params 404 like WillPaginate::InvalidPage.
 func (s *Server) adminPagesIndex(w http.ResponseWriter, r *http.Request) {
 	var statusFilter *domain.Status
 	statusName := ""
@@ -89,9 +91,14 @@ func (s *Server) adminPagesIndex(w http.ResponseWriter, r *http.Request) {
 		statusFilter, statusName = &st, "trash"
 	}
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
+	page := 1
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || int64(n) > maxAdminPageNumber {
+			http.NotFound(w, r)
+			return
+		}
+		page = n
 	}
 	offset := int64(page-1) * adminPagesPerPage
 
@@ -136,7 +143,7 @@ func (s *Server) adminPagesIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, http.StatusOK, "admin_pages_index", adminPagesIndexData{
-		Flash:      PopFlash(r, w),
+		Flash:      s.PopFlash(r, w),
 		Status:     statusName,
 		Pages:      rows,
 		Page:       page,
@@ -162,7 +169,7 @@ type adminPageFormData struct {
 // adminPagesNew renders GET /admin/pages/new (Page.new(comment: true)).
 func (s *Server) adminPagesNew(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "admin_pages_new", adminPageFormData{
-		Flash: PopFlash(r, w),
+		Flash: s.PopFlash(r, w),
 		Page:  query.Page{Comment: 1, ContentType: string(domain.ContentTypeRichText)},
 		IsNew: true,
 	})
@@ -181,7 +188,7 @@ func (s *Server) adminPagesEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := adminPageFormData{
-		Flash:      PopFlash(r, w),
+		Flash:      s.PopFlash(r, w),
 		Page:       page,
 		PathSlug:   page.Slug.String,
 		StatusName: pageStatusName(page.Status),
@@ -209,6 +216,7 @@ func (s *Server) adminPagesCreate(w http.ResponseWriter, r *http.Request) {
 		s.logPageActivity(r.Context(), "failed", 2, pageActivityDescription(input.Title.String, input.Slug.String, strings.Join(errs, ", ")))
 		data := input.formData(true)
 		data.Errors = errs
+		data.ScheduledAtValue = s.formatScheduledAt(r, input.ScheduledAt)
 		s.render(w, http.StatusUnprocessableEntity, "admin_pages_new", data)
 		return
 	}
@@ -231,6 +239,7 @@ func (s *Server) adminPagesCreate(w http.ResponseWriter, r *http.Request) {
 		if isUniqueViolation(err) { // slug race lost between check and insert
 			data := input.formData(true)
 			data.Errors = []string{"Slug has already been taken"}
+			data.ScheduledAtValue = s.formatScheduledAt(r, input.ScheduledAt)
 			s.render(w, http.StatusUnprocessableEntity, "admin_pages_new", data)
 			return
 		}
@@ -240,7 +249,7 @@ func (s *Server) adminPagesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.schedulePagePublication(r.Context(), page.ID, input.Status, input.ScheduledAt)
 	s.logPageActivity(r.Context(), "created", 0, pageActivityDescription(page.Title.String, page.Slug.String, ""))
-	SetFlash(w, templates.Flash{Notice: "Page was successfully created."})
+	s.SetFlash(w, templates.Flash{Notice: "Page was successfully created."})
 	http.Redirect(w, r, "/admin/pages", http.StatusFound)
 }
 
@@ -269,6 +278,7 @@ func (s *Server) adminPagesUpdate(w http.ResponseWriter, r *http.Request) {
 		data.Errors = errs
 		data.Page.ID = page.ID
 		data.PathSlug = page.Slug.String
+		data.ScheduledAtValue = s.formatScheduledAt(r, input.ScheduledAt)
 		s.render(w, http.StatusUnprocessableEntity, "admin_pages_edit", data)
 		return
 	}
@@ -292,6 +302,7 @@ func (s *Server) adminPagesUpdate(w http.ResponseWriter, r *http.Request) {
 			data.Errors = []string{"Slug has already been taken"}
 			data.Page.ID = page.ID
 			data.PathSlug = page.Slug.String
+			data.ScheduledAtValue = s.formatScheduledAt(r, input.ScheduledAt)
 			s.render(w, http.StatusUnprocessableEntity, "admin_pages_edit", data)
 			return
 		}
@@ -301,7 +312,7 @@ func (s *Server) adminPagesUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.schedulePagePublication(r.Context(), updated.ID, input.Status, input.ScheduledAt)
 	s.logPageActivity(r.Context(), "updated", 0, pageActivityDescription(updated.Title.String, updated.Slug.String, ""))
-	SetFlash(w, templates.Flash{Notice: "Page was successfully updated."})
+	s.SetFlash(w, templates.Flash{Notice: "Page was successfully updated."})
 	http.Redirect(w, r, "/admin/pages", http.StatusFound)
 }
 
@@ -334,7 +345,7 @@ func (s *Server) adminPagesDestroy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.logPageActivity(r.Context(), "trashed", 0, pageActivityDescription(page.Title.String, page.Slug.String, ""))
-		SetFlash(w, templates.Flash{Notice: "Page was successfully moved to trash."})
+		s.SetFlash(w, templates.Flash{Notice: "Page was successfully moved to trash."})
 		http.Redirect(w, r, "/admin/pages", http.StatusSeeOther)
 		return
 	}
@@ -344,7 +355,7 @@ func (s *Server) adminPagesDestroy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logPageActivity(r.Context(), "deleted", 0, pageActivityDescription(page.Title.String, page.Slug.String, ""))
-	SetFlash(w, templates.Flash{Notice: "Page was successfully deleted."})
+	s.SetFlash(w, templates.Flash{Notice: "Page was successfully deleted."})
 	http.Redirect(w, r, "/admin/pages", http.StatusSeeOther)
 }
 
@@ -380,8 +391,13 @@ func (s *Server) adminPagesBatch(w http.ResponseWriter, r *http.Request, action 
 	count := 0
 	for _, slug := range slugs {
 		page, err := s.Q.GetAdminPageBySlug(r.Context(), sql.NullString{String: slug, Valid: true})
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			continue
+		}
+		if err != nil {
+			s.SetFlash(w, templates.Flash{Alert: fmt.Sprintf("Error processing %s for pages: %s", action, err)})
+			http.Redirect(w, r, "/admin/pages", http.StatusFound)
+			return
 		}
 		switch action {
 		case "destroy":
@@ -400,14 +416,14 @@ func (s *Server) adminPagesBatch(w http.ResponseWriter, r *http.Request, action 
 			})
 		}
 		if err != nil {
-			SetFlash(w, templates.Flash{Alert: fmt.Sprintf("Error processing %s for pages: %s", action, err)})
+			s.SetFlash(w, templates.Flash{Alert: fmt.Sprintf("Error processing %s for pages: %s", action, err)})
 			http.Redirect(w, r, "/admin/pages", http.StatusFound)
 			return
 		}
 		count++
 	}
 	verb := map[string]string{"destroy": "deleted", "publish": "published", "unpublish": "unpublished"}[action]
-	SetFlash(w, templates.Flash{Notice: fmt.Sprintf("Successfully %s %d page(s).", verb, count)})
+	s.SetFlash(w, templates.Flash{Notice: fmt.Sprintf("Successfully %s %d page(s).", verb, count)})
 	http.Redirect(w, r, "/admin/pages", http.StatusFound)
 }
 
@@ -504,12 +520,17 @@ func (in pageFormInput) formData(isNew bool) adminPageFormData {
 // title/slug presence, slug uniqueness (excludeID excepts the updated row,
 // 0 on create), redirect_url must be an http(s) URL when present, html mode
 // requires html_content, rich_text mode requires non-blank text content,
-// schedule requires scheduled_at. Unknown enum values are validation errors
+// schedule requires scheduled_at. The slug is cleaned of URL-unsafe and
+// control characters (CleanSlug) before validation, like article slugs.
+// Unknown enum values are validation errors
 // (Rails raises ArgumentError instead; the form never sends them).
 func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput, []string) {
 	var in pageFormInput
 	in.Title = sql.NullString{String: r.FormValue("title"), Valid: true}
-	in.Slug = sql.NullString{String: r.FormValue("slug"), Valid: true}
+	// Handwritten slugs are stripped of URL-unsafe chars like article slugs
+	// (CleanSlug via GenerateSlug); one that strips to nothing trips the
+	// blank validation below instead of being stored unreachable.
+	in.Slug = sql.NullString{String: domain.CleanSlug(r.FormValue("slug")), Valid: true}
 	in.ContentType = r.FormValue("content_type")
 	switch in.ContentType {
 	case string(domain.ContentTypeHTML):
@@ -531,6 +552,10 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 	}
 	if domain.IsBlank(in.Slug.String) {
 		errs = append(errs, "Slug can't be blank")
+	} else if slices.Contains(domain.AdminPageBatchSlugs, in.Slug.String) {
+		// POST /admin/pages/batch_destroy is a static chi route and would
+		// swallow the update (POST /admin/pages/{slug}) of a same-named page.
+		errs = append(errs, "Slug is reserved")
 	} else if taken, err := s.Q.AdminPageSlugCount(r.Context(), query.AdminPageSlugCountParams{
 		Slug: in.Slug, ID: excludeID,
 	}); err == nil && taken > 0 {
@@ -584,15 +609,20 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 		return in, errs
 	}
 	// Markdown pages store the source in content_markdown and the rendered
-	// HTML in content_html, like articles (0002). Sanitize once at write time
-	// (decision log 2026-08-03, spec 4.4).
+	// HTML in content_html, like articles (0002). Raw html pages are stored
+	// verbatim — content_type keeps only the "skip sanitize" semantic (0001);
+	// the other types are sanitized once at write time (decision log
+	// 2026-08-03, spec 4.4).
 	body := in.RawContent
 	if in.ContentType == string(domain.ContentTypeMarkdown) {
 		body = domain.RenderMarkdown(body)
 		in.MarkdownSource = sql.NullString{String: in.RawContent, Valid: !domain.IsBlank(in.RawContent)}
 	}
+	if in.ContentType != string(domain.ContentTypeHTML) {
+		body = domain.AddLazyLoading(domain.SanitizeHTML(body))
+	}
 	in.StoredContent = sql.NullString{
-		String: domain.AddLazyLoading(domain.SanitizeHTML(body)),
+		String: body,
 		Valid:  true,
 	}
 	return in, nil
@@ -649,7 +679,7 @@ func pageStatusName(status int64) string {
 
 // pageSlugParam reads the {slug} path parameter as the nullable slug column.
 func pageSlugParam(r *http.Request) sql.NullString {
-	return sql.NullString{String: chi.URLParam(r, "slug"), Valid: true}
+	return sql.NullString{String: slugParam(r, "slug"), Valid: true}
 }
 
 // logPageActivity mirrors the ActivityLog.log! calls in

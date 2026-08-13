@@ -55,7 +55,7 @@ func (s *Server) publicArticleIndex(w http.ResponseWriter, r *http.Request) {
 		s.publicNotFound(w)
 		return
 	}
-	q := r.URL.Query().Get("q")
+	q := firstRunes(r.URL.Query().Get("q"), publicSearchMaxRunes)
 	offset := (page - 1) * publicArticlesPerPage
 
 	var articles []query.Article
@@ -103,9 +103,20 @@ func (s *Server) publicArticleIndex(w http.ResponseWriter, r *http.Request) {
 		s.listError(w, "list article tags", err)
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=300, s-maxage=900")
+	// A present flash cookie makes PopFlash emit a Set-Cookie that clears it,
+	// and a rendered flash is one-time, per-user content; such a response
+	// must not be stored by shared caches. The check is cookie presence, not
+	// the popped value: a malformed cookie pops a zero Flash yet the
+	// Set-Cookie header still goes out.
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	flash := s.PopFlash(r, w)
+	cacheControl := "public, max-age=300, s-maxage=900"
+	if flashCookieErr == nil {
+		cacheControl = "private, no-cache"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
 	data := publicIndexData{
-		Flash:  PopFlash(r, w),
+		Flash:  flash,
 		Chrome: chrome,
 		List: articleListData{
 			Items:    items,
@@ -139,7 +150,7 @@ type publicArticleData struct {
 // authentication, anything else is the static 404.
 func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	slug := slugParam(r)
+	slug := slugParam(r, "slug")
 	article, err := s.Q.GetPublicArticleBySlug(ctx, sql.NullString{String: slug, Valid: true})
 	if errors.Is(err, sql.ErrNoRows) {
 		s.publicNotFound(w)
@@ -153,12 +164,6 @@ func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request) {
 	if !public && !s.authenticated(r) {
 		s.publicNotFound(w)
 		return
-	}
-	if public {
-		// Must stay private: the comment form embeds a per-session captcha token.
-		w.Header().Set("Cache-Control", "private, max-age=3600")
-	} else {
-		w.Header().Set("Cache-Control", "private, no-cache")
 	}
 
 	chrome, err := s.chrome(ctx, "")
@@ -191,8 +196,19 @@ func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request) {
 	}
 	metaImage = absoluteURL(chrome.SiteURL, metaImage)
 
+	// Must stay private: the comment form embeds a per-session captcha token.
+	// A present flash cookie means the page renders a one-time flash, so the
+	// response must not be cached (same check as publicArticleIndex). Set only
+	// after every fallible query, or http.Error would send a cached 500.
+	_, flashCookieErr := r.Cookie(flashCookieName)
+	cacheControl := "private, no-cache"
+	if public && flashCookieErr != nil {
+		cacheControl = "private, max-age=3600"
+	}
+	w.Header().Set("Cache-Control", cacheControl)
+
 	s.render(w, http.StatusOK, "public_article", publicArticleData{
-		Flash:           PopFlash(r, w),
+		Flash:           s.PopFlash(r, w),
 		Chrome:          chrome,
 		Title:           article.Title.String,
 		DateUnix:        article.CreatedAt,

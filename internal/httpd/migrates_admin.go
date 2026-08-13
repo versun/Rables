@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -41,6 +42,7 @@ type adminMigratesData struct {
 	ActiveTab string
 	TimeZone  string
 	Exports   []migratesExportFile
+	Imports   []migratesExportFile
 }
 
 // adminMigratesIndex renders GET /admin/migrates, mirroring
@@ -54,10 +56,11 @@ func (s *Server) adminMigratesIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "admin_migrates", adminMigratesData{
-		Flash:     PopFlash(r, w),
+		Flash:     s.PopFlash(r, w),
 		ActiveTab: migrateTab(r.URL.Query().Get("tab")),
 		TimeZone:  st.TimeZone,
 		Exports:   s.listExportFiles(),
+		Imports:   s.listImportFiles(),
 	})
 }
 
@@ -67,7 +70,7 @@ func (s *Server) adminMigratesIndex(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminMigratesExport(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	fail := func(alert string) {
-		SetFlash(w, templates.Flash{Alert: alert})
+		s.SetFlash(w, templates.Flash{Alert: alert})
 		http.Redirect(w, r, "/admin/migrates?tab=export", http.StatusFound)
 	}
 	if _, err := s.Enqueuer().Enqueue(ctx, jobs.KindExport, nil, time.Now()); err != nil {
@@ -77,7 +80,7 @@ func (s *Server) adminMigratesExport(w http.ResponseWriter, r *http.Request) {
 	}
 	activity.Log(ctx, s.DB, "info", "queued", "export", "")
 
-	SetFlash(w, templates.Flash{Notice: migratesExportNotice})
+	s.SetFlash(w, templates.Flash{Notice: migratesExportNotice})
 	http.Redirect(w, r, "/admin/migrates?tab=export", http.StatusFound)
 }
 
@@ -87,6 +90,47 @@ func migrateTab(value string) string {
 		return "import"
 	}
 	return "export"
+}
+
+// listImportFiles returns the importable files in data/imports (Rables
+// backups copied onto the server, e.g. via scp), newest first. Staging
+// directories created by running imports, import_* / twitter_archive_*
+// uploads owned by an already-enqueued job, and *.queued files already
+// enqueued as server imports are skipped.
+func (s *Server) listImportFiles() []migratesExportFile {
+	entries, err := os.ReadDir(filepath.Join(s.Cfg.DataDir, "imports"))
+	if err != nil {
+		return nil
+	}
+	var files []migratesExportFile
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		// import_* files are web uploads and twitter_archive_* files are
+		// twitter archive uploads, both already owned by an enqueued job;
+		// listing them would invite a duplicate import. The .part temp names
+		// of in-progress uploads carry the same prefixes, so they are skipped
+		// here as well. name.queued files are server imports already enqueued
+		// (adminMigratesImportServerFile).
+		if strings.HasPrefix(entry.Name(), "import_") || strings.HasPrefix(entry.Name(), "twitter_archive_") {
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".queued") {
+			continue
+		}
+		if !importableDBExt(entry.Name()) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, migratesExportFile{Name: entry.Name(), Size: info.Size(), ModTime: info.ModTime().Unix()})
+	}
+	// Import names are arbitrary (scp/rsync copies), so sort by mtime.
+	sort.Slice(files, func(i, j int) bool { return files[i].ModTime > files[j].ModTime })
+	return files
 }
 
 // listExportFiles returns the *.zip files in data/exports, newest first.

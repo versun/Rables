@@ -33,7 +33,7 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 		cookie, err := r.Cookie(sessionCookieName)
 		if err == nil {
 			sess, err := s.Q.GetSessionByToken(r.Context(), cookie.Value)
-			if err == nil {
+			if err == nil && !s.sessionExpired(r.Context(), sess) {
 				user, err := s.Q.GetUserByID(r.Context(), sess.UserID)
 				if err == nil {
 					next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
@@ -43,6 +43,19 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 		}
 		http.Redirect(w, r, "/session/new", http.StatusFound)
 	})
+}
+
+// sessionExpired reports whether sess is older than sessionTTL. An expired
+// session no longer authenticates, and its row is deleted on the way out so
+// the table does not keep dead entries around.
+func (s *Server) sessionExpired(ctx context.Context, sess query.Session) bool {
+	if time.Since(time.Unix(sess.CreatedAt, 0)) <= sessionTTL {
+		return false
+	}
+	if err := s.Q.DeleteSessionByToken(ctx, sess.Token); err != nil {
+		s.Log.Error("delete expired session", "error", err)
+	}
+	return true
 }
 
 // originCheck replaces Rails' CSRF protection (spec §1). Non-GET requests are
@@ -98,7 +111,7 @@ var setupAllowedPrefixes = []string{"/setup", "/session", "/up", "/files", "/sta
 func (s *Server) setupRedirect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, prefix := range setupAllowedPrefixes {
-			if strings.HasPrefix(r.URL.Path, prefix) {
+			if r.URL.Path == prefix || strings.HasPrefix(r.URL.Path, prefix+"/") {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -113,16 +126,18 @@ func (s *Server) setupRedirect(next http.Handler) http.Handler {
 
 // setupIncomplete reports whether setup still needs to run, cached for
 // setupCacheTTL. Mirrors Setting.setup_incomplete?: no users, or the settings
-// row exists with setup_completed = 0.
-func (s *Server) setupIncomplete(ctx context.Context) (incomplete bool) {
+// row exists with setup_completed = 0. Like redirectRules, a database error
+// fails open and is not cached, so the next request retries.
+func (s *Server) setupIncomplete(ctx context.Context) bool {
 	if v, ok := s.Ext.Load(setupCacheKey); ok {
 		if entry := v.(setupCacheEntry); time.Since(entry.checkedAt) < setupCacheTTL {
 			return entry.incomplete
 		}
 	}
-	defer func() {
+	cache := func(incomplete bool) bool {
 		s.Ext.Store(setupCacheKey, setupCacheEntry{incomplete: incomplete, checkedAt: time.Now()})
-	}()
+		return incomplete
+	}
 
 	users, err := s.Q.CountUsers(ctx)
 	if err != nil {
@@ -130,7 +145,7 @@ func (s *Server) setupIncomplete(ctx context.Context) (incomplete bool) {
 		return false // fail open; the error surfaces on real queries
 	}
 	if users == 0 {
-		return true
+		return cache(true)
 	}
 	if err := s.Q.EnsureSettings(ctx, query.EnsureSettingsParams{CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix()}); err != nil {
 		s.Log.Error("setup check: ensure settings", "error", err)
@@ -141,7 +156,7 @@ func (s *Server) setupIncomplete(ctx context.Context) (incomplete bool) {
 		s.Log.Error("setup check: get settings", "error", err)
 		return false
 	}
-	return settings.SetupCompleted == 0
+	return cache(settings.SetupCompleted == 0)
 }
 
 // InvalidateSetupCache drops the cached setup verdict so the next request

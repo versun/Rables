@@ -49,7 +49,7 @@ func (s *Server) adminRedirectsIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "admin_redirects_index", adminRedirectsIndexData{
-		Flash:     PopFlash(r, w),
+		Flash:     s.PopFlash(r, w),
 		Redirects: rows,
 	})
 }
@@ -66,7 +66,7 @@ type adminRedirectFormData struct {
 // enabled, like the Rails form's checkbox.
 func (s *Server) adminRedirectsNew(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "admin_redirects_new", adminRedirectFormData{
-		Flash:    PopFlash(r, w),
+		Flash:    s.PopFlash(r, w),
 		Redirect: query.Redirect{Enabled: 1},
 	})
 }
@@ -105,7 +105,7 @@ func (s *Server) adminRedirectsCreate(w http.ResponseWriter, r *http.Request) {
 	activity.Log(r.Context(), s.DB, "info", "created", "redirect",
 		fmt.Sprintf("regex=%s replacement=%s", activity.Quote(redirect.Regex), activity.Quote(redirect.Replacement)))
 	s.InvalidateRedirectCache()
-	SetFlash(w, templates.Flash{Notice: "Redirect was successfully created."})
+	s.SetFlash(w, templates.Flash{Notice: "Redirect was successfully created."})
 	http.Redirect(w, r, "/admin/redirects", http.StatusFound)
 }
 
@@ -122,7 +122,7 @@ func (s *Server) adminRedirectsEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "admin_redirects_edit", adminRedirectFormData{
-		Flash:    PopFlash(r, w),
+		Flash:    s.PopFlash(r, w),
 		Redirect: redirect,
 	})
 }
@@ -169,7 +169,7 @@ func (s *Server) adminRedirectsUpdate(w http.ResponseWriter, r *http.Request) {
 	activity.Log(r.Context(), s.DB, "info", "updated", "redirect",
 		fmt.Sprintf("regex=%s replacement=%s", activity.Quote(in.Regex), activity.Quote(in.Replacement)))
 	s.InvalidateRedirectCache()
-	SetFlash(w, templates.Flash{Notice: "Redirect was successfully updated."})
+	s.SetFlash(w, templates.Flash{Notice: "Redirect was successfully updated."})
 	http.Redirect(w, r, "/admin/redirects", http.StatusFound)
 }
 
@@ -195,7 +195,7 @@ func (s *Server) adminRedirectsDestroy(w http.ResponseWriter, r *http.Request) {
 	activity.Log(r.Context(), s.DB, "info", "deleted", "redirect",
 		fmt.Sprintf("regex=%s replacement=%s", activity.Quote(redirect.Regex), activity.Quote(redirect.Replacement)))
 	s.InvalidateRedirectCache()
-	SetFlash(w, templates.Flash{Notice: "Redirect was successfully deleted."})
+	s.SetFlash(w, templates.Flash{Notice: "Redirect was successfully deleted."})
 	http.Redirect(w, r, "/admin/redirects", http.StatusSeeOther)
 }
 

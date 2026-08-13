@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -117,7 +119,8 @@ func flashOf(t *testing.T, rec *httptest.ResponseRecorder) templates.Flash {
 	if cookie == nil {
 		return templates.Flash{}
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(cookie.Value)
+	body, _, _ := strings.Cut(cookie.Value, ".")
+	payload, err := base64.RawURLEncoding.DecodeString(body)
 	if err != nil {
 		t.Fatalf("decode flash: %v", err)
 	}
@@ -276,6 +279,9 @@ func TestAdminArticlesCreateFlow(t *testing.T) {
 	form.Set("title", "Described")
 	form.Set("description", "  Custom description  ")
 	rec = doRequest(t, h, http.MethodPost, "/admin/posts", form, session)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/posts" {
+		t.Fatalf("described create: status = %d location = %q", rec.Code, rec.Header().Get("Location"))
+	}
 	described, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug("described"))
 	if err != nil {
 		t.Fatalf("described article: %v", err)
@@ -696,6 +702,70 @@ func TestAdminArticlesUpdate(t *testing.T) {
 	}
 }
 
+// TestAdminArticlesUpdateKeepsCreatedAt: an update that does not submit
+// created_at (parseFormTime yields nil) keeps the stored timestamp instead of
+// silently resetting it to now.
+func TestAdminArticlesUpdateKeepsCreatedAt(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	ctx := t.Context()
+
+	form := validArticleForm()
+	form.Set("created_at", "2020-01-02T03:04")
+	if rec := doRequest(t, h, http.MethodPost, "/admin/posts", form, session); rec.Code != http.StatusFound {
+		t.Fatalf("create: status = %d", rec.Code)
+	}
+	article, _ := s.Q.GetAdminArticleBySlug(ctx, nullSlug("hello-world"))
+	before := article.CreatedAt
+	if y := time.Unix(before, 0).Year(); y != 2020 {
+		t.Fatalf("created_at year = %d, want 2020 (form value ignored?)", y)
+	}
+
+	form = validArticleForm()
+	form.Set("title", "Renamed")
+	form.Set("slug", "hello-world")
+	rec := doRequest(t, h, http.MethodPost, "/admin/posts/hello-world", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("update: status = %d", rec.Code)
+	}
+	article, _ = s.Q.GetAdminArticleBySlug(ctx, nullSlug("hello-world"))
+	if article.CreatedAt != before {
+		t.Errorf("created_at = %d after update without created_at, want preserved %d", article.CreatedAt, before)
+	}
+}
+
+// TestAdminArticlesEditUpdatePercentEncodedSlug: the admin templates build
+// member URLs with html/template's lowercase-hex escaping, so net/url keeps
+// the raw bytes in URL.RawPath and chi routes on it without decoding —
+// slugParam must unescape the {id} parameter or every member action on a
+// non-ASCII slug 404s (same trap as the public side, see
+// TestPublicShowPercentEncodedSlug).
+func TestAdminArticlesEditUpdatePercentEncodedSlug(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	ctx := t.Context()
+
+	insertAdminArticle(t, s, "Year", "2024年", domain.StatusDraft)
+
+	// Lowercase hex, exactly what html/template's urlNormalizer emits.
+	rec := doRequest(t, h, http.MethodGet, "/admin/posts/2024%e5%b9%b4/edit", nil, session)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `value="Year"`) {
+		t.Fatalf("edit: status = %d", rec.Code)
+	}
+
+	form := validArticleForm()
+	form.Set("title", "Year Renamed")
+	form.Set("slug", "2024年")
+	rec = doRequest(t, h, http.MethodPost, "/admin/posts/2024%e5%b9%b4", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("update: status = %d", rec.Code)
+	}
+	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug("2024年"))
+	if err != nil || article.Title.String != "Year Renamed" {
+		t.Errorf("updated article = %q, %v", article.Title.String, err)
+	}
+}
+
 // TestAdminArticlesDestroy covers the two-stage delete.
 func TestAdminArticlesDestroy(t *testing.T) {
 	s, h := newArticlesTestServer(t)
@@ -810,8 +880,9 @@ func TestAdminArticlesIndex(t *testing.T) {
 		t.Errorf("content search should find the draft")
 	}
 
-	// Invalid pages 404 (WillPaginate::InvalidPage).
-	for _, p := range []string{"0", "-1", "abc"} {
+	// Invalid pages 404 (WillPaginate::InvalidPage); the 19-digit page guards
+	// the int64 offset overflow (will_paginate's BIGINT offset guard).
+	for _, p := range []string{"0", "-1", "abc", "9223372036854775807"} {
 		if rec := doRequest(t, h, http.MethodGet, "/admin/posts?page="+p, nil, session); rec.Code != http.StatusNotFound {
 			t.Errorf("page=%s: status = %d, want 404", p, rec.Code)
 		}
@@ -1029,17 +1100,17 @@ func TestAdminArticlesBatchCrosspost(t *testing.T) {
 		t.Errorf("empty platforms alert = %+v", flashOf(t, rec))
 	}
 
-	// A disabled platform queues nothing but does not error (Rails:
-	// jobs_queued stays false, count unchanged).
+	// All selected platforms disabled: alert instead of a silent "0 queued"
+	// success, and nothing is enqueued.
 	form := url.Values{}
 	form["ids"] = []string{"pub"}
-	form["platforms"] = []string{"bluesky"}
+	form["platforms"] = []string{"bluesky", "twitter"}
 	rec = doRequest(t, h, http.MethodPost, "/admin/posts/batch_crosspost", form, session)
-	if flash := flashOf(t, rec); !strings.Contains(flash.Notice, "成功提交 0 篇文章进行跨平台发布。") {
-		t.Errorf("disabled platform notice = %q", flash.Notice)
+	if flash := flashOf(t, rec); flash.Alert != "所选平台均未启用。" || flash.Notice != "" {
+		t.Errorf("disabled platforms flash = %+v", flash)
 	}
 	if n := len(queuedJobs(t, s, jobs.KindCrosspost)); n != 0 {
-		t.Errorf("jobs for disabled platform = %d, want 0", n)
+		t.Errorf("jobs for disabled platforms = %d, want 0", n)
 	}
 
 	// Published article + enabled platform queues one job; the draft errors.
@@ -1092,6 +1163,49 @@ func TestAdminArticlesBatchNewsletter(t *testing.T) {
 	jobs_ := queuedJobs(t, s, jobs.KindSendNewsletter)
 	if len(jobs_) != 1 {
 		t.Errorf("newsletter jobs = %+v, want 1", jobs_)
+	}
+}
+
+// TestAdminArticlesBatchNewsletterErrorFlashBounded: with a full page of
+// failing articles, the flash must stay within the cookie/proxy byte budget —
+// joining every title + error would overflow the 4KB Set-Cookie limit and the
+// browser would silently drop the flash, success counts included. The
+// activity log keeps the full list.
+func TestAdminArticlesBatchNewsletterErrorFlashBounded(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+
+	form := url.Values{}
+	for i := 0; i < flashErrorLimit+15; i++ {
+		slug := "draft-" + strconv.Itoa(i)
+		title := strings.Repeat("题", flashErrorEntryRunes) + "T" + strconv.Itoa(i)
+		insertAdminArticle(t, s, title, slug, domain.StatusDraft)
+		form["ids"] = append(form["ids"], slug)
+	}
+	rec := doRequest(t, h, http.MethodPost, "/admin/posts/batch_newsletter", form, session)
+
+	flash := flashOf(t, rec)
+	if !strings.HasPrefix(flash.Alert, "成功提交 0 篇文章发送邮件。错误: ") {
+		t.Errorf("alert prefix = %q", flash.Alert[:min(len(flash.Alert), 80)])
+	}
+	// The prefix plus the capped join and the remainder suffix.
+	if got := len(flash.Alert); got > flashMaxBytes+128 {
+		t.Errorf("alert length = %d bytes, want bounded for a full page of CJK failures", got)
+	}
+	if !utf8.ValidString(flash.Alert) {
+		t.Errorf("alert is not valid UTF-8 (truncation split a multi-byte character)")
+	}
+	if !strings.Contains(flash.Alert, "…以及其余 15 条") {
+		t.Errorf("alert missing the remainder count, suffix = %q", flash.Alert[max(0, len(flash.Alert)-40):])
+	}
+
+	// The complete error list stays in the activity log.
+	var desc string
+	if err := s.DB.QueryRow(`SELECT description FROM activity_logs ORDER BY id DESC LIMIT 1`).Scan(&desc); err != nil {
+		t.Fatalf("read activity log: %v", err)
+	}
+	if !strings.Contains(desc, "T24: 文章未发布，无法发送邮件") {
+		t.Errorf("activity log missing the truncated entries: %q", desc)
 	}
 }
 
@@ -1163,5 +1277,120 @@ func TestAdminArticlesFetchComments(t *testing.T) {
 	rec = doRequest(t, h, http.MethodPost, "/admin/posts/social/fetch_comments", url.Values{"platform": {"twitter"}}, session)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("fetch twitter: status = %d, want 422", rec.Code)
+	}
+}
+
+// TestAdminArticleFormDisabledDistributionFields covers the Rails check_box
+// parity in _article_form.html: when a crosspost platform or the newsletter
+// is globally disabled, the hidden "0" sibling is disabled too, so the
+// browser submits neither key and parseArticleForm can fall back to the
+// stored schedule snapshot instead of overwriting it with 0.
+func TestAdminArticleFormDisabledDistributionFields(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	enableCrosspost(t, s, "mastodon") // one platform on, the rest off
+
+	rec := doRequest(t, h, http.MethodGet, "/admin/posts/new", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("new form: status = %d", rec.Code)
+	}
+	page := rec.Body.String()
+	for _, want := range []string{
+		`<input type="hidden" name="send_newsletter" value="0" disabled>`,
+		`<input type="hidden" name="crosspost_twitter" value="0" disabled>`,
+		`<input type="hidden" name="crosspost_bluesky" value="0" disabled>`,
+		`<input type="hidden" name="crosspost_xiaohongshu" value="0" disabled>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("disabled hidden field missing: %s", want)
+		}
+	}
+	// The enabled platform and the never-disabled comment checkbox keep
+	// plain hidden fields.
+	for _, want := range []string{
+		`<input type="hidden" name="crosspost_mastodon" value="0">`,
+		`<input type="hidden" name="comment" value="0">`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("enabled hidden field missing: %s", want)
+		}
+	}
+}
+
+// TestAdminArticlesScheduleSnapshotFallback covers parseArticleForm's
+// fallback: when the browser submits neither the checkbox nor its hidden "0"
+// (both disabled because the platform is globally off), the stored snapshot
+// survives an update.
+func TestAdminArticlesScheduleSnapshotFallback(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	ctx := t.Context()
+	enableCrosspost(t, s, "mastodon")
+
+	form := validArticleForm()
+	form.Set("title", "Fallback Post")
+	form.Set("status", "schedule")
+	form.Set("scheduled_at", "2027-01-15T10:30")
+	form.Set("crosspost_mastodon", "1")
+	form.Set("send_newsletter", "1")
+	if rec := doRequest(t, h, http.MethodPost, "/admin/posts", form, session); rec.Code != http.StatusFound {
+		t.Fatalf("schedule create: status = %d", rec.Code)
+	}
+
+	// Simulate the platform/newsletter being globally off: the disabled form
+	// submits neither the checkboxes nor the hidden fields.
+	form = validArticleForm()
+	form.Set("title", "Fallback Post")
+	form.Set("status", "schedule")
+	form.Set("scheduled_at", "2027-01-15T10:30")
+	for _, key := range []string{
+		"send_newsletter", "crosspost_mastodon", "crosspost_twitter",
+		"crosspost_bluesky", "crosspost_xiaohongshu",
+	} {
+		form.Del(key)
+	}
+	rec := doRequest(t, h, http.MethodPost, "/admin/posts/fallback-post", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("update with disabled distribution fields: status = %d flash = %+v", rec.Code, flashOf(t, rec))
+	}
+	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug("fallback-post"))
+	if err != nil {
+		t.Fatalf("fallback post: %v", err)
+	}
+	if article.ScheduledCrosspostPlatforms != `["mastodon"]` {
+		t.Errorf("snapshot platforms = %q, want %q kept", article.ScheduledCrosspostPlatforms, `["mastodon"]`)
+	}
+	if article.ScheduledSendNewsletter != 1 {
+		t.Errorf("snapshot newsletter = %d, want 1 kept", article.ScheduledSendNewsletter)
+	}
+}
+
+// TestAdminArticlesBatchLookupDBError covers the batch loops' error split:
+// a missing slug is skipped, but a real DB error is reported as a failure
+// instead of riding the success notice.
+func TestAdminArticlesBatchLookupDBError(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	insertAdminArticle(t, s, "Keep", "keep", domain.StatusPublish)
+	if _, err := s.DB.ExecContext(t.Context(), "ALTER TABLE articles RENAME TO articles_gone"); err != nil {
+		t.Fatalf("break articles table: %v", err)
+	}
+
+	form := url.Values{}
+	form["ids"] = []string{"keep"}
+	rec := doRequest(t, h, http.MethodPost, "/admin/posts/batch_destroy", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("batch_destroy: status = %d", rec.Code)
+	}
+	if flash := flashOf(t, rec); !strings.Contains(flash.Alert, "keep") {
+		t.Errorf("batch_destroy flash = %+v, want an alert naming keep", flash)
+	}
+
+	rec = doRequest(t, h, http.MethodPost, "/admin/posts/batch_publish", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("batch_publish: status = %d", rec.Code)
+	}
+	if flash := flashOf(t, rec); !strings.Contains(flash.Alert, "Error processing publish for articles") {
+		t.Errorf("batch_publish flash = %+v, want the processing alert", flash)
 	}
 }

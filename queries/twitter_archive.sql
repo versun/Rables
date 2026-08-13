@@ -73,14 +73,27 @@ SELECT * FROM twitter_archive_imports WHERE id = ?;
 -- name: HasActiveTwitterArchiveImport :one
 SELECT COUNT(*) FROM twitter_archive_imports WHERE status IN ('queued', 'running');
 
+-- Self-heal guard for a recovered failed import whose job re-runs: a newer
+-- non-failed row means a fresh upload already superseded this import, so
+-- re-running it would roll the stored archive back to the older upload.
+-- name: HasNewerNonFailedTwitterArchiveImport :one
+SELECT COUNT(*) FROM twitter_archive_imports WHERE id > ? AND status != 'failed';
+
 -- name: ListTwitterArchiveImportsRecent :many
 SELECT * FROM twitter_archive_imports ORDER BY created_at DESC, id DESC LIMIT ?;
 
--- name: MarkTwitterArchiveImportRunning :exec
+-- Re-claiming active_slot makes the self-heal after startup recovery safe:
+-- if a newer import already took the slot, idx_tai_active_slot turns the
+-- late re-mark into a unique-constraint error instead of two concurrent
+-- imports. The status guard keeps a completed import completed: a job
+-- re-executed after its import finished (a crash between the import-complete
+-- and job-complete writes) must not resurrect the row. Its source file is
+-- gone, so a re-run could only clobber the history back to failed.
+-- name: MarkTwitterArchiveImportRunning :execrows
 UPDATE twitter_archive_imports
 SET status = 'running', progress = 5, status_message = 'Reading archive',
-    started_at = ?, finished_at = NULL, error_message = NULL, updated_at = ?
-WHERE id = ?;
+    started_at = ?, finished_at = NULL, error_message = NULL, active_slot = 1, updated_at = ?
+WHERE id = ? AND status != 'completed';
 
 -- name: UpdateTwitterArchiveImportProgress :exec
 UPDATE twitter_archive_imports
@@ -99,6 +112,16 @@ UPDATE twitter_archive_imports
 SET status = 'failed', status_message = 'Import failed', error_message = ?,
     finished_at = ?, active_slot = NULL, updated_at = ?
 WHERE id = ?;
+
+-- name: FailStaleTwitterArchiveImports :execrows
+-- Startup recovery: imports stuck queued/running since before :cutoff belong
+-- to a dead process; fail them and release active_slot (idx_tai_active_slot
+-- allows a single active row) so new imports are not blocked forever.
+UPDATE twitter_archive_imports
+SET status = 'failed', status_message = 'Import failed',
+    error_message = :error_message, finished_at = :finished_at,
+    active_slot = NULL, updated_at = :now
+WHERE status IN ('queued', 'running') AND updated_at < :cutoff;
 
 -- name: ClearTwitterArchiveImportSource :exec
 UPDATE twitter_archive_imports SET source_path = NULL, updated_at = ? WHERE id = ?;

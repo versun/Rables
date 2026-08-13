@@ -41,7 +41,9 @@ func (s *Server) redirectMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		for _, prefix := range redirectSkipPrefixes {
-			if strings.HasPrefix(path, prefix) {
+			// Segment-aware match: an article slug like /updates-2024 must
+			// not be mistaken for the /up prefix.
+			if path == prefix || strings.HasPrefix(path, prefix+"/") {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -125,8 +127,9 @@ func (rule redirectRule) applyTo(path string) (string, bool) {
 }
 
 // rubyToGoExpansion rewrites the Ruby sub-replacement syntax admins enter
-// (\1 backreferences, \\ literal backslash) into Go ExpandString form
-// (${1}, with literal dollars escaped).
+// (\1-\9 and \0/\& backreferences, \k<name>/\k'name' named backreferences,
+// \\ literal backslash) into Go ExpandString form (${1}/${0}/${name}, with
+// literal dollars escaped). Unrecognized backslash forms stay literal.
 func rubyToGoExpansion(repl string) string {
 	var b strings.Builder
 	for i := 0; i < len(repl); i++ {
@@ -137,6 +140,22 @@ func rubyToGoExpansion(repl string) string {
 			b.WriteByte(repl[i+1])
 			b.WriteByte('}')
 			i++
+		case c == '\\' && i+1 < len(repl) && repl[i+1] == '&':
+			b.WriteString("${0}")
+			i++
+		case c == '\\' && i+2 < len(repl) && repl[i+1] == 'k' && (repl[i+2] == '<' || repl[i+2] == '\''):
+			close := byte('>')
+			if repl[i+2] == '\'' {
+				close = '\''
+			}
+			if end := strings.IndexByte(repl[i+3:], close); end > 0 {
+				b.WriteString("${")
+				b.WriteString(repl[i+3 : i+3+end])
+				b.WriteByte('}')
+				i += 3 + end
+			} else {
+				b.WriteByte(c)
+			}
 		case c == '\\' && i+1 < len(repl) && repl[i+1] == '\\':
 			b.WriteByte('\\')
 			i++

@@ -2,18 +2,25 @@ package crosspost
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -72,6 +79,11 @@ func newTestDispatcher(t *testing.T) (*Dispatcher, *sql.DB, string) {
 	t.Cleanup(func() { database.Close() })
 	d := NewDispatcher(database, dataDir)
 	d.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	// Tests dial httptest servers on loopback: resolve every host to a
+	// public IP so the image-download SSRF guard lets the fixtures through.
+	d.lookupIP = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
 	return d, database, dataDir
 }
 
@@ -300,11 +312,83 @@ func TestDispatcherPermanentErrorIsLoggedNotRetried(t *testing.T) {
 	}
 }
 
+// TestDispatcherRecordURLFailureIsLoggedNotRetried: the post is already
+// public when recordURL fails, so returning the error would retry the job
+// and — with no URL recorded — publish a duplicate. The failure is logged
+// as an error activity instead and the run goes on.
+func TestDispatcherRecordURLFailureIsLoggedNotRetried(t *testing.T) {
+	d, database, _ := newTestDispatcher(t)
+	articleID := insertArticle(t, database, "hello")
+	enablePlatform(t, database, "fakerecfail1")
+	enablePlatform(t, database, "fakerecfail2")
+
+	// Break only the URL write; reads (urlRecordedSince) still work.
+	if _, err := database.ExecContext(t.Context(),
+		`CREATE TRIGGER fail_social_media_posts BEFORE INSERT ON social_media_posts BEGIN SELECT RAISE(FAIL, 'no inserts'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	bad := &fakePlatform{name: "fakerecfail1", url: "https://x/1"}
+	good := &fakePlatform{name: "fakerecfail2", url: "https://x/2"}
+	RegisterPlatform(bad)
+	RegisterPlatform(good)
+
+	payload := crosspostJobPayload(t, jobPayload{ArticleID: articleID, Platforms: []string{"fakerecfail1", "fakerecfail2"}, RequestedAt: 2000})
+	if err := d.Handle(t.Context(), payload); err != nil {
+		t.Fatalf("Handle: %v, want nil (a recordURL failure must not retry into a duplicate public post)", err)
+	}
+	if len(bad.calls) != 1 || len(good.calls) != 1 {
+		t.Errorf("calls = %d/%d, want 1/1 (a record failure does not block the next platform)", len(bad.calls), len(good.calls))
+	}
+	if got := socialURL(t, database, articleID, "fakerecfail1"); got != "" {
+		t.Errorf("url = %q, want none recorded", got)
+	}
+	if n := activityRows(t, database, "failed"); n != 2 {
+		t.Errorf("failed activity rows = %d, want 2 (one per unrecorded platform)", n)
+	}
+	if n := activityRows(t, database, "posted"); n != 0 {
+		t.Errorf("posted activity rows = %d, want 0 (unrecorded platforms are not counted as posted)", n)
+	}
+}
+
 func TestDispatcherMissingArticle(t *testing.T) {
 	d, _, _ := newTestDispatcher(t)
 	payload := crosspostJobPayload(t, jobPayload{ArticleID: 9999, Platform: "whatever"})
 	if err := d.Handle(t.Context(), payload); err != nil {
 		t.Fatalf("Handle: %v, want nil for a deleted article", err)
+	}
+}
+
+// TestDispatcherCanceledErrorPropagates: a platform failing because the
+// worker is shutting down (context.Canceled, plain or wrapped in a
+// *url.Error) must propagate the error so the job is rescheduled — logging
+// it as a permanent failure would silently drop the post.
+func TestDispatcherCanceledErrorPropagates(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"plain context.Canceled", context.Canceled},
+		{"url.Error wrapping context.Canceled", &url.Error{Op: "Post", URL: "https://x", Err: context.Canceled}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, database, _ := newTestDispatcher(t)
+			articleID := insertArticle(t, database, "hello")
+			enablePlatform(t, database, "fakecancel")
+
+			fake := &fakePlatform{name: "fakecancel", err: tt.err}
+			RegisterPlatform(fake)
+
+			payload := crosspostJobPayload(t, jobPayload{ArticleID: articleID, Platform: "fakecancel", RequestedAt: 2000})
+			err := d.Handle(t.Context(), payload)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Handle error = %v, want context.Canceled (job must be rescheduled)", err)
+			}
+			if n := activityRows(t, database, "failed"); n != 0 {
+				t.Errorf("failed activity rows = %d, want 0 (shutdown is not a permanent failure)", n)
+			}
+		})
 	}
 }
 
@@ -379,29 +463,25 @@ func TestCollectImages(t *testing.T) {
 
 	store := media.New(database, dataDir)
 	// Attachment path (ActionText attachables).
-	attachedKey, err := store.Store(t.Context(), strings.NewReader(string(png)), "attached.png", "image/png")
+	attached, err := store.Store(t.Context(), strings.NewReader(string(png)), "attached.png", "image/png")
 	if err != nil {
 		t.Fatalf("store attached: %v", err)
-	}
-	attached, err := store.FileByKey(t.Context(), attachedKey)
-	if err != nil {
-		t.Fatalf("file by key: %v", err)
 	}
 	if err := store.Attach(t.Context(), attached.ID, "Article", articleID, "embeds"); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 	// HTML path (/files/<key>); the attached file is also referenced to prove
 	// the blob-id dedupe.
-	htmlKey, err := store.Store(t.Context(), strings.NewReader(string(png)), "html.png", "image/png")
+	htmlFile, err := store.Store(t.Context(), strings.NewReader(string(png)), "html.png", "image/png")
 	if err != nil {
 		t.Fatalf("store html: %v", err)
 	}
-	nonImageKey, err := store.Store(t.Context(), strings.NewReader("hello"), "note.txt", "text/plain")
+	nonImage, err := store.Store(t.Context(), strings.NewReader("hello"), "note.txt", "text/plain")
 	if err != nil {
 		t.Fatalf("store text: %v", err)
 	}
 	content := fmt.Sprintf(`<p>x</p><img src="/files/%s"><img src="/files/%s"><img src="/files/%s"><img src="%s/remote.png">`,
-		attachedKey, htmlKey, nonImageKey, remote.URL)
+		attached.Key, htmlFile.Key, nonImage.Key, remote.URL)
 	if _, err := database.ExecContext(t.Context(),
 		`UPDATE articles SET content_html = ? WHERE id = ?`, content, articleID); err != nil {
 		t.Fatalf("update content: %v", err)
@@ -423,6 +503,33 @@ func TestCollectImages(t *testing.T) {
 	}
 	if images[2].ContentType != "image/png" {
 		t.Errorf("remote content type = %q", images[2].ContentType)
+	}
+}
+
+// TestCollectImagesDuplicateAttachmentNames: Rails legacy data can attach the
+// same file under several names; collectImages keeps only the first row so one
+// image cannot occupy several of the 4 slots.
+func TestCollectImagesDuplicateAttachmentNames(t *testing.T) {
+	d, database, dataDir := newTestDispatcher(t)
+	articleID := insertArticle(t, database, "hello")
+
+	store := media.New(database, dataDir)
+	file, err := store.Store(t.Context(), strings.NewReader("pngdata"), "dup.png", "image/png")
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	for _, name := range []string{"embeds", "embeds2"} {
+		if err := store.Attach(t.Context(), file.ID, "Article", articleID, name); err != nil {
+			t.Fatalf("attach %q: %v", name, err)
+		}
+	}
+	article, err := d.q.GetAdminArticleByID(t.Context(), articleID)
+	if err != nil {
+		t.Fatalf("load article: %v", err)
+	}
+	images := d.collectImages(t.Context(), article)
+	if len(images) != 1 || images[0].Filename != "dup.png" {
+		t.Errorf("images = %v, want just dup.png (same file attached twice)", images)
 	}
 }
 
@@ -456,6 +563,189 @@ func TestCollectImagesLimitFour(t *testing.T) {
 	}
 	if images := d.collectImages(t.Context(), article); len(images) != 4 {
 		t.Errorf("images = %d, want 4 (limit)", len(images))
+	}
+}
+
+// TestCollectImagesBoundedAttempts: an article full of dead remote <img> srcs
+// (imported articles keep remote srcs untouched) must not download them all —
+// the scan stops after maxRemoteImageAttempts instead of burning the download
+// timeout on every dead link.
+func TestCollectImagesBoundedAttempts(t *testing.T) {
+	d, database, _ := newTestDispatcher(t)
+	articleID := insertArticle(t, database, "hello")
+
+	var hits atomic.Int64
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(dead.Close)
+	d.HTTPClient = dead.Client()
+
+	var sb strings.Builder
+	for i := 0; i < maxRemoteImageAttempts*3; i++ {
+		sb.WriteString(fmt.Sprintf(`<img src="%s/dead%d.png">`, dead.URL, i))
+	}
+	if _, err := database.ExecContext(t.Context(),
+		`UPDATE articles SET content_html = ? WHERE id = ?`, sb.String(), articleID); err != nil {
+		t.Fatalf("update content: %v", err)
+	}
+	article, err := d.q.GetAdminArticleByID(t.Context(), articleID)
+	if err != nil {
+		t.Fatalf("load article: %v", err)
+	}
+	if images := d.collectImages(t.Context(), article); len(images) != 0 {
+		t.Errorf("images = %d, want 0 (all links dead)", len(images))
+	}
+	if got := hits.Load(); got != maxRemoteImageAttempts {
+		t.Errorf("download attempts = %d, want %d (scan bounded)", got, maxRemoteImageAttempts)
+	}
+}
+
+// TestCollectImagesLocalPastBudget: the remote-download budget bounds remote
+// attempts only — an over-budget remote src skips like a per-image failure,
+// so local /files/<key> images after it are still collected.
+func TestCollectImagesLocalPastBudget(t *testing.T) {
+	d, database, _ := newTestDispatcher(t)
+	articleID := insertArticle(t, database, "hello")
+
+	var hits atomic.Int64
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(dead.Close)
+	d.HTTPClient = dead.Client()
+
+	key := fmt.Sprintf("%032x", 1)
+	path := filepath.Join(d.Media.DataDir, "files", key[0:2], key[2:4])
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, key), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if _, err := database.ExecContext(t.Context(),
+		`INSERT INTO files (key, filename, content_type, byte_size, created_at) VALUES (?, 'local.png', 'image/png', 1, 0)`,
+		key); err != nil {
+		t.Fatalf("insert file: %v", err)
+	}
+
+	var sb strings.Builder
+	for i := 0; i < maxRemoteImageAttempts+1; i++ {
+		sb.WriteString(fmt.Sprintf(`<img src="%s/dead%d.png">`, dead.URL, i))
+	}
+	sb.WriteString(fmt.Sprintf(`<img src="/files/%s">`, key))
+	if _, err := database.ExecContext(t.Context(),
+		`UPDATE articles SET content_html = ? WHERE id = ?`, sb.String(), articleID); err != nil {
+		t.Fatalf("update content: %v", err)
+	}
+	article, err := d.q.GetAdminArticleByID(t.Context(), articleID)
+	if err != nil {
+		t.Fatalf("load article: %v", err)
+	}
+	images := d.collectImages(t.Context(), article)
+	if len(images) != 1 || images[0].Filename != "local.png" {
+		t.Errorf("images = %v, want just local.png (local srcs collect past the budget)", images)
+	}
+	if got := hits.Load(); got != maxRemoteImageAttempts {
+		t.Errorf("download attempts = %d, want %d (scan bounded)", got, maxRemoteImageAttempts)
+	}
+}
+
+// TestDownloadRemoteImageSchemeRelative: a protocol-relative <img
+// src="//host/path"> inherits the site URL's scheme (URI.join) instead of
+// being concatenated onto the site URL as a path.
+func TestDownloadRemoteImageSchemeRelative(t *testing.T) {
+	d, database, _ := newTestDispatcher(t)
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("schemepng"))
+	}))
+	t.Cleanup(remote.Close)
+	d.HTTPClient = remote.Client()
+	if _, err := database.ExecContext(t.Context(),
+		`INSERT INTO settings (id, url, setup_completed, created_at, updated_at) VALUES (1, ?, 1, 0, 0)`, remote.URL); err != nil {
+		t.Fatalf("insert settings: %v", err)
+	}
+
+	img, ok := d.downloadRemoteImage(t.Context(), strings.TrimPrefix(remote.URL, "http:")+"/pic.png")
+	if !ok {
+		t.Fatal("scheme-relative download failed")
+	}
+	if string(img.Data) != "schemepng" {
+		t.Errorf("data = %q", img.Data)
+	}
+	if img.Filename != "pic.png" {
+		t.Errorf("filename = %q", img.Filename)
+	}
+}
+
+// TestDownloadRemoteImageSchemelessSiteURL: settings.url is stored verbatim
+// from the settings form and may lack a scheme ("example.com"); a relative
+// <img src> must still resolve to an https URL instead of being rejected by
+// the scheme check.
+func TestDownloadRemoteImageSchemelessSiteURL(t *testing.T) {
+	d, database, _ := newTestDispatcher(t)
+	remote := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("schemelesspng"))
+	}))
+	t.Cleanup(remote.Close)
+	d.HTTPClient = remote.Client()
+	if _, err := database.ExecContext(t.Context(),
+		`INSERT INTO settings (id, url, setup_completed, created_at, updated_at) VALUES (1, ?, 1, 0, 0)`,
+		strings.TrimPrefix(remote.URL, "https://")); err != nil {
+		t.Fatalf("insert settings: %v", err)
+	}
+
+	img, ok := d.downloadRemoteImage(t.Context(), "/pic.png")
+	if !ok {
+		t.Fatal("relative download with scheme-less site URL failed")
+	}
+	if string(img.Data) != "schemelesspng" {
+		t.Errorf("data = %q", img.Data)
+	}
+	if img.Filename != "pic.png" {
+		t.Errorf("filename = %q", img.Filename)
+	}
+}
+
+// TestDownloadRemoteImageBlockedTarget: an <img src> pointing at an internal
+// address (RSS imports keep such srcs untouched) is refused by the SSRF guard
+// before any request goes out, and the image is skipped like any other
+// download failure.
+func TestDownloadRemoteImageBlockedTarget(t *testing.T) {
+	d, _, _ := newTestDispatcher(t)
+	d.lookupIP = nil // the guard must see the real loopback address
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+	}))
+	t.Cleanup(srv.Close)
+	d.HTTPClient = srv.Client()
+
+	if _, ok := d.downloadRemoteImage(t.Context(), srv.URL+"/x.png"); ok {
+		t.Error("loopback image download succeeded, want skipped")
+	}
+	if got := hits.Load(); got != 0 {
+		t.Errorf("requests to blocked target = %d, want 0", got)
+	}
+}
+
+// TestDownloadRemoteImageRedirectBlocked: a public image host that 302s to an
+// internal address is refused at the redirect hop (downloadClient re-checks
+// every hop), so the response bytes never leave the server.
+func TestDownloadRemoteImageRedirectBlocked(t *testing.T) {
+	d, _, _ := newTestDispatcher(t)
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data", http.StatusFound)
+	}))
+	t.Cleanup(remote.Close)
+	d.HTTPClient = downloadClient // the client with the SSRF-checking CheckRedirect
+
+	if _, ok := d.downloadRemoteImage(t.Context(), remote.URL+"/x.png"); ok {
+		t.Error("redirect to internal address succeeded, want skipped")
 	}
 }
 
@@ -495,6 +785,42 @@ func TestIsTransientClassification(t *testing.T) {
 	}
 	if !IsTransient(fmt.Errorf("wrap: %w", TransientError{Err: errors.New("boom")})) {
 		t.Error("wrapped TransientError must be transient")
+	}
+}
+
+// TestTransientNetErrorClassification: http.Client.Do failures arrive as
+// *url.Error (which implements net.Error), so the whitelist must classify the
+// inner error — and context.Canceled (worker shutdown) is never retryable.
+func TestTransientNetErrorClassification(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		transient bool
+	}{
+		{"nil", nil, false},
+		{"plain error", errors.New("boom"), false},
+		{"context.Canceled", context.Canceled, false},
+		{"url.Error wrapping context.Canceled", &url.Error{Op: "Get", URL: "https://x", Err: context.Canceled}, false},
+		{"url.Error wrapping a permanent failure", &url.Error{Op: "Get", URL: "https://x", Err: errors.New("refusing redirect")}, false},
+		{"url.Error wrapping a timeout", &url.Error{Op: "Get", URL: "https://x", Err: &net.DNSError{IsTimeout: true}}, true},
+		{"url.Error wrapping EOF", &url.Error{Op: "Post", URL: "https://x", Err: io.ErrUnexpectedEOF}, true},
+		{"url.Error wrapping a TLS record error", &url.Error{Op: "Get", URL: "https://x", Err: tls.RecordHeaderError{Msg: "bad"}}, true},
+		{"url.Error wrapping an expired certificate", &url.Error{Op: "Get", URL: "https://x", Err: &tls.CertificateVerificationError{Err: x509.CertificateInvalidError{Reason: x509.Expired}}}, true},
+		{"syscall error", &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := transientNetError(tt.err)
+			if tt.err == nil {
+				if err != nil {
+					t.Errorf("transientNetError(nil) = %v, want nil", err)
+				}
+				return
+			}
+			if IsTransient(err) != tt.transient {
+				t.Errorf("IsTransient = %v, want %v", IsTransient(err), tt.transient)
+			}
+		})
 	}
 }
 

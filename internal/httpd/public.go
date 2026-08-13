@@ -92,8 +92,8 @@ func (s *Server) authenticated(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	_, err = s.Q.GetSessionByToken(r.Context(), cookie.Value)
-	return err == nil
+	sess, err := s.Q.GetSessionByToken(r.Context(), cookie.Value)
+	return err == nil && !s.sessionExpired(r.Context(), sess)
 }
 
 // publicNotFound mirrors ApplicationController#render_not_found: the static
@@ -120,14 +120,10 @@ func normalizeSiteURL(raw string) string {
 	return u
 }
 
-// tzLocation resolves settings.time_zone, falling back to UTC like
-// templates.FormatTime.
+// tzLocation resolves settings.time_zone via the templates package's cached
+// loader, falling back to UTC like templates.FormatTime.
 func tzLocation(name string) *time.Location {
-	loc, err := time.LoadLocation(name)
-	if err != nil {
-		return time.UTC
-	}
-	return loc
+	return templates.Location(name)
 }
 
 // likeEscaper mirrors ActiveRecord::Base.sanitize_sql_like: each of \, % and
@@ -136,6 +132,21 @@ var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // likePattern mirrors "%#{sanitize_sql_like(query)}%".
 func likePattern(q string) string { return "%" + likeEscaper.Replace(q) + "%" }
+
+// publicSearchMaxRunes caps the public ?q= term. The term becomes a LIKE
+// pattern matched against the content_html of every published article, and
+// SQLite LIKE cost scales with pattern length, so an uncapped term is an
+// unauthenticated CPU DoS vector; 200 runes is far past any real search.
+const publicSearchMaxRunes = 200
+
+// firstRunes cuts s to at most n runes without splitting a multi-byte
+// character (unlike truncateRunes it adds no "...").
+func firstRunes(s string, n int) string {
+	if runes := []rune(s); len(runes) > n {
+		return string(runes[:n])
+	}
+	return s
+}
 
 // maxPageNumber caps page numbers so (page-1)*per_page cannot overflow,
 // mirroring will_paginate's BIGINT offset guard (InvalidPage -> 404).
@@ -193,7 +204,7 @@ func rubyToI(s string) int64 {
 		}
 		digits++
 		if n > (maxPageNumber-9)/10 {
-			n = maxPageNumber // saturate; the caller 404s on it
+			n = maxPageNumber + 1 // saturate past the cap; the caller 404s on it
 			continue
 		}
 		n = n*10 + int64(c-'0')
@@ -225,7 +236,7 @@ func rubyInteger(s string) (int64, bool) {
 			return 0, false
 		}
 		if n > (maxPageNumber-9)/10 {
-			n = maxPageNumber
+			n = maxPageNumber + 1 // saturate past the cap; the caller 404s on it
 			continue
 		}
 		n = n*10 + int64(c-'0')
@@ -472,7 +483,11 @@ func buildSourceReference(author, content, rawURL string) template.HTML {
 		b.WriteString(string(simpleFormat(content)))
 	}
 	b.WriteString(`<div class="source-reference__links" style="display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.85rem;">`)
-	b.WriteString(`<a href="` + html.EscapeString(rawURL) + `" target="_blank" rel="noopener noreferrer" style="color: #007bff; text-decoration: none;"><small>Original</small></a>`)
+	// source_url may come from attacker-controlled imports; only link absolute
+	// http(s) URLs with a host (same rule as safeArchiveURL).
+	if safeURL := safeArchiveURL(rawURL); safeURL != "" {
+		b.WriteString(`<a href="` + html.EscapeString(safeURL) + `" target="_blank" rel="noopener noreferrer" style="color: #007bff; text-decoration: none;"><small>Original</small></a>`)
+	}
 	b.WriteString(`</div></blockquote>`)
 	return template.HTML(b.String()) //nolint:gosec // parts escaped above
 }
@@ -569,5 +584,18 @@ func absoluteURL(siteURL, path string) string {
 	return siteURL + "/" + p
 }
 
-// slugParam reads the {slug} path parameter.
-func slugParam(r *http.Request) string { return chi.URLParam(r, "slug") }
+// slugParam reads the named slug path parameter. chi routes on URL.RawPath
+// when it is set (client encoding differs from Go's canonical escaping, e.g.
+// lowercase hex) and never decodes params in that case, so unescape the raw
+// value; when RawPath is empty chi already used the decoded URL.Path and a
+// second decode would corrupt values like a literal "%".
+func slugParam(r *http.Request, name string) string {
+	slug := chi.URLParam(r, name)
+	if r.URL.RawPath == "" {
+		return slug
+	}
+	if decoded, err := url.PathUnescape(slug); err == nil {
+		return decoded
+	}
+	return slug
+}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"rables/internal/db"
+	"rables/internal/db/query"
 	"rables/internal/jobs"
 )
 
@@ -334,6 +335,50 @@ func TestSendNewsletterNativeMissingArticle(t *testing.T) {
 	}
 }
 
+// cancelSender cancels the ctx inside Send and returns the resulting ctx
+// error, like a mailer aborted by worker shutdown mid-batch.
+type cancelSender struct {
+	cancel    context.CancelFunc
+	attempted []string
+}
+
+func (c *cancelSender) Send(ctx context.Context, msg Message) error {
+	c.attempted = append(c.attempted, msg.To)
+	c.cancel()
+	return ctx.Err()
+}
+
+// A ctx canceled mid-batch aborts the send loop: the error propagates so the
+// worker reschedules the job instead of failing the remaining recipients.
+func TestSendNewsletterNativeCanceled(t *testing.T) {
+	d := openSendDB(t)
+	seedSettings(t, d, "My Blog", "https://blog.example.com")
+	seedNewsletterSetting(t, d, 1, "native")
+	articleID := seedArticle(t, d, "Go News", "go-news", "<p>x</p>")
+	seedSubscriber(t, d, "a@example.com", true, false, nil)
+	seedSubscriber(t, d, "b@example.com", true, false, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := &cancelSender{cancel: cancel}
+	s := &sender{db: d, q: query.New(d), cfg: SendConfig{
+		RoutePrefix: "posts",
+		NewSender:   func(SMTPConfig) Sender { return cs },
+	}}
+	payload, err := json.Marshal(map[string]int64{"article_id": articleID})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := s.sendNewsletter(ctx, payload); !errors.Is(err, context.Canceled) {
+		t.Fatalf("sendNewsletter error = %v, want context.Canceled", err)
+	}
+	if len(cs.attempted) != 1 {
+		t.Errorf("attempted = %v, want exactly one recipient before the abort", cs.attempted)
+	}
+	if completed := activityDescriptions(t, d, "completed"); len(completed) != 0 {
+		t.Errorf("completed activity = %v, want none after an abort", completed)
+	}
+}
+
 type listmonkRequest struct {
 	method string
 	path   string
@@ -449,19 +494,34 @@ func TestSendNewsletterListmonkSkips(t *testing.T) {
 		listID     any
 		templateID any
 		seedRow    bool
+		disabled   bool   // newsletter_settings.enabled = 0
+		clearCol   string // listmonks column nulled after seeding
 	}{
 		{name: "article missing", articleID: 999, listID: int64(7), templateID: int64(9), seedRow: true},
 		{name: "listmonk row missing", seedRow: false},
 		{name: "list id missing", listID: nil, templateID: int64(9), seedRow: true},
 		{name: "template id missing", listID: int64(7), templateID: nil, seedRow: true},
+		{name: "newsletter disabled", disabled: true, listID: int64(7), templateID: int64(9), seedRow: true},
+		{name: "url cleared", listID: int64(7), templateID: int64(9), seedRow: true, clearCol: "url"},
+		{name: "username cleared", listID: int64(7), templateID: int64(9), seedRow: true, clearCol: "username"},
+		{name: "api key cleared", listID: int64(7), templateID: int64(9), seedRow: true, clearCol: "api_key"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := openSendDB(t)
-			seedNewsletterSetting(t, d, 1, "listmonk")
+			enabled := int64(1)
+			if tt.disabled {
+				enabled = 0
+			}
+			seedNewsletterSetting(t, d, enabled, "listmonk")
 			srv, requests := fakeListmonk(t, http.StatusOK, `{"data":{"id":42}}`)
 			if tt.seedRow {
 				seedListmonk(t, d, srv.URL, tt.listID, tt.templateID)
+			}
+			if tt.clearCol != "" {
+				if _, err := d.Exec(`UPDATE listmonks SET ` + tt.clearCol + ` = NULL WHERE id = 1`); err != nil {
+					t.Fatalf("clear listmonks.%s: %v", tt.clearCol, err)
+				}
 			}
 			articleID := tt.articleID
 			if articleID == 0 {
@@ -497,6 +557,78 @@ func TestSendNewsletterListmonkCreateFails(t *testing.T) {
 	failed := activityDescriptions(t, d, "failed")
 	if len(failed) != 1 || !strings.Contains(failed[0], `operation="campaign"`) || !strings.Contains(failed[0], "Create Campaign failed!") {
 		t.Errorf("failed activity = %v", failed)
+	}
+}
+
+// cancelTransport cancels the ctx when the abort-th request (1-based) is
+// made and fails it with the ctx error, like an in-flight API call aborted
+// by worker shutdown; earlier requests pass through to base.
+type cancelTransport struct {
+	base   http.RoundTripper
+	cancel context.CancelFunc
+	abort  int
+	calls  int
+}
+
+func (t *cancelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.calls++
+	if t.calls == t.abort {
+		t.cancel()
+		return nil, req.Context().Err()
+	}
+	return t.base.RoundTrip(req)
+}
+
+func sendListmonkAborted(t *testing.T, d *sql.DB, abort int, articleID int64) error {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	tr := &cancelTransport{base: http.DefaultTransport, cancel: cancel, abort: abort}
+	s := &sender{db: d, q: query.New(d), cfg: SendConfig{HTTPClient: &http.Client{Transport: tr}}}
+	payload, err := json.Marshal(map[string]int64{"article_id": articleID})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return s.sendNewsletter(ctx, payload)
+}
+
+// A ctx canceled during campaign creation aborts the job: the error
+// propagates so the worker reschedules it instead of logging a permanent
+// failure for a campaign that was never created.
+func TestSendNewsletterListmonkCreateCanceled(t *testing.T) {
+	d := openSendDB(t)
+	seedNewsletterSetting(t, d, 1, "listmonk")
+	srv, requests := fakeListmonk(t, http.StatusOK, `{"data":{"id":42}}`)
+	seedListmonk(t, d, srv.URL, int64(7), int64(9))
+	articleID := seedArticle(t, d, "Go News", "go-news", "<p>x</p>")
+
+	if err := sendListmonkAborted(t, d, 1, articleID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("sendNewsletter error = %v, want context.Canceled", err)
+	}
+	if len(*requests) != 0 {
+		t.Errorf("requests = %v, want none (aborted before the create landed)", *requests)
+	}
+	if failed := activityDescriptions(t, d, "failed"); len(failed) != 0 {
+		t.Errorf("failed activity = %v, want none on shutdown", failed)
+	}
+}
+
+// The same shutdown semantics for the status flip: the campaign exists but
+// is never set running, and the job is rescheduled rather than completed.
+func TestSendNewsletterListmonkStartCanceled(t *testing.T) {
+	d := openSendDB(t)
+	seedNewsletterSetting(t, d, 1, "listmonk")
+	srv, requests := fakeListmonk(t, http.StatusOK, `{"data":{"id":42}}`)
+	seedListmonk(t, d, srv.URL, int64(7), int64(9))
+	articleID := seedArticle(t, d, "Go News", "go-news", "<p>x</p>")
+
+	if err := sendListmonkAborted(t, d, 2, articleID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("sendNewsletter error = %v, want context.Canceled", err)
+	}
+	if len(*requests) != 1 {
+		t.Errorf("requests = %v, want only the create", *requests)
+	}
+	if failed := activityDescriptions(t, d, "failed"); len(failed) != 0 {
+		t.Errorf("failed activity = %v, want none on shutdown", failed)
 	}
 }
 
@@ -653,6 +785,63 @@ func TestCommentReplyNotificationIneligible(t *testing.T) {
 				t.Errorf("sent %d messages, want 0", len(cap.sent))
 			}
 		})
+	}
+}
+
+// The job rescues StandardError: an SMTP failure is logged as a failed
+// activity and swallowed, so the job ends done instead of being retried (a
+// retry could duplicate a notification the server already accepted).
+func TestCommentReplyNotificationSMTPFailure(t *testing.T) {
+	d := openSendDB(t)
+	seedSettings(t, d, "My Blog", "https://blog.example.com")
+	seedNewsletterSetting(t, d, 1, "native")
+	articleID := seedArticle(t, d, "Hello", "hello", "<p>x</p>")
+	parentID := seedComment(t, d, articleID, nil, "Alice", "alice@example.com", 1, nil)
+	replyID := seedComment(t, d, articleID, parentID, "Bob", "bob@example.com", 1, nil)
+
+	cap := &captureSender{fail: map[string]error{"alice@example.com": errors.New("smtp down")}}
+	status, _ := runOneJob(t, d, cap, jobs.KindCommentReplyNotification, map[string]int64{"comment_id": replyID})
+	if status != "done" {
+		t.Errorf("job status = %s, want done", status)
+	}
+	if len(cap.sent) != 0 {
+		t.Errorf("sent %d messages, want 0", len(cap.sent))
+	}
+	failed := activityDescriptions(t, d, "failed")
+	if len(failed) != 1 || !strings.Contains(failed[0], `email="alice@example.com"`) || !strings.Contains(failed[0], "smtp down") {
+		t.Errorf("failed activity = %v", failed)
+	}
+}
+
+// A ctx canceled during the SMTP send aborts the job: the error propagates
+// so the worker reschedules it instead of logging a permanent failure and
+// silently dropping the notification.
+func TestCommentReplyNotificationCanceled(t *testing.T) {
+	d := openSendDB(t)
+	seedSettings(t, d, "My Blog", "https://blog.example.com")
+	seedNewsletterSetting(t, d, 1, "native")
+	articleID := seedArticle(t, d, "Hello", "hello", "<p>x</p>")
+	parentID := seedComment(t, d, articleID, nil, "Alice", "alice@example.com", 1, nil)
+	replyID := seedComment(t, d, articleID, parentID, "Bob", "bob@example.com", 1, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := &cancelSender{cancel: cancel}
+	s := &sender{db: d, q: query.New(d), cfg: SendConfig{
+		RoutePrefix: "posts",
+		NewSender:   func(SMTPConfig) Sender { return cs },
+	}}
+	payload, err := json.Marshal(map[string]int64{"comment_id": replyID})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := s.sendReplyNotification(ctx, payload); !errors.Is(err, context.Canceled) {
+		t.Fatalf("sendReplyNotification error = %v, want context.Canceled", err)
+	}
+	if len(cs.attempted) != 1 {
+		t.Errorf("attempted = %v, want exactly one send before the abort", cs.attempted)
+	}
+	if failed := activityDescriptions(t, d, "failed"); len(failed) != 0 {
+		t.Errorf("failed activity = %v, want none on shutdown", failed)
 	}
 }
 

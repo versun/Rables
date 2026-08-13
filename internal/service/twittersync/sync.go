@@ -19,7 +19,9 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -33,6 +35,7 @@ import (
 	"rables/internal/db/query"
 	"rables/internal/service/activity"
 	"rables/internal/service/media"
+	"rables/internal/ssrf"
 )
 
 const (
@@ -45,9 +48,27 @@ const (
 	QuotedContentLimit = 250
 	// redirectLimit mirrors the follow_redirect limit of 5 hops.
 	redirectLimit = 5
+	// tcoResolveBudget caps how many distinct short links one tweet resolves
+	// via HEAD redirects; links beyond the budget keep their t.co text, so a
+	// link-stuffed (quoted) tweet cannot stall the whole sync.
+	tcoResolveBudget = 10
+	// redirectTimeout caps one redirect HEAD request — far tighter than the
+	// default 30s client timeout, since an unresponsive shortener must not
+	// stall the sync either.
+	redirectTimeout = 5 * time.Second
+	// maxMediaBytes caps one media download (100MB). A larger response is
+	// refused outright: truncating it silently would store a corrupt file
+	// that the slug dedup never retries.
+	maxMediaBytes = 100 << 20
 
 	defaultBaseURL = "https://api.twitter.com/2"
 )
+
+// errSyncConfigChanged marks a run aborted because the admin updated the sync
+// config mid-run and the run's stale write was discarded by the CAS guard.
+// It is logged, not recorded as a sync failure: the next run reads the new
+// config.
+var errSyncConfigChanged = errors.New("twitter sync: config changed during run")
 
 // Syncer archives tweets. The zero-injection fields exist for tests.
 type Syncer struct {
@@ -61,6 +82,9 @@ type Syncer struct {
 	httpClient *http.Client // nil → a default 30s-timeout client
 	now        func() time.Time
 	log        *slog.Logger
+	// lookupIP resolves redirect target hosts for the SSRF guard (tests stub
+	// it); nil uses the system resolver.
+	lookupIP func(ctx context.Context, host string) ([]netip.Addr, error)
 }
 
 // NewSyncer builds a Syncer rooted at dataDir (media is stored under
@@ -78,6 +102,12 @@ func (s *Syncer) SetHTTPClient(c *http.Client) { s.httpClient = c }
 
 // SetClock overrides the clock (tests).
 func (s *Syncer) SetClock(now func() time.Time) { s.now = now }
+
+// SetLookupIP overrides host resolution for the redirect SSRF guard (tests
+// stub it; the HTTP client still dials the original host).
+func (s *Syncer) SetLookupIP(f func(ctx context.Context, host string) ([]netip.Addr, error)) {
+	s.lookupIP = f
+}
 
 func (s *Syncer) base() string {
 	if s.baseURL != "" {
@@ -145,6 +175,10 @@ func (s *Syncer) perform(ctx context.Context) error {
 	userID := syncRow.UserID.String
 	if userID == "" {
 		userID, err = s.resolveUserID(ctx, client, username)
+		if errors.Is(err, errSyncConfigChanged) {
+			s.logger().Info("twitter sync: run aborted, config changed mid-run")
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -178,11 +212,26 @@ func (s *Syncer) perform(ctx context.Context) error {
 		latest = sql.NullString{String: max, Valid: true}
 	}
 	now := s.clock().Unix()
-	return s.q.SetTwitterSyncSuccess(ctx, query.SetTwitterSyncSuccessParams{
-		SinceID:      latest,
-		LastSyncedAt: sql.NullInt64{Int64: now, Valid: true},
-		UpdatedAt:    now,
+	n, err := s.q.SetTwitterSyncSuccess(ctx, query.SetTwitterSyncSuccessParams{
+		SinceID:           latest,
+		LastSyncedAt:      sql.NullInt64{Int64: now, Valid: true},
+		UpdatedAt:         now,
+		ExpectedSinceID:   syncRow.SinceID,
+		ExpectedUsername:  syncRow.Username,
+		ExpectedStartDate: syncRow.StartDate,
 	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// The admin changed the config mid-run and reset the cursor; writing
+		// this run's cursor back would undo the reset and skip the backfill
+		// it was meant to trigger. Drop the write instead: the archived
+		// tweets stay (slug dedup prevents re-archiving) and the next run
+		// syncs from the new config.
+		s.logger().Info("twitter sync: cursor write discarded, config changed mid-run")
+	}
+	return nil
 }
 
 // recordFailure mirrors record_failure: last_error via update_columns plus an
@@ -299,11 +348,20 @@ func (s *Syncer) resolveUserID(ctx context.Context, client *http.Client, usernam
 	if resp.Data == nil || resp.Data.ID == "" {
 		return "", nil
 	}
-	if err := s.q.SetTwitterSyncUserID(ctx, query.SetTwitterSyncUserIDParams{
-		UserID:    sql.NullString{String: resp.Data.ID, Valid: true},
-		UpdatedAt: s.clock().Unix(),
-	}); err != nil {
+	n, err := s.q.SetTwitterSyncUserID(ctx, query.SetTwitterSyncUserIDParams{
+		UserID:           sql.NullString{String: resp.Data.ID, Valid: true},
+		UpdatedAt:        s.clock().Unix(),
+		ExpectedUsername: sql.NullString{String: username, Valid: true},
+	})
+	if err != nil {
 		return "", err
+	}
+	if n == 0 {
+		// The admin changed the username while the lookup was in flight; the
+		// resolved id belongs to the old account. Leave the admin's clear in
+		// place and abort the run instead of syncing the old timeline under
+		// the new username.
+		return "", errSyncConfigChanged
 	}
 	return resp.Data.ID, nil
 }
@@ -566,35 +624,61 @@ func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tw
 	}
 
 	now := s.clock().Unix()
-	article, err := s.q.CreateArticle(ctx, query.CreateArticleParams{
-		Slug:                        sql.NullString{String: slug, Valid: true},
-		ContentHtml:                 sql.NullString{String: buildTweetContent(fullText, stored), Valid: true},
-		ContentType:                 "rich_text",
-		SourceAuthor:                sql.NullString{String: sourceAuthor, Valid: sourceAuthor != ""},
-		SourceUrl:                   sql.NullString{String: sourceURL, Valid: sourceURL != ""},
-		SourceContent:               sql.NullString{String: sourceContent, Valid: sourceContent != ""},
-		Status:                      1, // publish
-		Comment:                     1,
-		ScheduledCrosspostPlatforms: "[]",
-		CreatedAt:                   createdAt.Unix(),
-		UpdatedAt:                   now,
-	})
-	if err != nil {
-		return err
-	}
-	mediaSvc := media.New(s.db, s.dataDir)
-	for _, m := range stored {
-		if err := mediaSvc.Attach(ctx, m.fileID, "Article", article.ID, "embeds"); err != nil {
-			s.logger().Warn("twitter sync: attach media failed", "tweet_id", tweet.ID, "error", err)
+
+	// The Article, its media attachments and the social_media_posts row land
+	// in one transaction: a mid-way failure must not leave a committed
+	// article without its social post row (since_id advances past the tweet
+	// either way, so a partial write would never be repaired). The media
+	// stored above lives outside the transaction, so a failure reclaims it.
+	err = func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
 		}
-	}
-	if err := s.q.UpsertSocialMediaPost(ctx, query.UpsertSocialMediaPostParams{
-		ArticleID: article.ID,
-		Platform:  "twitter",
-		Url:       "https://x.com/" + syncRow.Username.String + "/status/" + tweet.ID,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}); err != nil {
+		defer tx.Rollback()
+		qtx := s.q.WithTx(tx)
+		article, err := qtx.CreateArticle(ctx, query.CreateArticleParams{
+			Slug:                        sql.NullString{String: slug, Valid: true},
+			ContentHtml:                 sql.NullString{String: buildTweetContent(fullText, stored), Valid: true},
+			ContentType:                 "rich_text",
+			SourceAuthor:                sql.NullString{String: sourceAuthor, Valid: sourceAuthor != ""},
+			SourceUrl:                   sql.NullString{String: sourceURL, Valid: sourceURL != ""},
+			SourceContent:               sql.NullString{String: sourceContent, Valid: sourceContent != ""},
+			Status:                      1, // publish
+			Comment:                     1,
+			ScheduledCrosspostPlatforms: "[]",
+			CreatedAt:                   createdAt.Unix(),
+			UpdatedAt:                   now,
+		})
+		if err != nil {
+			return err
+		}
+		for _, m := range stored {
+			if err := qtx.CreateAttachment(ctx, query.CreateAttachmentParams{
+				FileID:     m.fileID,
+				RecordType: "Article",
+				RecordID:   article.ID,
+				Name:       "embeds",
+				CreatedAt:  now,
+			}); err != nil {
+				// Roll back: committing here would leave the stored media
+				// without an attachment reference, orphaned forever.
+				return err
+			}
+		}
+		if err := qtx.UpsertSocialMediaPost(ctx, query.UpsertSocialMediaPostParams{
+			ArticleID: article.ID,
+			Platform:  "twitter",
+			Url:       "https://x.com/" + syncRow.Username.String + "/status/" + tweet.ID,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}()
+	if err != nil {
+		s.discardStoredMedia(ctx, stored)
 		return err
 	}
 	activity.Log(ctx, s.db, "info", "posted", "twitter_sync",
@@ -668,7 +752,9 @@ func (s *Syncer) quotedSourceReference(ctx context.Context, quotedID string, inc
 
 // resolveTcoLinks ports resolve_tco_links: url entities first, then a HEAD
 // redirect follow; links redundant with the embedded media or the quoted
-// tweet are removed instead.
+// tweet are removed instead. Redirect follows are memoized per text and
+// capped at tcoResolveBudget per call; links past the budget keep their
+// t.co text.
 func (s *Syncer) resolveTcoLinks(ctx context.Context, text string, tweet apiTweet, quotedID string) string {
 	var entities []apiURLEntity
 	entities = append(entities, tweet.Entities.URLs...)
@@ -692,13 +778,22 @@ func (s *Syncer) resolveTcoLinks(ctx context.Context, text string, tweet apiTwee
 		}
 	}
 
+	memo := map[string]string{}
+	budget := tcoResolveBudget
 	out := tcoShortRe.ReplaceAllStringFunc(text, func(short string) string {
 		if removable[short] {
 			return ""
 		}
 		resolved, ok := replacements[short]
 		if !ok {
-			resolved = s.followRedirect(ctx, short, redirectLimit)
+			if resolved, ok = memo[short]; !ok {
+				if budget == 0 {
+					return short
+				}
+				budget--
+				resolved = s.followRedirect(ctx, short, redirectLimit)
+				memo[short] = resolved
+			}
 		}
 		if resolved != "" && redundantLink(resolved, tweet.ID, quotedID) {
 			return ""
@@ -725,12 +820,22 @@ func redundantLink(rawURL, tweetID, quotedID string) bool {
 
 // followRedirect ports follow_redirect: HEAD requests, up to limit hops,
 // http/https only; "" on failure so the caller keeps the original text.
+// A target refused by the SSRF guard also yields "": the blocked URL must
+// not leak into the article content. The final target reached when the hop
+// budget runs out gets no HEAD, but the same screening still applies.
 func (s *Syncer) followRedirect(ctx context.Context, rawURL string, limit int) string {
-	location := s.redirectLocation(ctx, rawURL)
-	if location == "" {
+	if limit <= 0 {
+		if !ssrf.SafeRemoteURL(ctx, rawURL, s.lookupIP) {
+			s.logger().Warn("twitter sync: redirect target blocked", "url", rawURL)
+			return ""
+		}
 		return rawURL
 	}
-	if limit <= 1 {
+	location, blocked := s.redirectLocation(ctx, rawURL)
+	if blocked {
+		return ""
+	}
+	if location == "" {
 		return rawURL
 	}
 	next, err := url.Parse(location)
@@ -749,33 +854,45 @@ func (s *Syncer) followRedirect(ctx context.Context, rawURL string, limit int) s
 }
 
 // redirectLocation ports redirect_location: a HEAD request returning the
-// Location header of a 3xx response, "" otherwise.
-func (s *Syncer) redirectLocation(ctx context.Context, rawURL string) string {
+// Location header of a 3xx response, "" otherwise. The second return value
+// reports that the SSRF guard refused the target before any request was
+// made. Tweet text is attacker-influenced via quoted tweets, so targets are
+// screened with ssrf.SafeRemoteURL before the request goes out; note the
+// check and the dial resolve DNS independently, leaving a small rebinding
+// (TOCTOU) window between the two — the trade-off the project-wide SSRF
+// guard already accepts everywhere it is used.
+func (s *Syncer) redirectLocation(ctx context.Context, rawURL string) (string, bool) {
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return ""
+		return "", false
+	}
+	if !ssrf.SafeRemoteURL(ctx, rawURL, s.lookupIP) {
+		s.logger().Warn("twitter sync: redirect target blocked", "url", rawURL)
+		return "", true
 	}
 	client := *s.client()
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	if client.Timeout == 0 {
-		client.Timeout = 5 * time.Second
+	// Redirect resolution runs tighter than API calls and media downloads: a
+	// hung shortener must not stall the sync.
+	if client.Timeout == 0 || client.Timeout > redirectTimeout {
+		client.Timeout = redirectTimeout
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		s.logger().Warn("twitter sync: link resolution failed", "url", rawURL, "error", err)
-		return ""
+		return "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 == 3 {
-		return resp.Header.Get("Location")
+		return resp.Header.Get("Location"), false
 	}
-	return ""
+	return "", false
 }
 
 // storedMedia is one downloaded attachment ready for content embedding.
@@ -857,26 +974,64 @@ func (s *Syncer) downloadMedia(ctx context.Context, rawURL, contentType, tweetID
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 100<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMediaBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxMediaBytes {
+		return nil, fmt.Errorf("media exceeds the 100MB download limit")
 	}
 	var rnd [4]byte
 	if _, err := rand.Read(rnd[:]); err != nil {
 		return nil, err
 	}
-	ext := path.Ext(rawURL)
+	// The extension comes from the URL path only: video variant URLs carry a
+	// query string (?tag=N) that path.Ext on the raw URL would swallow into
+	// the stored filename.
+	var ext string
+	if u, err := url.Parse(rawURL); err == nil {
+		ext = path.Ext(u.Path)
+	}
 	filename := fmt.Sprintf("tweet-%s-%s%s", tweetID, hex.EncodeToString(rnd[:]), ext)
 	mediaSvc := media.New(s.db, s.dataDir)
-	key, err := mediaSvc.Store(ctx, bytes.NewReader(body), filename, contentType)
+	file, err := mediaSvc.Store(ctx, bytes.NewReader(body), filename, contentType)
 	if err != nil {
 		return nil, err
 	}
-	file, err := mediaSvc.FileByKey(ctx, key)
-	if err != nil {
-		return nil, err
+	return &storedMedia{key: file.Key, fileID: file.ID, filename: filename, contentType: contentType}, nil
+}
+
+// discardStoredMedia reclaims the files rows and disk blobs stored for a
+// tweet whose archive transaction failed. It must run after the transaction
+// has rolled back (its attachment rows would otherwise still reference the
+// files and block the deletes). Best effort: failures are logged, not fatal,
+// mirroring the twitter archive importer's discardNewMedia. The failure may
+// come with an already-canceled ctx, so the cleanup runs on a context that
+// cannot be canceled.
+func (s *Syncer) discardStoredMedia(ctx context.Context, stored []storedMedia) {
+	ctx = context.WithoutCancel(ctx)
+	mediaSvc := media.New(s.db, s.dataDir)
+	remove := func(id int64, key string) {
+		if err := s.q.DeleteFile(ctx, id); err != nil {
+			s.logger().Warn("twitter sync: delete orphan media row", "id", id, "error", err)
+			return
+		}
+		if err := os.Remove(mediaSvc.PathFor(key)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.logger().Warn("twitter sync: remove orphan media file", "key", key, "error", err)
+		}
 	}
-	return &storedMedia{key: key, fileID: file.ID, filename: filename, contentType: contentType}, nil
+	for _, m := range stored {
+		// Variants reference their original via files.variant_of; under
+		// foreign_keys enforcement they must be deleted first.
+		variants, err := s.q.ListFileVariants(ctx, sql.NullInt64{Int64: m.fileID, Valid: true})
+		if err != nil {
+			s.logger().Warn("twitter sync: list media variants", "id", m.fileID, "error", err)
+		}
+		for _, v := range variants {
+			remove(v.ID, v.Key)
+		}
+		remove(m.fileID, m.key)
+	}
 }
 
 // buildTweetContent ports build_tweet_content: one <p> per non-blank stripped

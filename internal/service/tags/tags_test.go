@@ -116,6 +116,9 @@ func TestCreateSlug(t *testing.T) {
 		{name: "Hello  World", wantSlug: "Hello World-1"}, // squish collides with the above
 		{name: "编程 语言", wantSlug: "编程 语言"},                // non-ASCII kept, not parameterized
 		{name: "  padded  ", wantSlug: "padded"},
+		{name: "a/b?c#d", wantSlug: "abcd"}, // URL-unsafe chars stripped so /tags/{slug} can match
+		{name: "??", wantSlug: "tag"},       // unsafe-only name would strip to "", unreachable
+		{name: ".", wantSlug: "tag-1"},      // the placeholder takes the usual unique suffix
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

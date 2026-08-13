@@ -1,6 +1,7 @@
 package subscribers
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -8,6 +9,16 @@ import (
 	"rables/internal/db"
 	"rables/internal/db/query"
 )
+
+func insertTag(t *testing.T, database *sql.DB, name string) int64 {
+	t.Helper()
+	res, err := database.Exec("INSERT INTO tags (name, slug, created_at, updated_at) VALUES (?, ?, 1, 1)", name, strings.ToLower(name))
+	if err != nil {
+		t.Fatalf("insert tag: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
 
 func TestValidEmail(t *testing.T) {
 	tests := []struct {
@@ -124,6 +135,28 @@ func TestCreateGeneratesTokens(t *testing.T) {
 	}
 }
 
+// TestCreateNormalizesEmail: the stored address is the normalized form, so
+// UNIQUE(email) rejects a case variant of an existing row instead of
+// forking it into a duplicate.
+func TestCreateNormalizesEmail(t *testing.T) {
+	database, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	sub, err := Create(t.Context(), query.New(database), "  Foo@Example.COM ", "", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sub.Email != "foo@example.com" {
+		t.Errorf("email = %q, want normalized foo@example.com", sub.Email)
+	}
+	if _, err := Create(t.Context(), query.New(database), "FOO@example.com", "", ""); err == nil {
+		t.Error("Create of a case variant: want a UNIQUE violation, got nil")
+	}
+}
+
 func TestReplaceTags(t *testing.T) {
 	database, err := db.Open(t.TempDir())
 	if err != nil {
@@ -150,17 +183,9 @@ func TestReplaceTags(t *testing.T) {
 		}
 		return ids
 	}
-	insertTag := func(name string) int64 {
-		res, err := database.Exec("INSERT INTO tags (name, slug, created_at, updated_at) VALUES (?, ?, 1, 1)", name, strings.ToLower(name))
-		if err != nil {
-			t.Fatalf("insert tag: %v", err)
-		}
-		id, _ := res.LastInsertId()
-		return id
-	}
-	t1, t2, t3 := insertTag("Go"), insertTag("Rails"), insertTag("SQLite")
+	t1, t2, t3 := insertTag(t, database, "Go"), insertTag(t, database, "Rails"), insertTag(t, database, "SQLite")
 
-	if err := ReplaceTags(t.Context(), q, sub.ID, []int64{t1, t2}); err != nil {
+	if err := ReplaceTags(t.Context(), database, sub.ID, []int64{t1, t2}); err != nil {
 		t.Fatalf("ReplaceTags: %v", err)
 	}
 	if got := tagIDs(); len(got) != 2 || got[0] != t1 || got[1] != t2 {
@@ -168,7 +193,7 @@ func TestReplaceTags(t *testing.T) {
 	}
 
 	// Reassignment replaces the whole set.
-	if err := ReplaceTags(t.Context(), q, sub.ID, []int64{t3}); err != nil {
+	if err := ReplaceTags(t.Context(), database, sub.ID, []int64{t3}); err != nil {
 		t.Fatalf("ReplaceTags: %v", err)
 	}
 	if got := tagIDs(); len(got) != 1 || got[0] != t3 {
@@ -176,11 +201,55 @@ func TestReplaceTags(t *testing.T) {
 	}
 
 	// Empty means subscribed to all content.
-	if err := ReplaceTags(t.Context(), q, sub.ID, nil); err != nil {
+	if err := ReplaceTags(t.Context(), database, sub.ID, nil); err != nil {
 		t.Fatalf("ReplaceTags: %v", err)
 	}
 	if got := tagIDs(); len(got) != 0 {
 		t.Fatalf("tags = %v, want empty", got)
+	}
+}
+
+// TestReplaceTagsAtomicOnError: a failing insert (dangling tag id violates
+// the FK) rolls the delete back too, leaving the previous tag set intact.
+func TestReplaceTagsAtomicOnError(t *testing.T) {
+	database, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	sub, err := Create(t.Context(), query.New(database), "a@example.com", "", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	tagID, otherID := insertTag(t, database, "Go"), insertTag(t, database, "Rails")
+	if err := ReplaceTags(t.Context(), database, sub.ID, []int64{tagID}); err != nil {
+		t.Fatalf("ReplaceTags: %v", err)
+	}
+
+	// The first insert would succeed, the dangling id fails: without a
+	// transaction the subscriber would be left with [otherID].
+	if err := ReplaceTags(t.Context(), database, sub.ID, []int64{otherID, 99999}); err == nil {
+		t.Fatal("ReplaceTags with a dangling tag id: want an FK error")
+	}
+	var got []int64
+	rows, err := database.Query("SELECT tag_id FROM subscriber_tags WHERE subscriber_id = ?", sub.ID)
+	if err != nil {
+		t.Fatalf("query tags: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan tag id: %v", err)
+		}
+		got = append(got, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate tags: %v", err)
+	}
+	if len(got) != 1 || got[0] != tagID {
+		t.Fatalf("tags = %v, want unchanged [%d] after the rolled-back call", got, tagID)
 	}
 }
 
@@ -201,7 +270,7 @@ func TestDestroyCascadesSubscriberTags(t *testing.T) {
 		t.Fatalf("insert tag: %v", err)
 	}
 	tagID, _ := res.LastInsertId()
-	if err := ReplaceTags(t.Context(), q, sub.ID, []int64{tagID}); err != nil {
+	if err := ReplaceTags(t.Context(), database, sub.ID, []int64{tagID}); err != nil {
 		t.Fatalf("ReplaceTags: %v", err)
 	}
 

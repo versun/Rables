@@ -1,9 +1,8 @@
--- PRAGMA journal_mode cannot run inside a transaction, so the whole file opts out.
--- +goose NO TRANSACTION
+-- journal_mode=WAL is set via the DSN in internal/db/db.go; PRAGMA journal_mode
+-- cannot run inside a transaction, and keeping this migration transactional
+-- makes a failed first run leave no half-created tables behind.
 
 -- +goose Up
-PRAGMA journal_mode = WAL;
-
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
   user_name TEXT NOT NULL UNIQUE,
@@ -252,7 +251,7 @@ CREATE TABLE static_files (
 
 CREATE TABLE job_runs (
   id INTEGER PRIMARY KEY,
-  kind TEXT NOT NULL,                            -- publish_article|publish_page|send_newsletter|crosspost|fetch_social_comments|export|import_zip|import_rss|twitter_archive_import|comment_reply_notification|newsletter_confirmation|password_reset
+  kind TEXT NOT NULL,                            -- publish_article|publish_page|send_newsletter|crosspost|fetch_social_comments|export|import_db|import_rails|import_rss|twitter_archive_import|comment_reply_notification|newsletter_confirmation|password_reset
   payload TEXT,                                  -- JSON
   run_at INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'queued',         -- queued|running|done|failed

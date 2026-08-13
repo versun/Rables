@@ -10,6 +10,36 @@ import (
 	"database/sql"
 )
 
+const countFileKeyContentReferences = `-- name: CountFileKeyContentReferences :one
+SELECT
+  (SELECT COUNT(*) FROM articles
+   WHERE content_html LIKE '%/files/' || ?1 || '%'
+      OR meta_image LIKE '%/files/' || ?1 || '%') +
+  (SELECT COUNT(*) FROM pages
+   WHERE content_html LIKE '%/files/' || ?1 || '%') +
+  (SELECT COUNT(*) FROM comments
+   WHERE content LIKE '%/files/' || ?1 || '%') +
+  (SELECT COUNT(*) FROM settings
+   WHERE head_code LIKE '%/files/' || ?1 || '%'
+      OR custom_css LIKE '%/files/' || ?1 || '%'
+      OR tool_code LIKE '%/files/' || ?1 || '%'
+      OR social_links LIKE '%/files/' || ?1 || '%') +
+  (SELECT COUNT(*) FROM redirects
+   WHERE replacement LIKE '%/files/' || ?1 || '%')
+`
+
+// Files can also be referenced by URL (/files/<key>) from stored content:
+// admin uploads and RSS-imported images are embedded in article/page bodies
+// and never get an attachment row. Keys are alphanumeric (media.ValidKey),
+// so the LIKE pattern needs no metacharacter escaping; a prefix collision
+// with a longer key only over-protects.
+func (q *Queries) CountFileKeyContentReferences(ctx context.Context, key sql.NullString) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countFileKeyContentReferences, key)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createAttachment = `-- name: CreateAttachment :exec
 INSERT OR IGNORE INTO attachments (file_id, record_type, record_id, name, created_at)
 VALUES (?, ?, ?, ?, ?)
@@ -74,6 +104,40 @@ func (q *Queries) CreateFile(ctx context.Context, arg CreateFileParams) (File, e
 	return i, err
 }
 
+const deleteAttachmentsForRecord = `-- name: DeleteAttachmentsForRecord :exec
+DELETE FROM attachments WHERE record_type = ? AND record_id = ?
+`
+
+type DeleteAttachmentsForRecordParams struct {
+	RecordType string
+	RecordID   int64
+}
+
+func (q *Queries) DeleteAttachmentsForRecord(ctx context.Context, arg DeleteAttachmentsForRecordParams) error {
+	_, err := q.db.ExecContext(ctx, deleteAttachmentsForRecord, arg.RecordType, arg.RecordID)
+	return err
+}
+
+const getFileByID = `-- name: GetFileByID :one
+SELECT id, "key", filename, content_type, byte_size, checksum, variant_of, created_at FROM files WHERE id = ?
+`
+
+func (q *Queries) GetFileByID(ctx context.Context, id int64) (File, error) {
+	row := q.db.QueryRowContext(ctx, getFileByID, id)
+	var i File
+	err := row.Scan(
+		&i.ID,
+		&i.Key,
+		&i.Filename,
+		&i.ContentType,
+		&i.ByteSize,
+		&i.Checksum,
+		&i.VariantOf,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getFileByKey = `-- name: GetFileByKey :one
 SELECT id, "key", filename, content_type, byte_size, checksum, variant_of, created_at FROM files WHERE key = ?
 `
@@ -92,6 +156,47 @@ func (q *Queries) GetFileByKey(ctx context.Context, key string) (File, error) {
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listAttachmentFilesForRecord = `-- name: ListAttachmentFilesForRecord :many
+SELECT f.id, f.key FROM attachments a
+JOIN files f ON f.id = a.file_id
+WHERE a.record_type = ? AND a.record_id = ?
+`
+
+type ListAttachmentFilesForRecordParams struct {
+	RecordType string
+	RecordID   int64
+}
+
+type ListAttachmentFilesForRecordRow struct {
+	ID  int64
+	Key string
+}
+
+// Media cleanup for record destroy (mirrors the ListTwitterArchiveTweetMediaFiles
+// pair in twitter_archive.sql): the files behind one record's attachments.
+func (q *Queries) ListAttachmentFilesForRecord(ctx context.Context, arg ListAttachmentFilesForRecordParams) ([]ListAttachmentFilesForRecordRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAttachmentFilesForRecord, arg.RecordType, arg.RecordID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAttachmentFilesForRecordRow
+	for rows.Next() {
+		var i ListAttachmentFilesForRecordRow
+		if err := rows.Scan(&i.ID, &i.Key); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAttachmentsForFile = `-- name: ListAttachmentsForFile :many
@@ -151,6 +256,49 @@ func (q *Queries) ListFileVariants(ctx context.Context, variantOf sql.NullInt64)
 			&i.VariantOf,
 			&i.CreatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrphanFileCandidates = `-- name: ListOrphanFileCandidates :many
+SELECT f.id, f.key FROM files f
+WHERE f.created_at < ?1
+  AND f.variant_of IS NULL
+  AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.file_id = f.id)
+  AND NOT EXISTS (SELECT 1 FROM static_files sf WHERE sf.file_id = f.id)
+  AND NOT EXISTS (SELECT 1 FROM files v JOIN attachments av ON av.file_id = v.id WHERE v.variant_of = f.id)
+  AND NOT EXISTS (SELECT 1 FROM files v JOIN static_files sv ON sv.file_id = v.id WHERE v.variant_of = f.id)
+ORDER BY f.id
+`
+
+type ListOrphanFileCandidatesRow struct {
+	ID  int64
+	Key string
+}
+
+// Startup orphan sweep (jobs.ReapOrphanFiles): family roots (variants are
+// reachable only through their original, so they share the original's fate)
+// created before the cutoff that no attachment or static_files entry
+// references, neither directly nor through a family variant.
+func (q *Queries) ListOrphanFileCandidates(ctx context.Context, cutoff int64) ([]ListOrphanFileCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listOrphanFileCandidates, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOrphanFileCandidatesRow
+	for rows.Next() {
+		var i ListOrphanFileCandidatesRow
+		if err := rows.Scan(&i.ID, &i.Key); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

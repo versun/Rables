@@ -17,10 +17,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,29 +33,29 @@ import (
 	"rables/internal/jobs"
 	"rables/internal/service/activity"
 	"rables/internal/service/media"
+	"rables/internal/ssrf"
 )
 
 // MaxFeedBodyBytes caps RSS response bodies (plan decision record: 20MB).
 const MaxFeedBodyBytes = 20 << 20
 
-// blockedIPPrefixes mirrors ImportRss::BLOCKED_IP_RANGES (private, loopback,
-// link-local and reserved ranges).
-var blockedIPPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("10.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("127.0.0.0/8"),
-	netip.MustParsePrefix("169.254.0.0/16"),
-	netip.MustParsePrefix("172.16.0.0/12"),
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("192.168.0.0/16"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("224.0.0.0/4"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("::1/128"),
-	netip.MustParsePrefix("fc00::/7"),
-	netip.MustParsePrefix("fe80::/10"),
-}
+// MaxImportImages caps how many distinct images one importer downloads; img
+// tags past the cap keep their original src, like failed downloads.
+const MaxImportImages = 200
+
+// MaxImportItems caps how many feed entries one import processes. The 20MB
+// body cap only bounds bytes: a feed of minimal entries (~200 bytes each)
+// could otherwise insert ~100k published articles in one run. Entries past
+// the cap count as failed so the overflow shows up in the result.
+const MaxImportItems = 5000
+
+// MaxItemContentBytes caps a single feed entry's content for the image
+// rewrite pass: html.ParseFragment bounds nesting depth but not the total
+// node count, so a huge item would explode into millions of nodes (same
+// rationale as domain's maxHTMLParseBytes). Over the cap the walk is
+// skipped: imgs keep their original src, and the content is still sanitized
+// downstream in importEntry.
+const MaxItemContentBytes = 5 << 20
 
 // ImportRSSPayload is the job_runs payload for kind "import_rss".
 type ImportRSSPayload struct {
@@ -77,6 +77,8 @@ type RSSImporter struct {
 	Now func() time.Time
 
 	resolved map[string][]netip.Addr // per-host memo, like resolved_addresses_for
+	images   map[string]string      // image src → local /files/ URL memo; "" marks a failed download
+	seenSrcs map[string]struct{}    // distinct img srcs that reached the SSRF check, capped at MaxImportImages
 }
 
 // RSSImportResult counts imported and failed entries.
@@ -87,7 +89,7 @@ type RSSImportResult struct {
 
 // Import fetches and imports the feed, mirroring ImportRss#import_data:
 // entries without a link are skipped, per-entry failures are counted and do
-// not abort the run.
+// not abort the run, and at most MaxImportItems entries are processed.
 func (r *RSSImporter) Import(ctx context.Context, feedURL string, importImages bool) (*RSSImportResult, error) {
 	if !r.safeRemoteURL(ctx, feedURL) {
 		return nil, fmt.Errorf("import rss: unsafe feed URL: %s", feedURL)
@@ -102,7 +104,13 @@ func (r *RSSImporter) Import(ctx context.Context, feedURL string, importImages b
 	}
 
 	result := &RSSImportResult{}
-	for _, item := range feed.Items {
+	items := feed.Items
+	if len(items) > MaxImportItems {
+		slog.Default().Warn("import rss: item count over the cap, extra entries skipped", "count", len(items), "cap", MaxImportItems)
+		result.Failed += len(items) - MaxImportItems
+		items = items[:MaxImportItems]
+	}
+	for _, item := range items {
 		if item.Link == "" {
 			continue
 		}
@@ -137,6 +145,10 @@ func (r *RSSImporter) importEntry(ctx context.Context, item *gofeed.Item, import
 	if importImages && content != "" {
 		content = r.rewriteImages(ctx, content, title)
 	}
+	// Feed content is untrusted: content_html is served verbatim
+	// (template.HTML) on the public pages, so it goes through the same
+	// sanitize/lazy-load write path as articles saved in the admin.
+	content = domain.AddLazyLoading(domain.SanitizeHTML(content))
 
 	q := query.New(r.DB)
 	exists := func(candidate string) bool {
@@ -144,7 +156,12 @@ func (r *RSSImporter) importEntry(ctx context.Context, item *gofeed.Item, import
 		return err == nil
 	}
 	slug := domain.GenerateSlug(lastURLSegment(decodedLink), title, now, exists)
-	if domain.IsReservedSlug(slug) {
+	// A last segment of only dots ("..", "...") strips to a blank slug,
+	// which would insert an article no URL can reach.
+	if domain.IsBlank(slug) {
+		return fmt.Errorf("link %q yields a blank slug", decodedLink)
+	}
+	if domain.IsReservedSlug(slug) || slices.Contains(domain.AdminArticleBatchSlugs, slug) {
 		return fmt.Errorf("slug %q is reserved", slug)
 	}
 	if exists(slug) {
@@ -188,39 +205,7 @@ func lastURLSegment(s string) string {
 // host resolves to at least one address and none blocked pass. DNS failures
 // are unsafe.
 func (r *RSSImporter) safeRemoteURL(ctx context.Context, rawurl string) bool {
-	u, err := url.Parse(rawurl)
-	if err != nil {
-		return false
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return false
-	}
-	host := u.Hostname()
-	if host == "" {
-		return false
-	}
-	addrs, err := r.resolveHost(ctx, host)
-	if err != nil || len(addrs) == 0 {
-		return false
-	}
-	for _, addr := range addrs {
-		if blockedIP(addr) {
-			return false
-		}
-	}
-	return true
-}
-
-// blockedIP reports whether addr falls into any blocked range (IPv4-mapped
-// IPv6 addresses are unmapped first, matching Resolv's plain-IPv4 strings).
-func blockedIP(addr netip.Addr) bool {
-	addr = addr.Unmap()
-	for _, prefix := range blockedIPPrefixes {
-		if prefix.Contains(addr) {
-			return true
-		}
-	}
-	return false
+	return ssrf.SafeRemoteURL(ctx, rawurl, r.resolveHost)
 }
 
 // resolveHost memoizes DNS answers per host (resolved_addresses_for);
@@ -234,31 +219,13 @@ func (r *RSSImporter) resolveHost(ctx context.Context, host string) ([]netip.Add
 	}
 	lookup := r.LookupIP
 	if lookup == nil {
-		lookup = defaultLookupIP
+		lookup = ssrf.LookupIP
 	}
 	addrs, err := lookup(ctx, host)
 	if err != nil {
 		return nil, err
 	}
 	r.resolved[host] = addrs
-	return addrs, nil
-}
-
-// defaultLookupIP resolves host via the system resolver; IP literals skip DNS.
-func defaultLookupIP(ctx context.Context, host string) ([]netip.Addr, error) {
-	if addr, err := netip.ParseAddr(host); err == nil {
-		return []netip.Addr{addr}, nil
-	}
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return nil, err
-	}
-	addrs := make([]netip.Addr, 0, len(ips))
-	for _, ip := range ips {
-		if addr, ok := netip.AddrFromSlice(ip); ok {
-			addrs = append(addrs, addr)
-		}
-	}
 	return addrs, nil
 }
 
@@ -307,8 +274,15 @@ func (r *RSSImporter) fetch(ctx context.Context, rawurl string) ([]byte, error) 
 // rewriteImages mirrors ImportRss#import_images: each <img> with a safe
 // remote src is downloaded, stored via the media service, and its src is
 // rewritten to the local /files/<key> URL. Unsafe or failing images keep
-// their original src (Rails logs and skips them).
+// their original src (Rails logs and skips them). Repeated srcs download
+// once, and distinct downloads are capped at MaxImportImages per importer;
+// the same cap bounds distinct srcs reaching the SSRF check, so the DNS
+// lookups it performs are capped too. Content over MaxItemContentBytes is
+// returned unchanged (no tree walk, no downloads).
 func (r *RSSImporter) rewriteImages(ctx context.Context, content, title string) string {
+	if len(content) > MaxItemContentBytes {
+		return content
+	}
 	nodes, err := html.ParseFragment(strings.NewReader(content), &html.Node{Type: html.ElementNode, Data: "body", DataAtom: atom.Body})
 	if err != nil {
 		return content
@@ -342,38 +316,71 @@ func (r *RSSImporter) rewriteImage(ctx context.Context, img *html.Node, title st
 			break
 		}
 	}
-	if src == "" || !r.safeRemoteURL(ctx, src) {
+	if src == "" {
 		return
 	}
-	body, contentType, err := r.fetchImage(ctx, src)
-	if err != nil {
-		slog.Default().Warn("import rss: image download failed", "url", src, "error", err)
-		return
+	// Cap distinct seen srcs before safeRemoteURL: the check costs one DNS
+	// query per new host, and the images memo below only bounds downloads,
+	// so without this a feed of wildcard-subdomain imgs could force
+	// unbounded lookups past MaxImportImages.
+	if r.seenSrcs == nil {
+		r.seenSrcs = map[string]struct{}{}
 	}
-	// "<title-slug>-<8 hex>.<ext>", ext from the response content type.
-	ext := "jpg"
-	if ct := strings.SplitN(contentType, ";", 2)[0]; ct != "" {
-		if i := strings.LastIndex(ct, "/"); i >= 0 && i+1 < len(ct) {
-			ext = ct[i+1:]
+	if _, seen := r.seenSrcs[src]; !seen {
+		if len(r.seenSrcs) >= MaxImportImages {
+			return
 		}
+		r.seenSrcs[src] = struct{}{}
 	}
-	var rnd [4]byte
-	if _, err := rand.Read(rnd[:]); err != nil {
+	if !r.safeRemoteURL(ctx, src) {
 		return
 	}
-	filename := fmt.Sprintf("%s-%s.%s", domain.Parameterize(title), hex.EncodeToString(rnd[:]), ext)
-	store := r.Media
-	if store == nil {
-		store = media.New(r.DB, r.DataDir)
+	// A repeated src reuses the stored file; failed downloads and srcs past
+	// MaxImportImages keep their original src (Rails logs and skips them).
+	if r.images == nil {
+		r.images = map[string]string{}
 	}
-	key, err := store.Store(ctx, bytes.NewReader(body), filename, contentType)
-	if err != nil {
-		slog.Default().Warn("import rss: image store failed", "url", src, "error", err)
+	local, seen := r.images[src]
+	if !seen {
+		if len(r.images) >= MaxImportImages {
+			return
+		}
+		r.images[src] = ""
+		body, contentType, err := r.fetchImage(ctx, src)
+		if err != nil {
+			slog.Default().Warn("import rss: image download failed", "url", src, "error", err)
+			return
+		}
+		// "<title-slug>-<8 hex>.<ext>", ext from the response content type.
+		ext := "jpg"
+		if ct := strings.SplitN(contentType, ";", 2)[0]; ct != "" {
+			if i := strings.LastIndex(ct, "/"); i >= 0 && i+1 < len(ct) {
+				ext = ct[i+1:]
+			}
+		}
+		var rnd [4]byte
+		if _, err := rand.Read(rnd[:]); err != nil {
+			return
+		}
+		filename := fmt.Sprintf("%s-%s.%s", domain.Parameterize(title), hex.EncodeToString(rnd[:]), ext)
+		store := r.Media
+		if store == nil {
+			store = media.New(r.DB, r.DataDir)
+		}
+		file, err := store.Store(ctx, bytes.NewReader(body), filename, contentType)
+		if err != nil {
+			slog.Default().Warn("import rss: image store failed", "url", src, "error", err)
+			return
+		}
+		local = "/files/" + file.Key
+		r.images[src] = local
+	}
+	if local == "" {
 		return
 	}
 	for i, attr := range img.Attr {
 		if attr.Key == "src" {
-			img.Attr[i].Val = "/files/" + key
+			img.Attr[i].Val = local
 			break
 		}
 	}

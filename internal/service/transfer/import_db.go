@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -35,6 +36,10 @@ type ImportDBPayload struct {
 	// Path is the uploaded bundle or database file, usually
 	// <DataDir>/imports/import_*.
 	Path string `json:"path"`
+	// KeepOnFailure leaves Path on disk when the import fails, so a
+	// server-side file (copied into imports/ by the admin) can be retried.
+	// Web uploads are always removed, success or failure.
+	KeepOnFailure bool `json:"keep_on_failure,omitempty"`
 }
 
 // DBImporter imports a BundleExporter zip or a bare sqlite database.
@@ -62,13 +67,19 @@ var dbImportTables = []string{
 	"twitter_archive_likes", "twitter_archive_imports",
 }
 
-// Import runs the import and returns the tallies. Any error rolls the
-// database transaction back, leaving the live database untouched.
+// Import runs the import and returns the tallies. A failure before or during
+// the row copy rolls the database transaction back, leaving the live database
+// untouched. A blob-restore failure happens after the rows committed and is
+// returned as *BlobRestoreError so the caller can keep the source file for a
+// healing retry.
 func (z *DBImporter) Import(ctx context.Context, path string) (*DBImportResult, error) {
 	dbPath := path
 	var stage string
-	if strings.HasSuffix(strings.ToLower(path), ".zip") {
-		var err error
+	isZip, err := isZipBundle(path)
+	if err != nil {
+		return nil, err
+	}
+	if isZip {
 		stage, err = importStagingDir(z.DataDir)
 		if err != nil {
 			return nil, err
@@ -84,16 +95,49 @@ func (z *DBImporter) Import(ctx context.Context, path string) (*DBImportResult, 
 	}
 
 	res := &DBImportResult{Rows: map[string]int64{}}
-	if stage != "" {
-		if err := z.restoreBlobs(filepath.Join(stage, "files"), res); err != nil {
-			return nil, err
-		}
-	}
 	if err := z.copyTables(ctx, dbPath, res); err != nil {
 		return nil, err
 	}
+	// Blobs restore after the row copy has committed: they live on disk
+	// outside the transaction, so a bundle rejected by the schema check (or
+	// a failed copy) must not leave orphan blobs no files row points at.
+	if stage != "" {
+		if err := z.restoreBlobs(filepath.Join(stage, "files"), res); err != nil {
+			return nil, &BlobRestoreError{Err: err}
+		}
+	}
 	return res, nil
 }
+
+// isZipBundle sniffs the file magic instead of trusting the name: the admin
+// server-file import renames the file to <name>.queued before enqueueing, so
+// a .zip suffix check would route a queued ZIP into ATTACH as a bare SQLite
+// file and fail with 'file is not a database'. Anything that is not a ZIP
+// takes the bare-database path and lets ATTACH report a bad file.
+func isZipBundle(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, fmt.Errorf("import db: open source: %w", err)
+	}
+	defer f.Close()
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("import db: read source: %w", err)
+	}
+	return magic == [4]byte{'P', 'K', 0x03, 0x04}, nil
+}
+
+// BlobRestoreError wraps a blob-restore failure: the row copy had already
+// committed when it happened, so the database rows are in while some blobs
+// may be missing. Retrying the same bundle heals it (the row upserts are
+// idempotent and blobs already on disk are kept), so the caller must keep
+// the source file even when it would normally remove it after a failure.
+type BlobRestoreError struct {
+	Err error
+}
+
+func (e *BlobRestoreError) Error() string { return e.Err.Error() }
+func (e *BlobRestoreError) Unwrap() error { return e.Err }
 
 // findBundleDB locates the database inside an extracted bundle: rables.db at
 // the root wins, otherwise the first *.db/*.sqlite/*.sqlite3 file.
@@ -139,8 +183,9 @@ func (z *DBImporter) restoreBlobs(tree string, res *DBImportResult) error {
 			return err
 		}
 		parts := strings.Split(filepath.ToSlash(rel), "/")
-		if len(parts) != 3 || len(parts[0]) != 2 || len(parts[1]) != 2 || !media.ValidKey(parts[2]) {
-			return nil // not a blob path (e.g. .DS_Store): skip
+		if len(parts) != 3 || len(parts[0]) != 2 || len(parts[1]) != 2 || !media.ValidKey(parts[2]) ||
+			parts[0] != parts[2][0:2] || parts[1] != parts[2][2:4] {
+			return nil // not a blob path (e.g. .DS_Store) or dirs don't match the key: skip
 		}
 		dest := filepath.Join(z.DataDir, "files", parts[0], parts[1], parts[2])
 		if _, err := os.Stat(dest); err == nil {
@@ -192,6 +237,11 @@ func (z *DBImporter) copyTables(ctx context.Context, srcPath string, res *DBImpo
 			return fmt.Errorf("import db: %s: %w", table, err)
 		}
 		res.Rows[table] = n
+		if table == "twitter_archive_imports" && n > 0 {
+			if err := normalizeTwitterArchiveImports(ctx, tx); err != nil {
+				return fmt.Errorf("import db: %s: %w", table, err)
+			}
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("import db: commit: %w", err)
@@ -201,37 +251,69 @@ func (z *DBImporter) copyTables(ctx context.Context, srcPath string, res *DBImpo
 
 // checkSourceSchema verifies the attached source looks like a Go rables
 // database and not a Rails one (which must go through the Rails import).
+// Every table the import copies must be a real table: a VIEW passes PRAGMA
+// table_info too, and a hostile bundle could define one reading excluded
+// runtime tables (main.sessions tokens, users.password_digest) into public
+// content, so a source object that exists but is not a table aborts the
+// import (absent tables are skipped, as before).
 func checkSourceSchema(ctx context.Context, conn *sql.Conn) error {
-	tables := map[string]bool{}
-	rows, err := conn.QueryContext(ctx, "SELECT name FROM src.sqlite_master WHERE type = 'table'")
+	objects := map[string]string{}
+	rows, err := conn.QueryContext(ctx, "SELECT name, type FROM src.sqlite_master")
 	if err != nil {
 		return fmt.Errorf("import db: inspect source schema: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
 			return err
 		}
-		tables[name] = true
+		objects[name] = typ
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if tables["action_text_rich_texts"] || tables["active_storage_blobs"] {
+	if objects["action_text_rich_texts"] == "table" || objects["active_storage_blobs"] == "table" {
 		return errors.New("import db: the uploaded database is a Rails rables database; use the Rails import instead")
 	}
 	var missing []string
 	for _, req := range []string{"articles", "pages", "settings", "files"} {
-		if !tables[req] {
+		if objects[req] != "table" {
 			missing = append(missing, req)
 		}
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("import db: source database is missing tables (%s); not a Rables database", strings.Join(missing, ", "))
 	}
+	for _, table := range dbImportTables {
+		if typ, ok := objects[table]; ok && typ != "table" {
+			return fmt.Errorf("import db: source %s is a %s, not a table; refusing to import", table, typ)
+		}
+	}
+	// Source column names are interpolated into the upsert statements (quoted
+	// via quoteIdent, but defense in depth): a name outside the plain
+	// identifier pattern means the source was crafted, not exported.
+	for _, table := range dbImportTables {
+		if objects[table] != "table" {
+			continue
+		}
+		cols, err := tableColumns(ctx, conn, "src", table)
+		if err != nil {
+			return fmt.Errorf("import db: inspect source %s: %w", table, err)
+		}
+		for _, col := range cols {
+			if !validColumnName.MatchString(col) {
+				return fmt.Errorf("import db: source %s has invalid column name %q; refusing to import", table, col)
+			}
+		}
+	}
 	return nil
 }
+
+// validColumnName matches the plain identifiers every real schema carries
+// (Rails and Go column names are all alphanumeric/underscore); anything else
+// in a source database means a crafted bundle.
+var validColumnName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 // upsertTable copies one table from src into main, overwriting rows whose id
 // already exists. Columns are the intersection of both schemas (source column
@@ -265,17 +347,36 @@ func upsertTable(ctx context.Context, tx *sql.Tx, table string) (int64, error) {
 	}
 
 	quoted := make([]string, len(cols))
+	selected := make([]string, len(cols))
+	hasStatus := false
 	for i, c := range cols {
-		quoted[i] = `"` + c + `"`
+		quoted[i] = quoteIdent(c)
+		selected[i] = quoted[i]
+		if c == "status" {
+			hasStatus = true
+		}
+	}
+	// A backup taken while an archive import was queued/running carries that
+	// row with active_slot=1; upserted as-is it would collide with the live
+	// active row in idx_tai_active_slot before normalizeTwitterArchiveImports
+	// gets to run, rolling the whole import back. Terminal rows always have a
+	// NULL slot (Complete/FailTwitterArchiveImport release it), so only active
+	// rows are neutralized here; the normalization then fails them.
+	if table == "twitter_archive_imports" && hasStatus {
+		for i, c := range cols {
+			if c == "active_slot" {
+				selected[i] = `CASE WHEN "status" IN ('queued', 'running') THEN NULL ELSE "active_slot" END`
+			}
+		}
 	}
 	stmt := fmt.Sprintf(`INSERT INTO main.%s (%s) SELECT %s FROM src.%s WHERE true`,
-		quoteIdent(table), strings.Join(quoted, ", "), strings.Join(quoted, ", "), quoteIdent(table))
+		quoteIdent(table), strings.Join(quoted, ", "), strings.Join(selected, ", "), quoteIdent(table))
 	var updates []string
 	for _, c := range cols {
 		if c == "id" {
 			continue
 		}
-		updates = append(updates, fmt.Sprintf(`"%s" = excluded."%s"`, c, c))
+		updates = append(updates, fmt.Sprintf(`%s = excluded.%s`, quoteIdent(c), quoteIdent(c)))
 	}
 	if len(updates) > 0 {
 		stmt += ` ON CONFLICT(id) DO UPDATE SET ` + strings.Join(updates, ", ")
@@ -293,10 +394,40 @@ func upsertTable(ctx context.Context, tx *sql.Tx, table string) (int64, error) {
 	return n, nil
 }
 
+// normalizeTwitterArchiveImports strips the runtime status from imported
+// twitter_archive_imports rows. A backup taken while an archive import was
+// queued/running carries that row; imported as-is it would block new archive
+// uploads (HasActiveTwitterArchiveImport) until startup recovery fails it.
+// The imported active rows are marked failed instead, while the rest of the
+// row is kept for the history list. active_slot was already neutralized on
+// the upsert's SELECT side (upsertTable), and source_path is kept on
+// purpose: on a same-server restore the source zip is still on disk and the
+// still-queued job (job_runs is never imported, so the live one survives)
+// self-heals by re-running it, while a row restored elsewhere points at a
+// missing file and the import handler treats it as terminal
+// (sourceFilePresent). Rows absent from the source are left alone, so an
+// archive import queued in this database survives a bundle restore.
+func normalizeTwitterArchiveImports(ctx context.Context, tx *sql.Tx) error {
+	now := time.Now().Unix()
+	_, err := tx.ExecContext(ctx, `UPDATE main.twitter_archive_imports
+		SET status = 'failed', status_message = 'Import failed',
+		    error_message = 'The server was restored from a backup taken while this import was still active',
+		    finished_at = ?, updated_at = ?
+		WHERE status IN ('queued', 'running')
+		  AND id IN (SELECT id FROM src.twitter_archive_imports)`, now, now)
+	return err
+}
+
+// queryer is satisfied by *sql.Conn (checkSourceSchema) and *sql.Tx
+// (upsertTable).
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 // tableColumns returns the column names of schema.table, or nil when the
 // table does not exist. Names come from the fixed dbImportTables whitelist.
-func tableColumns(ctx context.Context, tx *sql.Tx, schema, table string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, fmt.Sprintf("PRAGMA %s.table_info(%s)", schema, quoteIdent(table)))
+func tableColumns(ctx context.Context, q queryer, schema, table string) ([]string, error) {
+	rows, err := q.QueryContext(ctx, fmt.Sprintf("PRAGMA %s.table_info(%s)", schema, quoteIdent(table)))
 	if err != nil {
 		return nil, err
 	}
@@ -323,14 +454,38 @@ func quoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
-// copyFile streams src to dst.
+// copyFile streams src to dst atomically (see writeFileAtomic).
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	return writeFileFrom(dst, in)
+	return writeFileAtomic(dst, in)
+}
+
+// writeFileAtomic lands the content in a temporary sibling of target first
+// and renames it into place (same directory, so the rename is atomic): the
+// blob restores treat an existing destination as "kept" and never re-copy,
+// and serveFile caches blob responses for a year, so target must never exist
+// with partial content — neither mid-copy (concurrent readers) nor after a
+// crash between create and close. A crash can still orphan the .part-*
+// sibling, which is harmless litter no key points at; a failed copy or
+// rename removes it.
+func writeFileAtomic(target string, rc io.Reader) error {
+	var rnd [4]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		return err
+	}
+	tmp := target + ".part-" + hex.EncodeToString(rnd[:])
+	if err := writeFileFrom(tmp, rc); err != nil {
+		return err // writeFileFrom already removed the partial temp file
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // importStagingDir creates <dataDir>/imports/extract_<ts>_<pid>_<rand>.
@@ -347,14 +502,49 @@ func importStagingDir(dataDir string) (string, error) {
 	return dir, nil
 }
 
+// MaxImportExtractBytes caps the total declared uncompressed size of an
+// import ZIP (10GB). Upload limits only cover the compressed size; without
+// this cap a zip bomb could fill the disk during extraction.
+const MaxImportExtractBytes = 10 << 30
+
+// MaxImportExtractEntries caps the number of file entries in an import ZIP:
+// millions of tiny entries stay under the byte limit but would exhaust
+// inodes during extraction.
+const MaxImportExtractEntries = 100000
+
 // extractImportZip unpacks every regular file entry into stage, rejecting
 // entries whose path would escape it. Any unsafe entry aborts the import.
+// The declared uncompressed sizes are summed up front and the archive is
+// rejected once the total passes MaxImportExtractBytes, so a bomb is refused
+// before anything is written (checking mid-extraction would come too late:
+// Go's zip reader already fails a lying entry with unexpected EOF). The entry
+// count is likewise capped at MaxImportExtractEntries up front, so a flood of
+// tiny entries cannot exhaust inodes.
 func extractImportZip(zipPath, stage string) error {
 	zr, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("import: open zip: %w", err)
 	}
 	defer zr.Close()
+
+	var declared uint64
+	var entries int
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		entries++
+		if entries > MaxImportExtractEntries {
+			return fmt.Errorf("import: ZIP has more than %d file entries", MaxImportExtractEntries)
+		}
+		// Compare before adding: the invariant declared <= MaxImportExtractBytes
+		// keeps the subtraction from underflowing and the running total can
+		// never wrap around on a forged zip64 declared size.
+		if f.UncompressedSize64 > MaxImportExtractBytes-declared {
+			return fmt.Errorf("import: ZIP entry %q pushes the declared uncompressed total over the %d byte limit", f.Name, MaxImportExtractBytes)
+		}
+		declared += f.UncompressedSize64
+	}
 
 	stageClean := filepath.Clean(stage)
 	for _, f := range zr.File {
@@ -394,15 +584,25 @@ func writeFileFrom(target string, rc io.Reader) error {
 	if closeErr := out.Close(); copyErr == nil {
 		copyErr = closeErr
 	}
+	if copyErr != nil {
+		// os.Create already truncated/created target, so a failure midway
+		// (e.g. disk full) leaves a partial file behind. Blob restore treats
+		// an existing destination as "kept" and never re-copies, so drop the
+		// fragment to let a retry copy the blob again. Harmless for zip
+		// extraction too: a failed extract removes the whole staging dir.
+		os.Remove(target)
+	}
 	return copyErr
 }
 
 // safeZipEntryName cleans a zip entry name and rejects anything that could
-// escape the staging directory: absolute paths, drive letters, NUL bytes and
-// ".." segments (path traversal entries are refused, not sanitized).
+// escape the staging directory: absolute paths, drive letters, NUL bytes,
+// backslashes (a separator on Windows, where the "/"-based ".." check would
+// miss "..\.." traversal) and ".." segments (path traversal entries are
+// refused, not sanitized).
 func safeZipEntryName(name string) (string, error) {
 	unsafe := fmt.Errorf("import: unsafe path in ZIP entry: %s", name)
-	if name == "" || strings.ContainsRune(name, 0) || strings.HasPrefix(name, "/") || filepath.IsAbs(name) {
+	if name == "" || strings.ContainsRune(name, 0) || strings.ContainsRune(name, '\\') || strings.HasPrefix(name, "/") || filepath.IsAbs(name) {
 		return "", unsafe
 	}
 	if len(name) >= 2 && name[1] == ':' { // Windows drive letter
@@ -434,6 +634,27 @@ func cleanupImportUpload(dataDir, path string) {
 	os.Remove(abs)
 }
 
+// keepImportUploadForRetry renames a kept import_* upload to the same name
+// without the prefix, turning it into an ordinary server-side file: listed
+// by the import tab, accepted by import_server, and ignored by
+// jobs.CleanupOrphanImportFiles, which only reaps import_* /
+// twitter_archive_* names owned by an enqueued job. Under the import_* name
+// the kept file would be hidden from every retry channel and swept at the
+// next startup. When the rename fails the original path is returned:
+// keeping the file under its old name still beats dropping the only retry
+// copy (the sweep simply reaps it next startup, as before).
+func keepImportUploadForRetry(path string) string {
+	base := filepath.Base(path)
+	if !strings.HasPrefix(base, "import_") {
+		return path
+	}
+	kept := filepath.Join(filepath.Dir(path), strings.TrimPrefix(base, "import_"))
+	if err := os.Rename(path, kept); err != nil {
+		return path
+	}
+	return kept
+}
+
 // formatDBImportResult renders the tally line for the activity log.
 func formatDBImportResult(res *DBImportResult) string {
 	var written int64
@@ -445,8 +666,12 @@ func formatDBImportResult(res *DBImportResult) string {
 
 // RegisterImportDBHandler installs the kind "import_db" job handler. Import
 // failures are logged to activity_logs and swallowed (no job retry), like the
-// other import jobs.
-func RegisterImportDBHandler(w *jobs.Worker, db *sql.DB, dataDir string) {
+// other import jobs. invalidate is called whenever the import committed rows:
+// the row copy upserts the settings table (dbImportTables) behind the
+// settings.Cache's back, and settings.Cache's contract requires writers that
+// bypass Update to invalidate, or public pages keep serving the old site
+// title/URL/CSS until the TTL expires. It may be nil.
+func RegisterImportDBHandler(w *jobs.Worker, db *sql.DB, dataDir string, invalidate func()) {
 	w.Register(jobs.KindImportDB, func(ctx context.Context, payload json.RawMessage) error {
 		var p ImportDBPayload
 		if len(payload) > 0 {
@@ -459,9 +684,24 @@ func RegisterImportDBHandler(w *jobs.Worker, db *sql.DB, dataDir string) {
 		}
 		activity.Log(ctx, db, "info", "started", "import", fmt.Sprintf("source=\"db\" file=%s", activity.Quote(filepath.Base(p.Path))))
 		res, err := (&DBImporter{DB: db, DataDir: dataDir}).Import(ctx, p.Path)
-		cleanupImportUpload(dataDir, p.Path)
+		var blobErr *BlobRestoreError
+		rowsCommitted := errors.As(err, &blobErr)
+		if invalidate != nil && (err == nil || rowsCommitted) {
+			invalidate()
+		}
+		// A blob-restore failure left committed rows behind; keep the source
+		// file for a healing retry even when it is a web upload.
+		if err == nil || (!p.KeepOnFailure && !rowsCommitted) {
+			cleanupImportUpload(dataDir, p.Path)
+		} else if rowsCommitted {
+			p.Path = keepImportUploadForRetry(p.Path)
+		}
 		if err != nil {
-			activity.Log(ctx, db, "error", "failed", "import", fmt.Sprintf("source=\"db\" file=%s error=%s", activity.Quote(filepath.Base(p.Path)), activity.Quote(err.Error())))
+			detail := fmt.Sprintf("source=\"db\" file=%s error=%s", activity.Quote(filepath.Base(p.Path)), activity.Quote(err.Error()))
+			if rowsCommitted {
+				detail += " rows_committed=true source_kept=true"
+			}
+			activity.Log(ctx, db, "error", "failed", "import", detail)
 			return nil
 		}
 		activity.Log(ctx, db, "info", "completed", "import", fmt.Sprintf("source=\"db\" file=%s %s", activity.Quote(filepath.Base(p.Path)), formatDBImportResult(res)))

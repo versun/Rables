@@ -89,16 +89,38 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	handler, ok := w.handlers[job.Kind]
 	if !ok {
 		err := fmt.Errorf("unknown job kind %q", job.Kind)
-		return true, w.fail(ctx, job.ID, job.Attempts, err)
+		return true, w.fail(context.WithoutCancel(ctx), job.ID, job.Attempts, err)
 	}
 
 	if runErr := w.run(ctx, handler, job.Payload); runErr != nil {
+		// The handler ran with the (possibly already cancelled) ctx, but the
+		// bookkeeping writes below must still land on the shutdown path —
+		// otherwise a SIGTERM mid-run would strand the job in running until
+		// the startup reaper picks it up.
+		bookCtx := context.WithoutCancel(ctx)
+		// A handler aborted by shutdown (SIGTERM cancels ctx) did not fail:
+		// requeue without consuming an attempt or adding backoff, so frequent
+		// deploys cannot push a healthy job to MaxAttempts. A real timeout
+		// (context.DeadlineExceeded) still counts as a failure. The ctx.Err()
+		// precondition restricts the free requeue to cancellations of the
+		// worker's own ctx: a handler returning context.Canceled from an
+		// internal ctx it canceled itself hit a real failure, and would
+		// otherwise be requeued for free forever.
+		if ctx.Err() != nil && errors.Is(runErr, context.Canceled) {
+			return true, w.q.RescheduleJobRun(bookCtx, query.RescheduleJobRunParams{
+				Attempts:  job.Attempts,
+				RunAt:     now.Unix(),
+				LastError: sql.NullString{String: runErr.Error(), Valid: true},
+				UpdatedAt: now.Unix(),
+				ID:        job.ID,
+			})
+		}
 		attempts := job.Attempts + 1
 		if attempts >= MaxAttempts {
-			return true, w.fail(ctx, job.ID, attempts, runErr)
+			return true, w.fail(bookCtx, job.ID, attempts, runErr)
 		}
 		delay := Backoff[min(int(job.Attempts), len(Backoff)-1)]
-		return true, w.q.RescheduleJobRun(ctx, query.RescheduleJobRunParams{
+		return true, w.q.RescheduleJobRun(bookCtx, query.RescheduleJobRunParams{
 			Attempts:  attempts,
 			RunAt:     now.Add(delay).Unix(),
 			LastError: sql.NullString{String: runErr.Error(), Valid: true},
@@ -106,7 +128,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 			ID:        job.ID,
 		})
 	}
-	return true, w.q.CompleteJobRun(ctx, query.CompleteJobRunParams{UpdatedAt: now.Unix(), ID: job.ID})
+	return true, w.q.CompleteJobRun(context.WithoutCancel(ctx), query.CompleteJobRunParams{UpdatedAt: now.Unix(), ID: job.ID})
 }
 
 // run invokes fn, converting a panic into an error.

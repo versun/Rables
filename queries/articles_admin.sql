@@ -25,10 +25,9 @@ SELECT * FROM articles WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET 
 SELECT COUNT(*) FROM articles WHERE status = ?;
 
 -- Article.search_content: LIKE on title/slug/description/content_html with
--- ESCAPE '\'. The sqlc sqlite grammar rejects the ESCAPE keyword, so the
--- queries use the equivalent like(pattern, string, escape) function form.
--- The caller pre-escapes %, _ and backslash, then wraps the term in %...%
--- (sanitize_sql_like semantics).
+-- ESCAPE '\', written in the equivalent like(pattern, string, escape)
+-- function form. The caller pre-escapes %, _ and backslash, then wraps the
+-- term in %...% (sanitize_sql_like semantics).
 -- name: SearchAdminArticles :many
 SELECT * FROM articles
 WHERE like(?, title, '\') OR like(?, slug, '\')

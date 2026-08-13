@@ -51,7 +51,9 @@ type Renderer struct {
 // useAdminLayout reports whether the page renders inside the admin shell
 // (sidebar nav + main column) instead of the bare layout. auth_password_edit
 // is the account page, which uses the admin layout in Rails (UsersController).
+// page is the template file name, .html suffix included.
 func useAdminLayout(page string) bool {
+	page = strings.TrimSuffix(page, ".html")
 	return strings.HasPrefix(page, "admin_") || page == "auth_password_edit"
 }
 

@@ -8,7 +8,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,8 +57,9 @@ func restoreStorageZip(dataDir, zipPath string) (copied, kept int, err error) {
 		if len(parts) > 0 && parts[0] == "storage" {
 			parts = parts[1:]
 		}
-		if len(parts) != 3 || len(parts[0]) != 2 || len(parts[1]) != 2 || !media.ValidKey(parts[2]) {
-			return nil // not a blob path (e.g. stray metadata files): ignore
+		if len(parts) != 3 || len(parts[0]) != 2 || len(parts[1]) != 2 || !media.ValidKey(parts[2]) ||
+			parts[0] != parts[2][0:2] || parts[1] != parts[2][2:4] {
+			return nil // not a blob path (e.g. stray metadata files) or dirs don't match the key: ignore
 		}
 		dest := filepath.Join(dataDir, "files", parts[0], parts[1], parts[2])
 		if _, err := os.Stat(dest); err == nil {
@@ -80,15 +83,6 @@ func restoreStorageZip(dataDir, zipPath string) (copied, kept int, err error) {
 
 // runRailsImport performs the whole job; extracted for testing.
 func runRailsImport(ctx context.Context, db *sql.DB, dataDir string, p ImportRailsPayload) (string, error) {
-	var storageNote string
-	if p.StoragePath != "" {
-		copied, kept, err := restoreStorageZip(dataDir, p.StoragePath)
-		if err != nil {
-			return "", err
-		}
-		storageNote = fmt.Sprintf(" storage_blobs_copied=%d storage_blobs_kept=%d", copied, kept)
-	}
-
 	fi, err := os.Stat(p.DBPath)
 	if err != nil {
 		return "", fmt.Errorf("import rails: open database: %w", err)
@@ -96,20 +90,45 @@ func runRailsImport(ctx context.Context, db *sql.DB, dataDir string, p ImportRai
 	if fi.Size() == 0 {
 		return "", fmt.Errorf("import rails: %s is empty (0 bytes)", p.DBPath)
 	}
-	oldDB, err := sql.Open("sqlite", "file:"+p.DBPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	absDB, err := filepath.Abs(p.DBPath)
+	if err != nil {
+		return "", fmt.Errorf("import rails: open database: %w", err)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: absDB, RawQuery: "mode=ro&_pragma=busy_timeout(5000)"}).String()
+	oldDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return "", fmt.Errorf("import rails: open database: %w", err)
 	}
 	defer oldDB.Close()
 
+	var storageNote string
 	var report strings.Builder
 	rep, err := railsmigrate.Run(ctx, oldDB, db, railsmigrate.Options{
 		Out:         &report,
 		DataDir:     dataDir,
 		VerifyFiles: true,
+		// Blobs restore after the migration committed and before the files
+		// check (same rule as the db import): a failed migration must not
+		// leave orphan blobs no files row points at, and the check must run
+		// after the restore or it reports every blob as missing.
+		BeforeVerify: func() error {
+			if p.StoragePath == "" {
+				return nil
+			}
+			copied, kept, err := restoreStorageZip(dataDir, p.StoragePath)
+			if err != nil {
+				// The migration already committed; surface this as a
+				// BlobRestoreError so the handler logs that re-uploading
+				// both files heals the import (the migration is idempotent,
+				// INSERT OR IGNORE, so a re-run restores the missing blobs).
+				return &BlobRestoreError{Err: err}
+			}
+			storageNote = fmt.Sprintf(" storage_blobs_copied=%d storage_blobs_kept=%d", copied, kept)
+			return nil
+		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("import rails: %w", err)
+		return strings.TrimSpace(report.String()), fmt.Errorf("import rails: %w", err)
 	}
 	summary := strings.TrimSpace(report.String())
 	if rep.Mismatch() {
@@ -121,9 +140,11 @@ func runRailsImport(ctx context.Context, db *sql.DB, dataDir string, p ImportRai
 // RegisterImportHandlers installs the import job handlers: kind "import_db"
 // (Rables sqlite bundle), kind "import_rails" (Rails sqlite + optional
 // storage zip) and kind "import_rss". Failures are logged to activity_logs
-// and swallowed, like the other import jobs (no retry).
-func RegisterImportHandlers(w *jobs.Worker, db *sql.DB, dataDir string) {
-	RegisterImportDBHandler(w, db, dataDir)
+// and swallowed, like the other import jobs (no retry). invalidate is passed
+// to the import_db handler, which calls it after a committed import so the
+// settings cache drops the row the import overwrote; it may be nil.
+func RegisterImportHandlers(w *jobs.Worker, db *sql.DB, dataDir string, invalidate func()) {
+	RegisterImportDBHandler(w, db, dataDir, invalidate)
 
 	w.Register(jobs.KindImportRails, func(ctx context.Context, payload json.RawMessage) error {
 		var p ImportRailsPayload
@@ -137,7 +158,15 @@ func RegisterImportHandlers(w *jobs.Worker, db *sql.DB, dataDir string) {
 		}
 		activity.Log(ctx, db, "info", "started", "import", fmt.Sprintf("source=\"rails\" file=%s", activity.Quote(filepath.Base(p.DBPath))))
 		report, err := runRailsImport(ctx, db, dataDir, p)
+		var blobErr *BlobRestoreError
+		rowsCommitted := errors.As(err, &blobErr)
 		cleanupImportUpload(dataDir, p.DBPath)
+		// Unlike the db import there is no server-file retry channel for
+		// rails imports, so a kept storage zip could never be replayed: both
+		// uploads are removed even when a blob-restore failure left
+		// committed rows behind. The migration is idempotent (INSERT OR
+		// IGNORE), so re-uploading both files re-runs cleanly and restores
+		// the missing blobs.
 		if p.StoragePath != "" {
 			cleanupImportUpload(dataDir, p.StoragePath)
 		}
@@ -145,7 +174,11 @@ func RegisterImportHandlers(w *jobs.Worker, db *sql.DB, dataDir string) {
 			activity.Log(ctx, db, "info", "report", "import", activity.Quote(report))
 		}
 		if err != nil {
-			activity.Log(ctx, db, "error", "failed", "import", fmt.Sprintf("source=\"rails\" file=%s error=%s", activity.Quote(filepath.Base(p.DBPath)), activity.Quote(err.Error())))
+			detail := fmt.Sprintf("source=\"rails\" file=%s error=%s", activity.Quote(filepath.Base(p.DBPath)), activity.Quote(err.Error()))
+			if rowsCommitted {
+				detail += " rows_committed=true blobs_partially_restored=true (re-upload both files to finish the restore)"
+			}
+			activity.Log(ctx, db, "error", "failed", "import", detail)
 			return nil
 		}
 		activity.Log(ctx, db, "info", "completed", "import", fmt.Sprintf("source=\"rails\" file=%s", activity.Quote(filepath.Base(p.DBPath))))

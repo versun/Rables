@@ -135,7 +135,10 @@ func (p twitterPlatform) uploadMedia(ctx context.Context, client *http.Client, i
 	if id := xDataID(map[string]any{"data": media}); id != "" {
 		return id, nil
 	}
-	return "", fmt.Errorf("twitter: media upload returned no id")
+	// A 2xx FINALIZE/STATUS response with an empty or unparsable body leaves
+	// media nil (doJSON → nil); the upload itself already succeeded, so fall
+	// back to the INIT id instead of dropping the image.
+	return mediaID, nil
 }
 
 // mediaUploadInit ports X::MediaUploader.init: POST
@@ -195,10 +198,20 @@ func (p twitterPlatform) mediaUploadFinalize(ctx context.Context, client *http.C
 	return media, nil
 }
 
+// awaitProcessing bounds: the job worker is a single goroutine, so media
+// stuck in pending must give up instead of polling forever and blocking
+// every later job. The server's check_after_secs hint is likewise clamped
+// to a sane range.
+const (
+	twitterProcessingMaxWait = 5 * time.Minute
+	twitterMaxCheckAfterSecs = 60.0
+)
+
 // awaitProcessing ports await_processing_if_needed + X::MediaUploader
 // .await_processing!: poll STATUS while processing_info is pending; a failed
 // state is a permanent upload error (the image is skipped, like the rescued
-// "Media processing failed" RuntimeError returning nil).
+// "Media processing failed" RuntimeError returning nil). Polling gives up
+// after twitterProcessingMaxWait with a permanent error for the same reason.
 func (p twitterPlatform) awaitProcessing(ctx context.Context, client *http.Client, media map[string]any) (map[string]any, error) {
 	info, _ := media["processing_info"].(map[string]any)
 	state, _ := info["state"].(string)
@@ -206,6 +219,11 @@ func (p twitterPlatform) awaitProcessing(ctx context.Context, client *http.Clien
 		return media, nil
 	}
 	mediaID := xDataID(map[string]any{"data": media})
+	// Absolute deadline from the injected clock, not a sum of planned sleeps:
+	// the STATUS request time itself (up to the client timeout each round)
+	// counts against the budget too, or a slow server stretches the cap into
+	// an hour of single-goroutine worker blocking.
+	deadline := p.clock()().Add(twitterProcessingMaxWait)
 	for {
 		u := p.base() + "/media/upload?command=STATUS&media_id=" + url.QueryEscape(mediaID)
 		body, err := p.doJSON(ctx, client, http.MethodGet, u, nil, "")
@@ -221,11 +239,19 @@ func (p twitterPlatform) awaitProcessing(ctx context.Context, client *http.Clien
 		if state == "failed" {
 			return nil, fmt.Errorf("twitter: Media processing failed")
 		}
-		wait := 0.0
-		if secs, ok := info["check_after_secs"].(float64); ok {
-			wait = secs
+		// check_after_secs may be absent (or non-positive); never poll in a
+		// zero-delay hot loop, and never let the server talk us into a
+		// multi-hour sleep — or a sub-second one hammering the rate limit.
+		wait := 1.0
+		secs, _ := info["check_after_secs"].(json.Number) // doJSON uses UseNumber
+		if f, err := secs.Float64(); err == nil && f > 0 {
+			wait = min(max(f, 1.0), twitterMaxCheckAfterSecs)
 		}
-		if err := p.wait(ctx, time.Duration(wait*float64(time.Second))); err != nil {
+		delay := time.Duration(wait * float64(time.Second))
+		if !p.clock()().Add(delay).Before(deadline) {
+			return nil, fmt.Errorf("twitter: media processing not done after %s", twitterProcessingMaxWait)
+		}
+		if err := p.wait(ctx, delay); err != nil {
 			return nil, err
 		}
 	}

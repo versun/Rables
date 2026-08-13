@@ -29,6 +29,18 @@ func (q *Queries) EnsureTwitterSync(ctx context.Context, arg EnsureTwitterSyncPa
 	return err
 }
 
+const resetTwitterSyncCursor = `-- name: ResetTwitterSyncCursor :exec
+UPDATE twitter_syncs SET
+  since_id = NULL, last_synced_at = NULL, last_error = NULL, updated_at = ?
+WHERE id = 1
+`
+
+// Username or start_date changed: the cursor no longer matches the config.
+func (q *Queries) ResetTwitterSyncCursor(ctx context.Context, updatedAt int64) error {
+	_, err := q.db.ExecContext(ctx, resetTwitterSyncCursor, updatedAt)
+	return err
+}
+
 const setTwitterSyncFailure = `-- name: SetTwitterSyncFailure :exec
 UPDATE twitter_syncs SET last_error = ?, updated_at = ? WHERE id = 1
 `
@@ -44,70 +56,92 @@ func (q *Queries) SetTwitterSyncFailure(ctx context.Context, arg SetTwitterSyncF
 	return err
 }
 
-const setTwitterSyncSuccess = `-- name: SetTwitterSyncSuccess :exec
-UPDATE twitter_syncs SET since_id = ?, last_synced_at = ?, last_error = NULL, updated_at = ?
-WHERE id = 1
+const setTwitterSyncSuccess = `-- name: SetTwitterSyncSuccess :execrows
+UPDATE twitter_syncs SET since_id = ?1, last_synced_at = ?2, last_error = NULL, updated_at = ?3
+WHERE id = 1 AND since_id IS ?4 AND username IS ?5 AND start_date IS ?6
 `
 
 type SetTwitterSyncSuccessParams struct {
-	SinceID      sql.NullString
-	LastSyncedAt sql.NullInt64
-	UpdatedAt    int64
+	SinceID           sql.NullString
+	LastSyncedAt      sql.NullInt64
+	UpdatedAt         int64
+	ExpectedSinceID   sql.NullString
+	ExpectedUsername  sql.NullString
+	ExpectedStartDate sql.NullString
 }
 
 // Successful run: advance the cursor, stamp last_synced_at, clear last_error.
-func (q *Queries) SetTwitterSyncSuccess(ctx context.Context, arg SetTwitterSyncSuccessParams) error {
-	_, err := q.db.ExecContext(ctx, setTwitterSyncSuccess, arg.SinceID, arg.LastSyncedAt, arg.UpdatedAt)
-	return err
+// The config/cursor values read at run start guard the write (CAS, IS is the
+// null-safe comparison): if the admin changed username or start_date mid-run,
+// ResetTwitterSyncCursor already cleared the cursor and this write would
+// silently undo the reset, skipping the backfill the reset was meant to
+// trigger. The guard turns the late write into a no-op instead; the tweets
+// this run archived stay (slug-deduped) and the next run syncs from the new
+// config.
+func (q *Queries) SetTwitterSyncSuccess(ctx context.Context, arg SetTwitterSyncSuccessParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setTwitterSyncSuccess,
+		arg.SinceID,
+		arg.LastSyncedAt,
+		arg.UpdatedAt,
+		arg.ExpectedSinceID,
+		arg.ExpectedUsername,
+		arg.ExpectedStartDate,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
-const setTwitterSyncUserID = `-- name: SetTwitterSyncUserID :exec
-UPDATE twitter_syncs SET user_id = ?, updated_at = ? WHERE id = 1
+const setTwitterSyncUserID = `-- name: SetTwitterSyncUserID :execrows
+UPDATE twitter_syncs SET user_id = ?1, updated_at = ?2
+WHERE id = 1 AND username IS ?3
 `
 
 type SetTwitterSyncUserIDParams struct {
-	UserID    sql.NullString
-	UpdatedAt int64
+	UserID           sql.NullString
+	UpdatedAt        int64
+	ExpectedUsername sql.NullString
 }
 
-// resolve_user_id: persist the users/by/username lookup.
-func (q *Queries) SetTwitterSyncUserID(ctx context.Context, arg SetTwitterSyncUserIDParams) error {
-	_, err := q.db.ExecContext(ctx, setTwitterSyncUserID, arg.UserID, arg.UpdatedAt)
-	return err
+// resolve_user_id: persist the users/by/username lookup; the admin update
+// passes NULL to clear it when the username changes. The username guard makes
+// the write conditional (CAS): if the admin changed the username while the
+// lookup was in flight, the row no longer matches and the resolved (now
+// stale) user_id is dropped instead of clobbering the admin's clear.
+func (q *Queries) SetTwitterSyncUserID(ctx context.Context, arg SetTwitterSyncUserIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setTwitterSyncUserID, arg.UserID, arg.UpdatedAt, arg.ExpectedUsername)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateTwitterSyncConfig = `-- name: UpdateTwitterSyncConfig :exec
 UPDATE twitter_syncs SET
-  enabled = ?, username = ?, user_id = ?, start_date = ?, sync_schedule = ?,
-  since_id = ?, last_synced_at = ?, last_error = ?, updated_at = ?
+  enabled = ?, username = ?, start_date = ?, sync_schedule = ?, updated_at = ?
 WHERE id = 1
 `
 
 type UpdateTwitterSyncConfigParams struct {
 	Enabled      int64
 	Username     sql.NullString
-	UserID       sql.NullString
 	StartDate    sql.NullString
 	SyncSchedule string
-	SinceID      sql.NullString
-	LastSyncedAt sql.NullInt64
-	LastError    sql.NullString
 	UpdatedAt    int64
 }
 
-// Admin update: full overlay of the permitted twitter_sync params. The
-// handler pre-computes the cursor reset (username/start_date change clears
-// since_id/last_synced_at/last_error; username change also clears user_id).
+// Admin update: overlay of the permitted twitter_sync params only. The cursor
+// fields (since_id/last_synced_at/last_error) and user_id belong to the
+// syncer: writing back the values read before this statement would roll back
+// a concurrent SetTwitterSyncSuccess/SetTwitterSyncUserID, so the admin
+// clears them with the separate conditional writes below instead.
 func (q *Queries) UpdateTwitterSyncConfig(ctx context.Context, arg UpdateTwitterSyncConfigParams) error {
 	_, err := q.db.ExecContext(ctx, updateTwitterSyncConfig,
 		arg.Enabled,
 		arg.Username,
-		arg.UserID,
 		arg.StartDate,
 		arg.SyncSchedule,
-		arg.SinceID,
-		arg.LastSyncedAt,
-		arg.LastError,
 		arg.UpdatedAt,
 	)
 	return err

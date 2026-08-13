@@ -252,6 +252,37 @@ func (q *Queries) DeleteTwitterArchiveTweetAttachments(ctx context.Context) erro
 	return err
 }
 
+const failStaleTwitterArchiveImports = `-- name: FailStaleTwitterArchiveImports :execrows
+UPDATE twitter_archive_imports
+SET status = 'failed', status_message = 'Import failed',
+    error_message = ?1, finished_at = ?2,
+    active_slot = NULL, updated_at = ?3
+WHERE status IN ('queued', 'running') AND updated_at < ?4
+`
+
+type FailStaleTwitterArchiveImportsParams struct {
+	ErrorMessage sql.NullString
+	FinishedAt   sql.NullInt64
+	Now          int64
+	Cutoff       int64
+}
+
+// Startup recovery: imports stuck queued/running since before :cutoff belong
+// to a dead process; fail them and release active_slot (idx_tai_active_slot
+// allows a single active row) so new imports are not blocked forever.
+func (q *Queries) FailStaleTwitterArchiveImports(ctx context.Context, arg FailStaleTwitterArchiveImportsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failStaleTwitterArchiveImports,
+		arg.ErrorMessage,
+		arg.FinishedAt,
+		arg.Now,
+		arg.Cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const failTwitterArchiveImport = `-- name: FailTwitterArchiveImport :exec
 UPDATE twitter_archive_imports
 SET status = 'failed', status_message = 'Import failed', error_message = ?,
@@ -312,6 +343,20 @@ SELECT COUNT(*) FROM twitter_archive_imports WHERE status IN ('queued', 'running
 
 func (q *Queries) HasActiveTwitterArchiveImport(ctx context.Context) (int64, error) {
 	row := q.db.QueryRowContext(ctx, hasActiveTwitterArchiveImport)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const hasNewerNonFailedTwitterArchiveImport = `-- name: HasNewerNonFailedTwitterArchiveImport :one
+SELECT COUNT(*) FROM twitter_archive_imports WHERE id > ? AND status != 'failed'
+`
+
+// Self-heal guard for a recovered failed import whose job re-runs: a newer
+// non-failed row means a fresh upload already superseded this import, so
+// re-running it would roll the stored archive back to the older upload.
+func (q *Queries) HasNewerNonFailedTwitterArchiveImport(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, hasNewerNonFailedTwitterArchiveImport, id)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -574,11 +619,11 @@ func (q *Queries) ListTwitterArchiveTweetsByType(ctx context.Context, arg ListTw
 	return items, nil
 }
 
-const markTwitterArchiveImportRunning = `-- name: MarkTwitterArchiveImportRunning :exec
+const markTwitterArchiveImportRunning = `-- name: MarkTwitterArchiveImportRunning :execrows
 UPDATE twitter_archive_imports
 SET status = 'running', progress = 5, status_message = 'Reading archive',
-    started_at = ?, finished_at = NULL, error_message = NULL, updated_at = ?
-WHERE id = ?
+    started_at = ?, finished_at = NULL, error_message = NULL, active_slot = 1, updated_at = ?
+WHERE id = ? AND status != 'completed'
 `
 
 type MarkTwitterArchiveImportRunningParams struct {
@@ -587,9 +632,19 @@ type MarkTwitterArchiveImportRunningParams struct {
 	ID        int64
 }
 
-func (q *Queries) MarkTwitterArchiveImportRunning(ctx context.Context, arg MarkTwitterArchiveImportRunningParams) error {
-	_, err := q.db.ExecContext(ctx, markTwitterArchiveImportRunning, arg.StartedAt, arg.UpdatedAt, arg.ID)
-	return err
+// Re-claiming active_slot makes the self-heal after startup recovery safe:
+// if a newer import already took the slot, idx_tai_active_slot turns the
+// late re-mark into a unique-constraint error instead of two concurrent
+// imports. The status guard keeps a completed import completed: a job
+// re-executed after its import finished (a crash between the import-complete
+// and job-complete writes) must not resurrect the row. Its source file is
+// gone, so a re-run could only clobber the history back to failed.
+func (q *Queries) MarkTwitterArchiveImportRunning(ctx context.Context, arg MarkTwitterArchiveImportRunningParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markTwitterArchiveImportRunning, arg.StartedAt, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const twitterArchiveLastImportedAt = `-- name: TwitterArchiveLastImportedAt :one

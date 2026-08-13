@@ -73,7 +73,7 @@ func (s *Server) publicFeed(w http.ResponseWriter, r *http.Request) {
 // (RSS format): the 50 newest published articles of the tag.
 func (s *Server) publicTagRSS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	tag, err := s.Q.GetPublicTagBySlug(ctx, slugParam(r))
+	tag, err := s.Q.GetPublicTagBySlug(ctx, slugParam(r, "slug"))
 	if errors.Is(err, sql.ErrNoRows) {
 		s.publicNotFound(w)
 		return

@@ -8,10 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"net"
 	"net/http"
+	"net/url"
 	"strings"
-	"time"
 
 	"rables/internal/db/query"
 	"rables/internal/domain"
@@ -23,7 +22,7 @@ import (
 // activity-logs every API failure (send_newsletter returns false instead of
 // raising), and the job rescues RecordNotFound, so neither case fails the
 // job here.
-func (s *sender) sendListmonk(ctx context.Context, articleID int64) error {
+func (s *sender) sendListmonk(ctx context.Context, articleID int64, st query.NewsletterSetting) error {
 	article, err := s.q.GetArticleByID(ctx, articleID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // rescued RecordNotFound
@@ -38,8 +37,10 @@ func (s *sender) sendListmonk(ctx context.Context, articleID int64) error {
 	if err != nil {
 		return fmt.Errorf("load listmonk config: %w", err)
 	}
-	// return unless listmonk.present? && list_id.present? && template_id.present?
-	if !lm.ListID.Valid || !lm.TemplateID.Valid {
+	// return unless enabled? && listmonk? && configured?
+	configured := lm.ListID.Valid && lm.TemplateID.Valid &&
+		!domain.IsBlank(lm.Url.String) && !domain.IsBlank(lm.Username.String) && !domain.IsBlank(lm.ApiKey.String)
+	if st.Enabled == 0 || st.Provider != "listmonk" || !settingConfigured(st, configured) {
 		return nil
 	}
 
@@ -61,6 +62,12 @@ func (s *sender) sendListmonk(ctx context.Context, articleID int64) error {
 
 	campaignID, err := client.createCampaign(ctx, article, lm, siteTitle)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// Worker shutdown: return the error so the job is rescheduled
+			// instead of logged as a permanent failure, which would
+			// silently drop the campaign.
+			return err
+		}
 		activity.Log(ctx, s.db, "error", "failed", "newsletter", fmt.Sprintf(
 			"title=%s operation=%s error=%s",
 			activity.Quote(title), activity.Quote("campaign"), activity.Quote(err.Error())))
@@ -71,6 +78,11 @@ func (s *sender) sendListmonk(ctx context.Context, articleID int64) error {
 		activity.Quote(title), activity.Quote("campaign"), campaignID))
 
 	if err := client.setCampaignRunning(ctx, campaignID); err != nil {
+		if errors.Is(err, context.Canceled) {
+			// Same shutdown semantics as the create branch above: a canceled
+			// job is rescheduled, not logged as a permanent failure.
+			return err
+		}
 		activity.Log(ctx, s.db, "error", "failed", "newsletter", fmt.Sprintf(
 			"title=%s operation=%s campaign_id=%d error=%s",
 			activity.Quote(title), activity.Quote("campaign_send"), campaignID, activity.Quote(err.Error())))
@@ -120,7 +132,7 @@ func (c ListmonkClient) createCampaign(ctx context.Context, article query.Articl
 		err = errors.New("200 - missing data.id")
 	}
 	if err != nil {
-		return 0, fmt.Errorf("Create Campaign failed! Title:%s,Code:%s", article.Title.String, err)
+		return 0, fmt.Errorf("Create Campaign failed! Title:%s,Code:%w", article.Title.String, err)
 	}
 	return resp.Data.ID, nil
 }
@@ -132,7 +144,7 @@ func (c ListmonkClient) setCampaignRunning(ctx context.Context, campaignID int64
 		fmt.Sprintf("%s/api/campaigns/%d/status", c.URL, campaignID),
 		map[string]string{"status": "running"}, nil)
 	if err != nil {
-		return fmt.Errorf("Send Campaign failed! %s", err)
+		return fmt.Errorf("Send Campaign failed! %w", err)
 	}
 	return nil
 }
@@ -140,7 +152,7 @@ func (c ListmonkClient) setCampaignRunning(ctx context.Context, campaignID int64
 // doJSON performs one authenticated JSON API call, mirroring the Net::HTTP
 // requests of the model (basic auth, JSON content type, 5s dial / 10s read
 // timeouts); non-2xx answers carry the "CODE - BODY" text of the Rails
-// raise. It duplicates the transport of verify.go's get, which is GET-only.
+// raise. It shares the default client of verify.go's get, which is GET-only.
 func (c ListmonkClient) doJSON(ctx context.Context, method, rawURL string, payload, out any) error {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
@@ -155,13 +167,7 @@ func (c ListmonkClient) doJSON(ctx context.Context, method, rawURL string, paylo
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: 15 * time.Second, // whole request, including the body read
-			Transport: &http.Transport{
-				DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-				ResponseHeaderTimeout: 10 * time.Second,
-			},
-		}
+		httpClient = defaultListmonkClient
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -209,9 +215,28 @@ func renderSourceReference(article query.Article) string {
 		b.WriteString(string(simpleFormat(article.SourceContent.String, "span")))
 	}
 	b.WriteString(`<div class="source-reference__links" style="display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.85rem;">`)
-	b.WriteString(`<a href="` + html.EscapeString(article.SourceUrl.String) + `" target="_blank" rel="noopener noreferrer" style="color: #007bff; text-decoration: none; display: inline-flex; align-items: center; gap: 0.375rem; transition: color 0.2s;">`)
-	b.WriteString(`<i class="fas fa-external-link-alt" style="font-size: 0.75rem;"></i>`)
-	b.WriteString(`<small>Original</small>`)
-	b.WriteString(`</a></div></blockquote>`)
+	// source_url may come from attacker-controlled imports; only link absolute
+	// http(s) URLs with a host (same rule as safeArchiveURL in internal/httpd).
+	if safeURL := safeSourceURL(article.SourceUrl.String); safeURL != "" {
+		b.WriteString(`<a href="` + html.EscapeString(safeURL) + `" target="_blank" rel="noopener noreferrer" style="color: #007bff; text-decoration: none; display: inline-flex; align-items: center; gap: 0.375rem; transition: color 0.2s;">`)
+		b.WriteString(`<i class="fas fa-external-link-alt" style="font-size: 0.75rem;"></i>`)
+		b.WriteString(`<small>Original</small>`)
+		b.WriteString(`</a>`)
+	}
+	b.WriteString(`</div></blockquote>`)
 	return b.String()
+}
+
+// safeSourceURL applies the rule of safeArchiveURL (internal/httpd, not
+// importable from here): only absolute http(s) URLs with a host survive;
+// anything else (javascript:, data:, relative) is dropped.
+func safeSourceURL(value string) string {
+	u, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	if (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		return u.String()
+	}
+	return ""
 }

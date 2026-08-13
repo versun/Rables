@@ -177,12 +177,17 @@ func findOrCreate(ctx context.Context, q *query.Queries, name string) (query.Tag
 	}
 }
 
-// uniqueSlug ports Tag#generate_slug: the squished name itself is the slug
-// (the source deliberately keeps non-ASCII scripts, e.g. Chinese, instead of
-// parameterizing), and "-1", "-2", ... suffixes are appended while the
-// candidate is taken by another tag.
+// uniqueSlug ports Tag#generate_slug: the squished name is the slug (the
+// source deliberately keeps non-ASCII scripts, e.g. Chinese, instead of
+// parameterizing), with URL-unsafe characters stripped so the slug stays
+// reachable at /tags/{slug}, and "-1", "-2", ... suffixes appended while the
+// candidate is taken by another tag. A name of only unsafe/control chars
+// strips to "", which no route could ever match, so it falls back to "tag".
 func uniqueSlug(ctx context.Context, q *query.Queries, name string, excludeID int64) (string, error) {
-	base := domain.Squish(name)
+	base := domain.CleanSlug(domain.Squish(name))
+	if base == "" {
+		base = "tag"
+	}
 	candidate := base
 	for counter := 1; ; counter++ {
 		taken, err := q.CountTagsBySlug(ctx, query.CountTagsBySlugParams{Slug: candidate, ID: excludeID})

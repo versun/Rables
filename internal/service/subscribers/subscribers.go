@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"regexp"
+	"strings"
 	"time"
 
 	"rables/internal/db/query"
@@ -20,6 +21,17 @@ var emailRE = regexp.MustCompile(`^[a-zA-Z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[a
 
 // ValidEmail reports whether email passes the Subscriber format validation.
 func ValidEmail(email string) bool { return emailRE.MatchString(email) }
+
+// NormalizeEmail canonicalizes an address for storage and lookup (strip +
+// downcase, the same shape as normalizeUserName). SQLite compares TEXT with
+// the BINARY collation by default, so email = ? and UNIQUE(email) are
+// case-sensitive: without normalization a case variant of an existing
+// address slips past the already-subscribed guard and inserts a second row —
+// duplicate newsletter deliveries, and an unsubscribe that stops only one of
+// the two rows.
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
 
 // NewToken mirrors SecureRandom.urlsafe_base64(32): 32 random bytes encoded
 // base64url without padding (43 chars).
@@ -39,7 +51,9 @@ func Active(sub query.Subscriber) bool { return Confirmed(sub) && !sub.Unsubscri
 
 // Create inserts a subscriber, filling blank tokens like
 // Subscriber#generate_tokens (pre-set tokens, e.g. from imports, are kept).
+// The address is stored normalized (see NormalizeEmail).
 func Create(ctx context.Context, q *query.Queries, email, confirmationToken, unsubscribeToken string) (query.Subscriber, error) {
+	email = NormalizeEmail(email)
 	var err error
 	if confirmationToken == "" {
 		if confirmationToken, err = NewToken(); err != nil {
@@ -63,14 +77,21 @@ func Create(ctx context.Context, q *query.Queries, email, confirmationToken, uns
 
 // ReplaceTags mirrors subscriber.tags = tags: the join rows are rebuilt to
 // exactly the given tag ids (an empty list unsubscribes from everything
-// specific, i.e. "all content").
-func ReplaceTags(ctx context.Context, q *query.Queries, subscriberID int64, tagIDs []int64) error {
-	if err := q.DeleteSubscriberTagsBySubscriberID(ctx, subscriberID); err != nil {
+// specific, i.e. "all content"). Delete and inserts run in one transaction
+// (like Destroy), so a mid-way failure never leaves a partial tag set.
+func ReplaceTags(ctx context.Context, db *sql.DB, subscriberID int64, tagIDs []int64) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	qtx := query.New(db).WithTx(tx)
+	if err := qtx.DeleteSubscriberTagsBySubscriberID(ctx, subscriberID); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Unix()
 	for _, tagID := range tagIDs {
-		if err := q.AddSubscriberTag(ctx, query.AddSubscriberTagParams{
+		if err := qtx.AddSubscriberTag(ctx, query.AddSubscriberTagParams{
 			SubscriberID: subscriberID,
 			TagID:        tagID,
 			CreatedAt:    now,
@@ -79,7 +100,7 @@ func ReplaceTags(ctx context.Context, q *query.Queries, subscriberID int64, tagI
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // Destroy mirrors subscriber.destroy with dependent: :destroy on
