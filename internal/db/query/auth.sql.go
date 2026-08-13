@@ -188,7 +188,7 @@ func (q *Queries) GetSessionByToken(ctx context.Context, token string) (Session,
 }
 
 const getSettings = `-- name: GetSettings :one
-SELECT id, title, description, author, url, time_zone, head_code, custom_css, tool_code, giscus, social_links, setup_completed, created_at, updated_at FROM settings WHERE id = 1
+SELECT id, title, description, author, url, time_zone, head_code, custom_css, tool_code, giscus, social_links, setup_completed, created_at, updated_at, article_route_prefix FROM settings WHERE id = 1
 `
 
 func (q *Queries) GetSettings(ctx context.Context) (Setting, error) {
@@ -209,6 +209,7 @@ func (q *Queries) GetSettings(ctx context.Context) (Setting, error) {
 		&i.SetupCompleted,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArticleRoutePrefix,
 	)
 	return i, err
 }

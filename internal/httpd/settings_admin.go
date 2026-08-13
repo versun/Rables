@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"rables/internal/db/query"
+	"rables/internal/domain"
 	"rables/internal/settings"
 	"rables/internal/templates"
 )
@@ -98,6 +99,18 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	socialLinksJSON := r.FormValue("social_links_json")
+
+	// The route prefix is a single URL path segment: apply the same rules as
+	// an article slug (plus whitespace, which CleanSlug tolerates but a path
+	// segment must not contain), plus the reserved top-level names (an
+	// article under /{prefix}/{slug} must never shadow /admin, /tags, ...).
+	prefix := strings.Trim(strings.TrimSpace(r.FormValue("article_route_prefix")), "/")
+	if prefix != "" && (!domain.IsValidSlug(prefix) || strings.ContainsAny(prefix, " \t") || domain.IsReservedSlug(prefix)) {
+		s.renderSettingsForm(w, submitted, socialLinksJSON, "Article route prefix is invalid (use a plain slug like \"blog\").")
+		return
+	}
+	submitted.ArticleRoutePrefix = str(prefix)
+
 	if strings.TrimSpace(socialLinksJSON) != "" {
 		normalized, err := settings.NormalizeSocialLinks(socialLinksJSON)
 		if err != nil {
@@ -120,17 +133,18 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := cache.Update(r.Context(), query.UpdateSettingsParams{
-		Title:       submitted.Title,
-		Description: submitted.Description,
-		Author:      submitted.Author,
-		Url:         submitted.Url,
-		TimeZone:    submitted.TimeZone,
-		HeadCode:    submitted.HeadCode,
-		CustomCss:   submitted.CustomCss,
-		ToolCode:    submitted.ToolCode,
-		Giscus:      submitted.Giscus,
-		SocialLinks: submitted.SocialLinks,
-		UpdatedAt:   time.Now().Unix(),
+		Title:              submitted.Title,
+		Description:        submitted.Description,
+		Author:             submitted.Author,
+		Url:                submitted.Url,
+		TimeZone:           submitted.TimeZone,
+		HeadCode:           submitted.HeadCode,
+		CustomCss:          submitted.CustomCss,
+		ToolCode:           submitted.ToolCode,
+		Giscus:             submitted.Giscus,
+		SocialLinks:        submitted.SocialLinks,
+		ArticleRoutePrefix: submitted.ArticleRoutePrefix,
+		UpdatedAt:          time.Now().Unix(),
 	}); err != nil {
 		s.Log.Error("update settings", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

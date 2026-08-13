@@ -165,7 +165,7 @@ func (s *Server) resolveCommentable(r *http.Request) (commentableTarget, error) 
 		return commentableTarget{
 			typ:          "Article",
 			id:           article.ID,
-			redirectPath: comments.ArticlePath(s.Cfg.ArticleRoutePrefix, slug),
+			redirectPath: comments.ArticlePath(s.routePrefix(r.Context()), slug),
 		}, nil
 	}
 	if slug := r.FormValue("page_id"); slug != "" {

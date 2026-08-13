@@ -473,6 +473,28 @@ func TestPublicTwitterArchiveRoutePrefix(t *testing.T) {
 	}
 }
 
+// TestPublicTwitterArchiveRoutePrefixFromSettings: the admin-configured
+// prefix re-routes the archive on the same Server instance.
+func TestPublicTwitterArchiveRoutePrefixFromSettings(t *testing.T) {
+	s, h := newTwitterArchiveTestServer(t, "")
+	seedArchiveTweet(t, s, "300", "tweet", "Prefixed archive tweet", 1000)
+
+	if rec := get(t, h, "/twitter/archive"); rec.Code != http.StatusOK {
+		t.Fatalf("unprefixed show = %d, want 200", rec.Code)
+	}
+
+	setRoutePrefix(t, s, "blog")
+	if rec := get(t, h, "/blog/twitter/archive"); rec.Code != http.StatusOK {
+		t.Fatalf("prefixed show = %d, want 200", rec.Code)
+	}
+	if rec := get(t, h, "/twitter/archive"); rec.Code != http.StatusNotFound {
+		t.Fatalf("unprefixed path = %d, want 404 when a prefix is set", rec.Code)
+	}
+	if rec := get(t, h, "/other/twitter/archive"); rec.Code != http.StatusNotFound {
+		t.Fatalf("wrong prefix = %d, want 404", rec.Code)
+	}
+}
+
 // TestAdminTwitterArchivesEndToEnd drives the whole chain: multipart upload,
 // import row, enqueued job, worker execution, imported tweets.
 func TestAdminTwitterArchivesEndToEnd(t *testing.T) {

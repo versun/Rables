@@ -270,11 +270,20 @@ func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
-// render executes a page template, logging failures.
+// render executes a page template, logging failures. Responses without an
+// explicit Cache-Control (admin and other authenticated pages) default to
+// "private, no-store" so neither browsers nor intermediary caches can keep
+// a copy at all: no stale list after a mutating action redirects back, and
+// no sensitive admin content left in a shared or on-disk cache. Handlers
+// that want caching (public pages) set their own Cache-Control before
+// calling render and are left untouched.
 func (s *Server) render(w http.ResponseWriter, status int, name string, data any) {
 	if s.Renderer == nil {
 		http.Error(w, "renderer not configured", http.StatusInternalServerError)
 		return
+	}
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "private, no-store")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

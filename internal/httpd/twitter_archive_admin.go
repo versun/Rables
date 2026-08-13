@@ -101,7 +101,7 @@ func (s *Server) adminTwitterArchivesIndex(w http.ResponseWriter, r *http.Reques
 		Counts:          counts,
 		LastImportedAt:  lastImported,
 		HasLastImported: hasLastImported,
-		PublicPath:      twitterArchivePublicPath(s.Cfg.ArticleRoutePrefix),
+		PublicPath:      twitterArchivePublicPath(s.routePrefix(ctx)),
 		Imports:         rows,
 	})
 }

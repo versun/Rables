@@ -15,22 +15,23 @@ const updateSettings = `-- name: UpdateSettings :exec
 UPDATE settings
 SET title = ?, description = ?, author = ?, url = ?, time_zone = ?,
     head_code = ?, custom_css = ?, tool_code = ?, giscus = ?,
-    social_links = ?, updated_at = ?
+    social_links = ?, article_route_prefix = ?, updated_at = ?
 WHERE id = 1
 `
 
 type UpdateSettingsParams struct {
-	Title       sql.NullString
-	Description sql.NullString
-	Author      sql.NullString
-	Url         sql.NullString
-	TimeZone    string
-	HeadCode    sql.NullString
-	CustomCss   sql.NullString
-	ToolCode    sql.NullString
-	Giscus      sql.NullString
-	SocialLinks sql.NullString
-	UpdatedAt   int64
+	Title              sql.NullString
+	Description        sql.NullString
+	Author             sql.NullString
+	Url                sql.NullString
+	TimeZone           string
+	HeadCode           sql.NullString
+	CustomCss          sql.NullString
+	ToolCode           sql.NullString
+	Giscus             sql.NullString
+	SocialLinks        sql.NullString
+	ArticleRoutePrefix sql.NullString
+	UpdatedAt          int64
 }
 
 // Singleton settings row (id = 1). GetSettings and EnsureSettings live in
@@ -47,6 +48,7 @@ func (q *Queries) UpdateSettings(ctx context.Context, arg UpdateSettingsParams) 
 		arg.ToolCode,
 		arg.Giscus,
 		arg.SocialLinks,
+		arg.ArticleRoutePrefix,
 		arg.UpdatedAt,
 	)
 	return err

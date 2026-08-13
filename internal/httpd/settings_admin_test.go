@@ -344,6 +344,81 @@ func TestSettingsUpdateValidation(t *testing.T) {
 	})
 }
 
+// TestSettingsUpdateArticleRoutePrefix covers the route prefix field: a valid
+// prefix is stored and editable, slashes are trimmed, and reserved or
+// URL-unsafe values are rejected with a 422.
+func TestSettingsUpdateArticleRoutePrefix(t *testing.T) {
+	t.Run("valid prefix is stored", func(t *testing.T) {
+		s, h := newSettingsTestServer(t)
+		session := settingsSession(t, s)
+		markSetupCompleted(t, s)
+
+		form := settingsForm()
+		form.Set("article_route_prefix", "blog")
+		rec := doRequest(t, h, http.MethodPost, "/admin/setting", form, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		st, err := s.Q.GetSettings(t.Context())
+		if err != nil {
+			t.Fatalf("get settings: %v", err)
+		}
+		if st.ArticleRoutePrefix.String != "blog" {
+			t.Errorf("article_route_prefix = %q, want blog", st.ArticleRoutePrefix.String)
+		}
+
+		rec = doRequest(t, h, http.MethodGet, "/admin/setting/edit", nil, session)
+		if !strings.Contains(rec.Body.String(), `name="article_route_prefix" value="blog"`) {
+			t.Error("edit page does not show the stored prefix")
+		}
+	})
+
+	t.Run("slashes are trimmed", func(t *testing.T) {
+		s, h := newSettingsTestServer(t)
+		session := settingsSession(t, s)
+		markSetupCompleted(t, s)
+
+		form := settingsForm()
+		form.Set("article_route_prefix", "/blog/")
+		rec := doRequest(t, h, http.MethodPost, "/admin/setting", form, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		st, err := s.Q.GetSettings(t.Context())
+		if err != nil {
+			t.Fatalf("get settings: %v", err)
+		}
+		if st.ArticleRoutePrefix.String != "blog" {
+			t.Errorf("article_route_prefix = %q, want blog", st.ArticleRoutePrefix.String)
+		}
+	})
+
+	t.Run("reserved or unsafe prefixes are rejected with 422", func(t *testing.T) {
+		for _, bad := range []string{"admin", "tags", "twitter", "a/b", "a b", "a.b"} {
+			s, h := newSettingsTestServer(t)
+			session := settingsSession(t, s)
+			markSetupCompleted(t, s)
+
+			form := settingsForm()
+			form.Set("article_route_prefix", bad)
+			rec := doRequest(t, h, http.MethodPost, "/admin/setting", form, session)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Errorf("prefix %q: status = %d, want 422", bad, rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), "Article route prefix is invalid") {
+				t.Errorf("prefix %q: alert not shown", bad)
+			}
+			st, err := s.Q.GetSettings(t.Context())
+			if err != nil {
+				t.Fatalf("get settings: %v", err)
+			}
+			if st.ArticleRoutePrefix.Valid {
+				t.Errorf("prefix %q was stored despite being invalid", bad)
+			}
+		}
+	})
+}
+
 // TestSettingsSharedAccessor: Settings() returns the same cache instance and
 // writes through it are visible to reads (the T12 integration contract).
 func TestSettingsSharedAccessor(t *testing.T) {

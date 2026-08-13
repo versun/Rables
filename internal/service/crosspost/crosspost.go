@@ -36,6 +36,7 @@ import (
 	"rables/internal/kv"
 	"rables/internal/service/activity"
 	"rables/internal/service/media"
+	"rables/internal/settings"
 	"rables/internal/ssrf"
 )
 
@@ -226,8 +227,9 @@ type Dispatcher struct {
 	Media *media.Service
 	Log   *slog.Logger
 
-	// RoutePrefix is ARTICLE_ROUTE_PREFIX for the Read-more link; defaults
-	// to the environment value, like config.Load.
+	// RoutePrefix is the fallback public article route prefix for the
+	// Read-more link (the ARTICLE_ROUTE_PREFIX environment value, like
+	// config.Load); the admin setting overrides it at dispatch time.
 	RoutePrefix string
 	// HTTPClient downloads remote images; nil uses downloadClient.
 	HTTPClient *http.Client
@@ -436,7 +438,7 @@ func (d *Dispatcher) buildInput(ctx context.Context, article query.Article, cfg 
 		MaxLength:           domain.EffectiveMaxCharacters(cfg.Platform, maxChars),
 		CountNonASCIIDouble: domain.PlatformCountNonASCIIDouble(cfg.Platform),
 		SiteURL:             siteURL,
-		RoutePrefix:         d.RoutePrefix,
+		RoutePrefix:         settings.RoutePrefix(ctx, d.q, d.RoutePrefix),
 	})
 	return PostInput{
 		ArticleID: article.ID,

@@ -424,7 +424,7 @@ func (s *Server) listItems(ctx context.Context, articles []query.Article) ([]art
 		}
 		item := articleListItem{
 			ID:       a.ID,
-			URL:      comments.ArticlePath(s.Cfg.ArticleRoutePrefix, a.Slug.String),
+			URL:      comments.ArticlePath(s.routePrefix(ctx), a.Slug.String),
 			DateUnix: a.CreatedAt,
 			Title:    a.Title.String,
 			Tags:     tags,

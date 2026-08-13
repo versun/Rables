@@ -17,6 +17,7 @@ import (
 	"rables/internal/jobs"
 	"rables/internal/service/activity"
 	commentsvc "rables/internal/service/comments"
+	"rables/internal/settings"
 )
 
 // Sender delivers one rendered message; *Mailer satisfies it via Send. The
@@ -30,8 +31,9 @@ type Sender interface {
 // production wiring. It exists so tests can swap the SMTP sender and point
 // the listmonk client at an httptest server.
 type SendConfig struct {
-	// RoutePrefix is the public article route prefix; empty falls back to
-	// the ARTICLE_ROUTE_PREFIX environment variable, like config.Load.
+	// RoutePrefix is the fallback public article route prefix (empty uses the
+	// ARTICLE_ROUTE_PREFIX environment variable, like config.Load); the admin
+	// setting overrides it at send time.
 	RoutePrefix string
 	// NewSender builds the SMTP sender for a resolved config; nil uses
 	// NewMailer.
@@ -285,6 +287,12 @@ func (s *sender) commentableRef(ctx context.Context, c query.Comment, parent que
 	return title, base + path, nil
 }
 
+// routePrefix resolves the effective article route prefix: the admin setting
+// overrides the configured fallback (ARTICLE_ROUTE_PREFIX).
+func (s *sender) routePrefix(ctx context.Context) string {
+	return settings.RoutePrefix(ctx, s.q, s.cfg.RoutePrefix)
+}
+
 func (s *sender) resolveCommentable(ctx context.Context, commentableType string, id sql.NullInt64) (title, path string, ok bool, err error) {
 	if !id.Valid {
 		return "", "", false, nil
@@ -298,7 +306,7 @@ func (s *sender) resolveCommentable(ctx context.Context, commentableType string,
 		if err != nil {
 			return "", "", false, fmt.Errorf("load article %d: %w", id.Int64, err)
 		}
-		return a.Title.String, commentsvc.ArticlePath(s.cfg.RoutePrefix, a.Slug.String), true, nil
+		return a.Title.String, commentsvc.ArticlePath(s.routePrefix(ctx), a.Slug.String), true, nil
 	case "Page":
 		p, err := s.q.GetCommentablePageByID(ctx, id.Int64)
 		if errors.Is(err, sql.ErrNoRows) {

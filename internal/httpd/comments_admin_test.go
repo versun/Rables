@@ -127,6 +127,21 @@ func TestAdminCommentsIndexOrder(t *testing.T) {
 	}
 }
 
+func TestAdminCommentsIndexNoCache(t *testing.T) {
+	s, h := newCommentTestServer(t)
+	session := commentSession(t, s)
+
+	rec := doRequest(t, h, http.MethodGet, "/admin/comments", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	// Authenticated pages must never be cached so a moderation action's
+	// redirect target is always rendered fresh from the database.
+	if cc := rec.Header().Get("Cache-Control"); cc != "private, no-store" {
+		t.Errorf("Cache-Control = %q, want private, no-store", cc)
+	}
+}
+
 func TestAdminCommentsIndexStatusFilter(t *testing.T) {
 	s, h := newCommentTestServer(t)
 	session := commentSession(t, s)

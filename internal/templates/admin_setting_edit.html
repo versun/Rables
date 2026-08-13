@@ -21,6 +21,11 @@
       <label for="description">Site Description</label>
       <input type="text" id="description" name="description" value="{{.Setting.Description.String}}">
     </div>
+    <div class="field">
+      <label for="article_route_prefix">Article Route Prefix</label>
+      <input type="text" id="article_route_prefix" name="article_route_prefix" value="{{.Setting.ArticleRoutePrefix.String}}" placeholder="blog">
+      <small>Optional URL prefix for articles (e.g. <code>blog</code> → <code>/blog/post-slug</code>). Leave empty to serve articles at the root. Applies immediately; old article URLs stop working, so add redirects under /admin/redirects if needed. RSS GUIDs change too, which may make readers see existing articles as new.</small>
+    </div>
     <div class="form-grid form-grid-2">
       <div class="field">
         <label for="url">Site URL</label>

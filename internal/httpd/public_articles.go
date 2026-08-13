@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"html/template"
@@ -16,26 +17,68 @@ import (
 )
 
 // RegisterArticleRoutes mounts the public article index and show pages,
-// mirroring the Rails root route plus the ARTICLE_ROUTE_PREFIX scope (routes
-// must stay last in NewRouter — /{slug} is the catch-all):
+// mirroring the Rails root route plus the article-route-prefix scope (routes
+// must stay last in NewRouter — /{p1} is the catch-all):
 //
 //	root "articles#index"                        GET /
 //	scope path: article_route_prefix do
 //	  get "/"      => articles#index             GET /{prefix}/
 //	  get "/:slug" => articles#show              GET /{prefix}/{slug}
 //
-// Without a prefix the scoped routes sit at / and /{slug}. The Rails root
-// route serves the index at "/" even when a prefix is configured, so both
-// index paths are registered then.
+// The prefix is a request-time setting (s.routePrefix), so generic wildcard
+// routes are registered and the handlers validate the prefix per request: a
+// settings change takes effect without a restart or re-registration. chi
+// requires one param name per path position, so the root wildcard is {p1}
+// everywhere; the handlers interpret it as prefix or slug.
 func RegisterArticleRoutes(r chi.Router, s *Server) {
-	prefix := strings.Trim(s.Cfg.ArticleRoutePrefix, "/")
 	r.Get("/", s.publicArticleIndex)
-	if prefix == "" {
-		r.Get("/{slug}", s.publicArticleShow)
+	r.Get("/{p1}", s.publicArticleShowAtRoot)
+	r.Get("/{p1}/", s.publicArticleIndexAtPrefix)
+	r.Get("/{p1}/{slug}", s.publicArticleShowAtPrefix)
+}
+
+// routePrefix resolves the effective public article route prefix: the admin
+// setting (settings.article_route_prefix) when set, otherwise the
+// ARTICLE_ROUTE_PREFIX environment value. It is read per request — through
+// the settings cache — so a settings change applies immediately.
+func (s *Server) routePrefix(ctx context.Context) string {
+	if st, err := s.Settings().Get(ctx); err == nil {
+		if p := strings.Trim(st.ArticleRoutePrefix.String, "/"); p != "" {
+			return p
+		}
+	}
+	return strings.Trim(s.Cfg.ArticleRoutePrefix, "/")
+}
+
+// publicArticleShowAtRoot serves /{slug} only when no route prefix is
+// configured; with a prefix the bare slug is not routed (Rails scope
+// behavior) and answers the static 404.
+func (s *Server) publicArticleShowAtRoot(w http.ResponseWriter, r *http.Request) {
+	if s.routePrefix(r.Context()) != "" {
+		s.publicNotFound(w)
 		return
 	}
-	r.Get("/"+prefix+"/", s.publicArticleIndex)
-	r.Get("/"+prefix+"/{slug}", s.publicArticleShow)
+	s.publicArticleShow(w, r, slugParam(r, "p1"))
+}
+
+// publicArticleIndexAtPrefix serves /{p1}/ as the article index only when p1
+// matches the configured prefix.
+func (s *Server) publicArticleIndexAtPrefix(w http.ResponseWriter, r *http.Request) {
+	if p := s.routePrefix(r.Context()); p == "" || chi.URLParam(r, "p1") != p {
+		s.publicNotFound(w)
+		return
+	}
+	s.publicArticleIndex(w, r)
+}
+
+// publicArticleShowAtPrefix serves /{p1}/{slug} only when p1 matches the
+// configured prefix.
+func (s *Server) publicArticleShowAtPrefix(w http.ResponseWriter, r *http.Request) {
+	if p := s.routePrefix(r.Context()); p == "" || chi.URLParam(r, "p1") != p {
+		s.publicNotFound(w)
+		return
+	}
+	s.publicArticleShow(w, r, slugParam(r, "slug"))
 }
 
 // publicIndexData feeds public_index.html.
@@ -147,10 +190,11 @@ type publicArticleData struct {
 
 // publicArticleShow renders GET /{slug} (or /{prefix}/{slug}), mirroring
 // ArticlesController#show: publish/shared are public, other statuses require
-// authentication, anything else is the static 404.
-func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request) {
+// authentication, anything else is the static 404. The slug is resolved by
+// the routing wrapper (the root wildcard is named {p1}, see
+// RegisterArticleRoutes).
+func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request, slug string) {
 	ctx := r.Context()
-	slug := slugParam(r, "slug")
 	article, err := s.Q.GetPublicArticleBySlug(ctx, sql.NullString{String: slug, Valid: true})
 	if errors.Is(err, sql.ErrNoRows) {
 		s.publicNotFound(w)
@@ -217,7 +261,7 @@ func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request) {
 		MetaTitle:       metaTitle,
 		MetaDescription: metaDescription,
 		MetaImage:       metaImage,
-		FullURL:         chrome.SiteURL + comments.ArticlePath(s.Cfg.ArticleRoutePrefix, slug),
+		FullURL:         chrome.SiteURL + comments.ArticlePath(s.routePrefix(ctx), slug),
 		Tags:            tags,
 		SourceRef:       buildSourceReference(article.SourceAuthor.String, article.SourceContent.String, article.SourceUrl.String),
 		Comments:        section,

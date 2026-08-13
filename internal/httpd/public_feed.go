@@ -46,8 +46,9 @@ func (s *Server) publicFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := make([]rssItem, 0, len(articles))
+	prefix := s.routePrefix(ctx)
 	for _, a := range articles {
-		link := comments.ArticlePath(s.Cfg.ArticleRoutePrefix, a.Slug.String)
+		link := comments.ArticlePath(prefix, a.Slug.String)
 		if siteURL != "" {
 			link = siteURL + link
 		}
@@ -99,8 +100,9 @@ func (s *Server) publicTagRSS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := make([]rssItem, 0, len(articles))
+	prefix := s.routePrefix(ctx)
 	for _, a := range articles {
-		link := comments.ArticlePath(s.Cfg.ArticleRoutePrefix, a.Slug.String)
+		link := comments.ArticlePath(prefix, a.Slug.String)
 		if siteURL != "" {
 			link = siteURL + link
 		}

@@ -12,7 +12,7 @@ Required environment:
 | `DATA_DIR` | `./data` | SQLite DB + uploaded files live here |
 | `HMAC_SECRET` | — | **required**, signs math-captcha tokens; app refuses to boot without it |
 | `LOG_LEVEL` | `info` | `debug\|info\|warn\|error` |
-| `ARTICLE_ROUTE_PREFIX` | — | optional public route prefix |
+| `ARTICLE_ROUTE_PREFIX` | — | fallback public route prefix; the admin setting (/admin/setting/edit) takes precedence and applies live |
 | `TRUST_X_FORWARDED_FOR` | `false` | `1`/`true`/`yes`: key rate limits off the rightmost `X-Forwarded-For` hop (the one the proxy appended) — enable only behind a reverse proxy that appends to the header |
 | `SECURE_COOKIES` | `false` | `1`/`true`/`yes`: add `Secure` to session/flash cookies (enable when serving HTTPS) |
 

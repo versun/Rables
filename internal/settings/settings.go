@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,6 +85,19 @@ func (c *Cache) Invalidate() {
 	c.mu.Lock()
 	c.valid = false
 	c.mu.Unlock()
+}
+
+// RoutePrefix resolves the effective article route prefix for background
+// services that run outside the httpd settings cache: the
+// settings.article_route_prefix column when set, otherwise envFallback (the
+// ARTICLE_ROUTE_PREFIX environment value, like config.Load).
+func RoutePrefix(ctx context.Context, q *query.Queries, envFallback string) string {
+	if row, err := q.GetSettings(ctx); err == nil {
+		if p := strings.Trim(row.ArticleRoutePrefix.String, "/"); p != "" {
+			return p
+		}
+	}
+	return strings.Trim(envFallback, "/")
 }
 
 // SocialLink is one platform entry of the settings.social_links JSON object.

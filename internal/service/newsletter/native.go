@@ -73,9 +73,10 @@ func (s *sender) sendNative(ctx context.Context, articleID int64, st query.Newsl
 	tokenBase := tokenBaseURL(rawURL)
 
 	mailer := s.cfg.NewSender(smtpCfg)
+	prefix := s.routePrefix(ctx)
 	successCount, failCount := 0, 0
 	for _, r := range relevant {
-		msg, err := s.articleMessage(article, r, tokens[r.ID], siteTitle, base, tokenBase, st)
+		msg, err := s.articleMessage(article, r, tokens[r.ID], siteTitle, base, tokenBase, prefix, st)
 		if err == nil {
 			err = mailer.Send(ctx, msg)
 		}
@@ -146,7 +147,7 @@ func (s *sender) articleTagIDs(ctx context.Context, articleID int64) ([]int64, e
 }
 
 // articleMessage renders NewsletterMailer#article_email for one subscriber.
-func (s *sender) articleMessage(article query.Article, r subscribersvc.Recipient, unsubscribeToken, siteTitle, base, tokenBase string, st query.NewsletterSetting) (Message, error) {
+func (s *sender) articleMessage(article query.Article, r subscribersvc.Recipient, unsubscribeToken, siteTitle, base, tokenBase, routePrefix string, st query.NewsletterSetting) (Message, error) {
 	htmlBody, textBody, err := RenderArticleEmail(ArticleEmailData{
 		Title:         article.Title.String,
 		Description:   article.Description.String,
@@ -157,7 +158,7 @@ func (s *sender) articleMessage(article query.Article, r subscribersvc.Recipient
 		//nolint:gosec // sanitized at write time (plan section 4.4)
 		ContentHTML:    template.HTML(article.ContentHtml.String),
 		ContentText:    domain.PlainText(article.ContentHtml.String),
-		ArticleURL:     base + commentsvc.ArticlePath(s.cfg.RoutePrefix, article.Slug.String),
+		ArticleURL:     base + commentsvc.ArticlePath(routePrefix, article.Slug.String),
 		UnsubscribeURL: unsubscribeURL(tokenBase, unsubscribeToken),
 	})
 	if err != nil {

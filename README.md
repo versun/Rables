@@ -38,7 +38,7 @@ Configuration via environment variables:
 | `ADDR` | `:8080` | Listen address |
 | `DATA_DIR` | `./data` | SQLite DB + uploaded files live here |
 | `HMAC_SECRET` | *(required)* | Signs math-captcha tokens |
-| `ARTICLE_ROUTE_PREFIX` | *(empty)* | Optional prefix for article URLs (e.g. `blog`) |
+| `ARTICLE_ROUTE_PREFIX` | *(empty)* | Fallback prefix for article URLs (e.g. `blog`); the admin setting at /admin/setting/edit overrides it and applies without a restart |
 | `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` (JSON logs to stdout) |
 | `TRUST_X_FORWARDED_FOR` | `false` | `1`/`true`/`yes`: key rate limits off the rightmost `X-Forwarded-For` hop (the one the proxy appended) — enable only behind a reverse proxy that appends to the header |
 | `SECURE_COOKIES` | `false` | `1`/`true`/`yes`: add `Secure` to session/flash cookies (enable when serving HTTPS) |

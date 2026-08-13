@@ -245,3 +245,78 @@ func TestArticleRoutePrefix(t *testing.T) {
 		}
 	})
 }
+
+// setRoutePrefix writes settings.article_route_prefix directly, like the
+// admin settings form would, and drops the cached row.
+func setRoutePrefix(t *testing.T, s *Server, prefix string) {
+	t.Helper()
+	if _, err := s.Settings().Get(t.Context()); err != nil {
+		t.Fatalf("ensure settings: %v", err)
+	}
+	if _, err := s.DB.Exec(`UPDATE settings SET article_route_prefix = ? WHERE id = 1`, prefix); err != nil {
+		t.Fatalf("set route prefix: %v", err)
+	}
+	s.Settings().Invalidate()
+}
+
+// TestArticleRoutePrefixFromSettings covers the admin-configured prefix: it
+// applies on the same Server instance (no restart) and overrides the
+// environment fallback.
+func TestArticleRoutePrefixFromSettings(t *testing.T) {
+	s, h := newPublicTestServer(t, "envprefix")
+	seedArticle(t, s, seedArticleOpts{slug: "prefixed", title: "Prefixed", status: 1})
+	setSiteURL(t, s, "https://blog.example.com")
+
+	// Environment fallback applies while the setting is empty.
+	if rec := get(t, h, "/envprefix/prefixed"); rec.Code != http.StatusOK {
+		t.Fatalf("env prefix show: status = %d, want 200", rec.Code)
+	}
+
+	// Saving the setting re-routes without a restart or re-registration.
+	setRoutePrefix(t, s, "blog")
+
+	t.Run("show under the configured prefix", func(t *testing.T) {
+		if rec := get(t, h, "/blog/prefixed"); rec.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200", rec.Code)
+		}
+	})
+
+	t.Run("setting overrides the environment value", func(t *testing.T) {
+		if rec := get(t, h, "/envprefix/prefixed"); rec.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("no root catch-all with prefix", func(t *testing.T) {
+		if rec := get(t, h, "/prefixed"); rec.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("unknown first segment is 404", func(t *testing.T) {
+		if rec := get(t, h, "/other/prefixed"); rec.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("index under prefix and at root", func(t *testing.T) {
+		for _, target := range []string{"/blog/", "/"} {
+			if rec := get(t, h, target); rec.Code != http.StatusOK {
+				t.Errorf("GET %s: status = %d, want 200", target, rec.Code)
+			}
+		}
+	})
+
+	t.Run("feed item links carry the prefix", func(t *testing.T) {
+		body := get(t, h, "/feed.xml").Body.String()
+		if !strings.Contains(body, "https://blog.example.com/blog/prefixed") {
+			t.Error("feed item link missing route prefix")
+		}
+	})
+
+	// Clearing the setting falls back to the environment value again.
+	setRoutePrefix(t, s, "")
+	if rec := get(t, h, "/envprefix/prefixed"); rec.Code != http.StatusOK {
+		t.Errorf("env fallback after clearing: status = %d, want 200", rec.Code)
+	}
+}

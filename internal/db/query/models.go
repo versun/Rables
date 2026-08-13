@@ -198,20 +198,21 @@ type Session struct {
 }
 
 type Setting struct {
-	ID             int64
-	Title          sql.NullString
-	Description    sql.NullString
-	Author         sql.NullString
-	Url            sql.NullString
-	TimeZone       string
-	HeadCode       sql.NullString
-	CustomCss      sql.NullString
-	ToolCode       sql.NullString
-	Giscus         sql.NullString
-	SocialLinks    sql.NullString
-	SetupCompleted int64
-	CreatedAt      int64
-	UpdatedAt      int64
+	ID                 int64
+	Title              sql.NullString
+	Description        sql.NullString
+	Author             sql.NullString
+	Url                sql.NullString
+	TimeZone           string
+	HeadCode           sql.NullString
+	CustomCss          sql.NullString
+	ToolCode           sql.NullString
+	Giscus             sql.NullString
+	SocialLinks        sql.NullString
+	SetupCompleted     int64
+	CreatedAt          int64
+	UpdatedAt          int64
+	ArticleRoutePrefix sql.NullString
 }
 
 type SocialMediaPost struct {

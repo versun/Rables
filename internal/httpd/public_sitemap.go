@@ -52,7 +52,7 @@ func (s *Server) publicSitemap(w http.ResponseWriter, r *http.Request) {
 			writeSitemapURL(&b, siteURL+comments.PagePath(p.Slug.String), time.Unix(p.UpdatedAt, 0).In(loc), "weekly", "0.8")
 		}
 		for _, a := range articles {
-			writeSitemapURL(&b, siteURL+comments.ArticlePath(s.Cfg.ArticleRoutePrefix, a.Slug.String), time.Unix(a.UpdatedAt, 0).In(loc), "weekly", "0.8")
+			writeSitemapURL(&b, siteURL+comments.ArticlePath(s.routePrefix(ctx), a.Slug.String), time.Unix(a.UpdatedAt, 0).In(loc), "weekly", "0.8")
 		}
 	}
 	b.WriteString("</urlset>\n")

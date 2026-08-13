@@ -20,11 +20,34 @@ const twitterArchivePerPage = 20
 
 // RegisterTwitterArchivePublicRoutes mounts the public archive page,
 // mirroring the twitter_archive route: GET /twitter/archive, or
-// GET /{prefix}/twitter/archive when ARTICLE_ROUTE_PREFIX is set. The
-// integrator must wire it before RegisterArticleRoutes so the static path
-// beats the /{slug} catch-all.
+// GET /{prefix}/twitter/archive when an article route prefix is set. The
+// prefix is a request-time setting (s.routePrefix), so both path shapes are
+// registered and the handlers validate the prefix per request — a settings
+// change applies without re-registration. The integrator must wire it before
+// RegisterArticleRoutes so the static path beats the /{p1} catch-all.
 func RegisterTwitterArchivePublicRoutes(r chi.Router, s *Server) {
-	r.Get(twitterArchivePublicPath(s.Cfg.ArticleRoutePrefix), s.publicTwitterArchiveShow)
+	r.Get("/twitter/archive", s.publicTwitterArchiveShowAtRoot)
+	r.Get("/{p1}/twitter/archive", s.publicTwitterArchiveShowAtPrefix)
+}
+
+// publicTwitterArchiveShowAtRoot serves /twitter/archive only when no route
+// prefix is configured.
+func (s *Server) publicTwitterArchiveShowAtRoot(w http.ResponseWriter, r *http.Request) {
+	if s.routePrefix(r.Context()) != "" {
+		s.publicNotFound(w)
+		return
+	}
+	s.publicTwitterArchiveShow(w, r)
+}
+
+// publicTwitterArchiveShowAtPrefix serves /{p1}/twitter/archive only when p1
+// matches the configured prefix.
+func (s *Server) publicTwitterArchiveShowAtPrefix(w http.ResponseWriter, r *http.Request) {
+	if p := s.routePrefix(r.Context()); p == "" || chi.URLParam(r, "p1") != p {
+		s.publicNotFound(w)
+		return
+	}
+	s.publicTwitterArchiveShow(w, r)
 }
 
 // twitterArchiveMediaItem is one attached media file of a tweet card.
@@ -94,7 +117,7 @@ func (s *Server) publicTwitterArchiveShow(w http.ResponseWriter, r *http.Request
 		ActiveTab: tab,
 		IsLikeTab: tab == "like",
 	}
-	basePath := twitterArchivePublicPath(s.Cfg.ArticleRoutePrefix)
+	basePath := twitterArchivePublicPath(s.routePrefix(ctx))
 	for _, t := range twitterarchive.Tabs {
 		link := twitterArchiveTabLink{Label: t.Label, Active: t.Key == tab}
 		if t.Key == twitterarchive.EntryTypeTweet {

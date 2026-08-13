@@ -188,7 +188,7 @@ func (s *Server) displayCommentable(ctx context.Context, c query.Comment) (title
 		switch typ.String {
 		case "Article":
 			if a, err := s.Q.GetCommentableArticleByID(ctx, id.Int64); err == nil {
-				return titleOrSlug(a.Title, a.Slug), comments.ArticlePath(s.Cfg.ArticleRoutePrefix, a.Slug.String)
+				return titleOrSlug(a.Title, a.Slug), comments.ArticlePath(s.routePrefix(ctx), a.Slug.String)
 			}
 		case "Page":
 			if p, err := s.Q.GetCommentablePageByID(ctx, id.Int64); err == nil {
@@ -199,7 +199,7 @@ func (s *Server) displayCommentable(ctx context.Context, c query.Comment) (title
 	}
 	if c.ArticleID.Valid {
 		if a, err := s.Q.GetCommentableArticleByID(ctx, c.ArticleID.Int64); err == nil {
-			return titleOrSlug(a.Title, a.Slug), comments.ArticlePath(s.Cfg.ArticleRoutePrefix, a.Slug.String)
+			return titleOrSlug(a.Title, a.Slug), comments.ArticlePath(s.routePrefix(ctx), a.Slug.String)
 		}
 	}
 	return "", ""
