@@ -529,6 +529,64 @@ func TestPublicTagPagination(t *testing.T) {
 	})
 }
 
+// TestPublicTagNewsletterDialog: with the native newsletter enabled, the tag
+// page hides its subscribe form behind a "Newsletter" toggle next to the RSS
+// link; disabled, it renders no toggle at all.
+func TestPublicTagNewsletterDialog(t *testing.T) {
+	t.Run("enabled renders toggle and dialog form", func(t *testing.T) {
+		s, h := newPublicTestServer(t, "")
+		seedTag(t, s, "Go", "go")
+		enableNativeNewsletter(t, s)
+
+		body := get(t, h, "/tags/go").Body.String()
+		for _, want := range []string{
+			`data-controller="tag-newsletter"`,
+			`click->tag-newsletter#toggle`,
+			`data-tag-newsletter-target="dialog"`,
+			`通过邮件订阅该标签的更新`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("tag page missing %q", want)
+			}
+		}
+	})
+
+	t.Run("disabled renders no toggle", func(t *testing.T) {
+		s, h := newPublicTestServer(t, "")
+		seedTag(t, s, "Go", "go")
+
+		body := get(t, h, "/tags/go").Body.String()
+		if strings.Contains(body, "tag-newsletter") {
+			t.Error("tag page renders newsletter toggle with newsletter disabled")
+		}
+	})
+}
+
+// TestPublicArticleTags: the article page shows its tags as links in the
+// article meta line; an untagged article renders no tags block.
+func TestPublicArticleTags(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	artID := seedArticle(t, s, seedArticleOpts{slug: "tagged", title: "Tagged", status: int64(domain.StatusPublish)})
+	tagArticle(t, s, artID, seedTag(t, s, "Go", "go"))
+	seedArticle(t, s, seedArticleOpts{slug: "untagged", title: "Untagged", status: int64(domain.StatusPublish)})
+
+	t.Run("tagged article renders tag links", func(t *testing.T) {
+		body := get(t, h, "/tagged").Body.String()
+		for _, want := range []string{`class="article-tags timeline-tags"`, `href="/tags/go"`, "#Go"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("article page missing %q", want)
+			}
+		}
+	})
+
+	t.Run("untagged article renders no tags block", func(t *testing.T) {
+		body := get(t, h, "/untagged").Body.String()
+		if strings.Contains(body, "article-tags") {
+			t.Error("untagged article renders the tags block")
+		}
+	})
+}
+
 // TestPublicSearch covers Article.search_content escaping (plan section 4.3).
 func TestPublicSearch(t *testing.T) {
 	s, h := newPublicTestServer(t, "")

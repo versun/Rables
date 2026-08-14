@@ -6,8 +6,8 @@
    checkboxes); .Inline=true is the navbar / tag-page form (async submit,
    .HiddenTagID preselects a tag). The navbar form (.HiddenTagID 0) is a
    plain block form with the compact one-line captcha below the inputs,
-   while the tag-page form keeps the inline-flex tag-subscription-form-inline-small
-   layout. Show=false renders nothing. */}}
+   while the tag-page form stacks the captcha between the email input and
+   the submit button. Show=false renders nothing. */}}
 {{define "subscribe_captcha_fields"}}
 <div data-math-captcha-target="container">
   <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
@@ -40,15 +40,26 @@
 {{if .Show}}
 {{if .Inline}}
 <div class="newsletter-subscription" data-controller="newsletter-subscription math-captcha" data-action="submit->newsletter-subscription#submit" data-math-captcha-max-value="10">
-  <form method="post" action="/subscriptions"{{if gt .HiddenTagID 0}} class="tag-subscription-form-inline-small"{{end}} data-newsletter-subscription-target="form" data-action="submit->math-captcha#ensureValid">
-    {{if gt .HiddenTagID 0}}<input type="hidden" name="subscription[tag_ids][]" value="{{.HiddenTagID}}">{{end}}
+  {{if gt .HiddenTagID 0}}
+  <form method="post" action="/subscriptions" data-newsletter-subscription-target="form" data-action="submit->math-captcha#ensureValid">
+    <input type="hidden" name="subscription[tag_ids][]" value="{{.HiddenTagID}}">
+    <div class="newsletter-form-group">
+      <input type="email" name="subscription[email]" placeholder="{{.Placeholder}}" required class="newsletter-email-input" data-newsletter-subscription-target="emailInput" data-action="focus->math-captcha#show">
+      {{template "subscribe_captcha_fields" .}}
+      <input type="submit" value="订阅" class="newsletter-submit-btn" data-newsletter-subscription-target="submitBtn">
+    </div>
+    <div class="newsletter-message" data-newsletter-subscription-target="message"></div>
+  </form>
+  {{else}}
+  <form method="post" action="/subscriptions" data-newsletter-subscription-target="form" data-action="submit->math-captcha#ensureValid">
     <div class="newsletter-form-group">
       <input type="email" name="subscription[email]" placeholder="{{.Placeholder}}" required class="newsletter-email-input" data-newsletter-subscription-target="emailInput" data-action="focus->math-captcha#show">
       <input type="submit" value="订阅" class="newsletter-submit-btn" data-newsletter-subscription-target="submitBtn">
     </div>
-    {{if gt .HiddenTagID 0}}{{template "subscribe_captcha_fields" .}}{{else}}{{template "subscribe_captcha_fields_inline" .}}{{end}}
+    {{template "subscribe_captcha_fields_inline" .}}
     <div class="newsletter-message" data-newsletter-subscription-target="message"></div>
   </form>
+  {{end}}
 </div>
 {{else}}
 <form method="post" action="/subscriptions" class="newsletter-subscription-form" data-controller="math-captcha" data-math-captcha-max-value="10" data-action="submit->math-captcha#ensureValid">

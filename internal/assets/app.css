@@ -293,6 +293,34 @@ ul {
     border: 1px solid #f5c6cb;
 }
 
+/* Tag-page newsletter popover: the subscribe form hides behind the
+ * "Newsletter" link next to the RSS link and opens as a small dialog. */
+.tag-newsletter {
+    position: relative;
+    display: inline-block;
+}
+
+.tag-newsletter-dialog {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 6px;
+    width: 300px;
+    max-width: 90vw;
+    padding: 1rem;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+}
+
+.tag-newsletter-dialog .newsletter-subscription {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+}
+
 /* Tag page / inline subscription forms */
 .tag-subscription-form {
     margin-bottom: 2rem;
@@ -305,13 +333,6 @@ ul {
     display: inline-flex;
     flex-direction: column;
     align-items: flex-start;
-}
-
-.tag-subscription-form-inline-small {
-    display: inline-flex;
-    gap: 4px;
-    align-items: center;
-    flex-wrap: nowrap;
 }
 
 .subscription-tags-label {
@@ -570,6 +591,10 @@ h2 {
     gap: 0.5rem;
     margin-bottom: 1rem;
     font-size: 0.875rem;
+}
+
+.article-meta .article-tags {
+    margin-left: auto;
 }
 
 .article-content {
@@ -1240,6 +1265,12 @@ select:disabled {
 }
 
 [data-theme="dark"] .share-menu {
+    background-color: #2a2a2a;
+    border-color: var(--border-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .tag-newsletter-dialog {
     background-color: #2a2a2a;
     border-color: var(--border-color);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);

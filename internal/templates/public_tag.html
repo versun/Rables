@@ -16,7 +16,15 @@
           <span>{{.Total}} article{{if ne .Total 1}}s{{end}} found</span>
           <span style="margin: 0 0.5rem;">·</span>
           <a href="/tags/{{.Tag.Slug}}.rss" style="color: #666; text-decoration: underline;">RSS</a>
-          {{template "subscribe_form" .Subscribe}}
+          {{if .Subscribe.Show}}
+          <span style="margin: 0 0.5rem;">·</span>
+          <span class="tag-newsletter" data-controller="tag-newsletter">
+            <a href="#" style="color: #666; text-decoration: underline;" data-action="click->tag-newsletter#toggle">Newsletter</a>
+            <div class="tag-newsletter-dialog" data-tag-newsletter-target="dialog" style="display: none;">
+              {{template "subscribe_form" .Subscribe}}
+            </div>
+          </span>
+          {{end}}
         </div>
         {{if .List.Items}}
         {{template "article_list" .List}}

@@ -859,6 +859,43 @@
     }
   }
 
+  // --- tag_newsletter -------------------------------------------------------
+  // Tag-page "Newsletter" link next to the RSS link: toggles the small
+  // subscribe dialog and closes it on outside click, like share.
+
+  class TagNewsletterController extends Controller {
+    static targets = ["dialog"];
+
+    connect() {
+      this.boundCloseOnOutsideClick = this.closeOnOutsideClick.bind(this);
+    }
+
+    toggle(event) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const isVisible = this.dialogTarget.style.display === "block";
+      this.dialogTarget.style.display = isVisible ? "none" : "block";
+
+      if (!isVisible) {
+        const emailInput = this.dialogTarget.querySelector("input[type='email']");
+        if (emailInput) emailInput.focus();
+        setTimeout(() => {
+          document.addEventListener("click", this.boundCloseOnOutsideClick);
+        }, 0);
+      } else {
+        document.removeEventListener("click", this.boundCloseOnOutsideClick);
+      }
+    }
+
+    closeOnOutsideClick(event) {
+      if (!this.element.contains(event.target)) {
+        this.dialogTarget.style.display = "none";
+        document.removeEventListener("click", this.boundCloseOnOutsideClick);
+      }
+    }
+  }
+
   // --- password_toggle ----------------------------------------------------------
 
   class PasswordToggleController extends Controller {
@@ -1284,6 +1321,7 @@
   registry.set("share", ShareController);
   registry.set("sidebar", SidebarController);
   registry.set("source-reference", SourceReferenceController);
+  registry.set("tag-newsletter", TagNewsletterController);
   registry.set("theme-toggle", ThemeToggleController);
 
   function start() {

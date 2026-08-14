@@ -66,6 +66,11 @@
               </a>
             </div>
           </span>
+          {{if .Tags}}
+          <span class="article-tags timeline-tags">
+            {{range .Tags}}<a href="/tags/{{.Slug}}" class="tag">#{{.Name}}</a>{{end}}
+          </span>
+          {{end}}
         </small>
         {{.SourceRef}}
         <div class="article-content">
