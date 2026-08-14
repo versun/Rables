@@ -24,6 +24,7 @@ func TestAssetsRoutes(t *testing.T) {
 		{"/assets/admin.css", "text/css; charset=utf-8"},
 		{"/assets/lexxy.min.js", "text/javascript; charset=utf-8"},
 		{"/assets/lexxy.css", "text/css; charset=utf-8"},
+		{"/assets/activestorage_shim.js", "text/javascript; charset=utf-8"},
 	}
 
 	for _, tc := range cases {

@@ -206,6 +206,125 @@ func TestRSSImportEntries(t *testing.T) {
 	}
 }
 
+// TestRSSImportOnly imports only the entries whose link was selected in the
+// admin preview; unknown links match nothing and a nil selection imports
+// everything.
+func TestRSSImportOnly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, rssTestFeed)
+	}))
+	defer srv.Close()
+
+	database, dataDir := newTestDB(t)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: stubLookup(nil)}
+	result, err := imp.ImportOnly(context.Background(), srv.URL+"/feed", false,
+		[]string{"https://blog.example/posts/second-post/", "https://blog.example/posts/no-such-entry"})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != 1 || result.Failed != 0 {
+		t.Errorf("result = %+v, want imported=1 failed=0", result)
+	}
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM articles WHERE slug = 'second-post'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("second-post count = %d, want 1", count)
+	}
+	if got := tableCount(t, database, "articles"); got != 1 {
+		t.Errorf("articles = %d, want only the selected entry", got)
+	}
+}
+
+// TestPreviewItems covers the preview list: entries without a link are left
+// out, a missing title falls back to the published timestamp, and the
+// published time is exposed as unix seconds.
+func TestPreviewItems(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, rssTestFeed)
+	}))
+	defer srv.Close()
+
+	imp := &RSSImporter{LookupIP: stubLookup(nil)}
+	feed, err := imp.FetchFeed(context.Background(), srv.URL+"/feed")
+	if err != nil {
+		t.Fatalf("fetch feed: %v", err)
+	}
+	items := PreviewItems(feed)
+	// The feed's link-less entry must not appear.
+	if len(items) != 3 {
+		t.Fatalf("items = %d, want 3: %+v", len(items), items)
+	}
+	first := items[0]
+	if first.Title != "First Post" || first.Link != "https://blog.example/posts/first-post" {
+		t.Errorf("first item = %+v, want First Post with its link", first)
+	}
+	if first.Published != 1136214245 {
+		t.Errorf("first published = %d, want 1136214245", first.Published)
+	}
+}
+
+// TestRSSImportUpdatedAt takes updated_at from the entry's updated timestamp
+// when the feed carries one, falling back to the import time otherwise.
+func TestRSSImportUpdatedAt(t *testing.T) {
+	const atomFeed = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example</title>
+  <entry>
+    <title>Updated Post</title>
+    <link href="https://blog.example/posts/updated-post"/>
+    <published>2006-01-02T15:04:05Z</published>
+    <updated>2007-03-04T05:06:07Z</updated>
+    <content type="html">&lt;p&gt;hello&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <title>No Updated Post</title>
+    <link href="https://blog.example/posts/no-updated-post"/>
+    <published>2006-01-02T15:04:05Z</published>
+    <content type="html">&lt;p&gt;hi&lt;/p&gt;</content>
+  </entry>
+</feed>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/atom+xml")
+		fmt.Fprint(w, atomFeed)
+	}))
+	defer srv.Close()
+
+	database, dataDir := newTestDB(t)
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	imp := &RSSImporter{DB: database, DataDir: dataDir, LookupIP: stubLookup(nil), Now: func() time.Time { return now }}
+	result, err := imp.Import(context.Background(), srv.URL+"/feed", false)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if result.Imported != 2 || result.Failed != 0 {
+		t.Errorf("result = %+v, want imported=2 failed=0", result)
+	}
+
+	var createdAt, updatedAt int64
+	err = database.QueryRow(`SELECT created_at, updated_at FROM articles WHERE slug = 'updated-post'`).Scan(&createdAt, &updatedAt)
+	if err != nil {
+		t.Fatalf("query updated-post: %v", err)
+	}
+	if createdAt != time.Date(2006, 1, 2, 15, 4, 5, 0, time.UTC).Unix() {
+		t.Errorf("created_at = %d, want the published timestamp", createdAt)
+	}
+	if want := time.Date(2007, 3, 4, 5, 6, 7, 0, time.UTC).Unix(); updatedAt != want {
+		t.Errorf("updated_at = %d, want the entry's updated timestamp %d", updatedAt, want)
+	}
+
+	err = database.QueryRow(`SELECT updated_at FROM articles WHERE slug = 'no-updated-post'`).Scan(&updatedAt)
+	if err != nil {
+		t.Fatalf("query no-updated-post: %v", err)
+	}
+	if updatedAt != now.Unix() {
+		t.Errorf("updated_at = %d, want the import time %d for an entry without updated", updatedAt, now.Unix())
+	}
+}
+
 // TestRSSImportUnsafeFeedURL rejects feeds resolving to private addresses.
 func TestRSSImportUnsafeFeedURL(t *testing.T) {
 	database, dataDir := newTestDB(t)

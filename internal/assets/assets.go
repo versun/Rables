@@ -2,12 +2,13 @@
 // /assets/: app.js (vanilla JS, plan §9), app.css (public/auth core styles),
 // admin.css (the scoped admin design system, loaded by admin_layout.html),
 // the vendored lexxy rich-text editor (lexxy.min.js + lexxy.css, lexxy gem
-// 0.9.28, MIT — the same editor Rails uses via the lexxy gem) and the
-// vendored EasyMDE markdown editor (easymde.min.js + easymde.min.css,
-// v2.20.0, MIT).
+// 0.9.28, MIT — the same editor Rails uses via the lexxy gem), the
+// @rails/activestorage shim lexxy's attachment uploads resolve through the
+// admin import map (activestorage_shim.js), and the vendored EasyMDE markdown
+// editor (easymde.min.js + easymde.min.css, v2.20.0, MIT).
 package assets
 
 import "embed"
 
-//go:embed app.js app.css admin.css lexxy.min.js lexxy.css easymde.min.js easymde.min.css
+//go:embed app.js app.css admin.css lexxy.min.js lexxy.css activestorage_shim.js easymde.min.js easymde.min.css
 var FS embed.FS

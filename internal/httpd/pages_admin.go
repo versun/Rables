@@ -601,7 +601,7 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 			errs = append(errs, "Content can't be blank")
 		}
 	default:
-		if domain.IsBlank(domain.PlainText(in.RawContent)) {
+		if !domain.HasContent(in.RawContent) {
 			errs = append(errs, "Content can't be blank")
 		}
 	}

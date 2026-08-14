@@ -122,20 +122,55 @@
 
 <div class="card">
   <h2 class="card-title">Import from RSS</h2>
-  <p class="card-desc">Import articles from an RSS feed URL.</p>
+  <p class="card-desc">Import articles from an RSS feed URL. Fetch the feed first, then select the entries to import.</p>
   <form method="post" action="/admin/migrates/import_rss">
     <div class="field">
       <label for="url">RSS URL</label>
-      <input type="text" name="url" id="url" placeholder="https://example.com/feed.xml">
+      <input type="text" name="url" id="url" placeholder="https://example.com/feed.xml" value="{{.RSSURL}}">
     </div>
     <div class="field-checkbox">
-      <input type="checkbox" name="import_images" id="import_images" value="1">
+      <input type="checkbox" name="import_images" id="import_images" value="1" {{if .RSSImportImages}}checked{{end}}>
       <label for="import_images">Import Images</label>
     </div>
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Import From RSS</button>
+      <button type="submit" class="btn btn-primary">Fetch Feed</button>
     </div>
   </form>
+
+  {{if .RSSURL}}
+    {{if .RSSItems}}
+  <form method="post" action="/admin/migrates/import_rss_confirm">
+    <input type="hidden" name="url" value="{{.RSSURL}}">
+    {{if .RSSImportImages}}<input type="hidden" name="import_images" value="1">{{end}}
+    <p class="card-desc">{{len .RSSItems}} entries found. Select the ones to import:</p>
+    <div class="table-card">
+      <table class="table">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="rss-select-all" checked onclick="document.querySelectorAll('.rss-entry').forEach(function(cb){cb.checked=document.getElementById('rss-select-all').checked})"></th>
+            <th>Title</th>
+            <th>Published</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .RSSItems}}
+          <tr>
+            <td><input type="checkbox" class="rss-entry" name="links" value="{{.Link}}" checked></td>
+            <td><span class="truncate" title="{{.Link}}">{{if .Title}}{{.Title}}{{else}}(untitled){{end}}</span></td>
+            <td><small class="text-muted">{{if .Published}}{{formatTime .Published $.TimeZone "2006-01-02 15:04:05"}}{{else}}-{{end}}</small></td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Import Selected</button>
+    </div>
+  </form>
+    {{else}}
+  <p class="card-desc">No importable entries found in this feed.</p>
+    {{end}}
+  {{end}}
 </div>
 {{end}}
 {{end}}

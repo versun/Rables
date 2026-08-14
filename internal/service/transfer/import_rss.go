@@ -61,6 +61,46 @@ const MaxItemContentBytes = 5 << 20
 type ImportRSSPayload struct {
 	URL          string `json:"url"`
 	ImportImages bool   `json:"import_images"`
+	// Links restricts the import to the feed entries carrying one of these
+	// links (the selection made in the admin preview); empty imports every
+	// entry.
+	Links []string `json:"links,omitempty"`
+}
+
+// RSSPreviewItem is one feed entry offered for selection on the admin RSS
+// import preview.
+type RSSPreviewItem struct {
+	Title     string
+	Link      string
+	Published int64 // unix seconds; 0 when the entry carries no timestamp
+}
+
+// PreviewItems lists the entries of a parsed feed that an import can
+// process: entries without a link are left out (Import skips them anyway),
+// the title falls back to the published timestamp exactly like importEntry,
+// and the list is capped at MaxImportItems so the preview matches what a
+// single import run can handle.
+func PreviewItems(feed *gofeed.Feed) []RSSPreviewItem {
+	items := feed.Items
+	if len(items) > MaxImportItems {
+		items = items[:MaxImportItems]
+	}
+	out := make([]RSSPreviewItem, 0, len(items))
+	for _, item := range items {
+		if item.Link == "" {
+			continue
+		}
+		title := item.Title
+		var published int64
+		if item.PublishedParsed != nil {
+			published = item.PublishedParsed.Unix()
+			if title == "" {
+				title = item.PublishedParsed.UTC().Format("2006-01-02 15:04:05 MST")
+			}
+		}
+		out = append(out, RSSPreviewItem{Title: title, Link: item.Link, Published: published})
+	}
+	return out
 }
 
 // RSSImporter imports one feed into articles (ImportRss).
@@ -87,10 +127,9 @@ type RSSImportResult struct {
 	Failed   int
 }
 
-// Import fetches and imports the feed, mirroring ImportRss#import_data:
-// entries without a link are skipped, per-entry failures are counted and do
-// not abort the run, and at most MaxImportItems entries are processed.
-func (r *RSSImporter) Import(ctx context.Context, feedURL string, importImages bool) (*RSSImportResult, error) {
+// FetchFeed fetches and parses the feed at feedURL: the URL must pass the
+// SSRF guard and the body is capped at MaxFeedBodyBytes.
+func (r *RSSImporter) FetchFeed(ctx context.Context, feedURL string) (*gofeed.Feed, error) {
 	if !r.safeRemoteURL(ctx, feedURL) {
 		return nil, fmt.Errorf("import rss: unsafe feed URL: %s", feedURL)
 	}
@@ -102,9 +141,41 @@ func (r *RSSImporter) Import(ctx context.Context, feedURL string, importImages b
 	if err != nil {
 		return nil, fmt.Errorf("import rss: parse feed: %w", err)
 	}
+	return feed, nil
+}
+
+// Import fetches and imports the whole feed; it is ImportOnly with no
+// selection.
+func (r *RSSImporter) Import(ctx context.Context, feedURL string, importImages bool) (*RSSImportResult, error) {
+	return r.ImportOnly(ctx, feedURL, importImages, nil)
+}
+
+// ImportOnly fetches the feed and imports only the entries whose link is in
+// onlyLinks (nil or empty imports every entry), mirroring
+// ImportRss#import_data: entries without a link are skipped, per-entry
+// failures are counted and do not abort the run, and at most MaxImportItems
+// entries are processed.
+func (r *RSSImporter) ImportOnly(ctx context.Context, feedURL string, importImages bool, onlyLinks []string) (*RSSImportResult, error) {
+	feed, err := r.FetchFeed(ctx, feedURL)
+	if err != nil {
+		return nil, err
+	}
 
 	result := &RSSImportResult{}
 	items := feed.Items
+	if len(onlyLinks) > 0 {
+		selected := make(map[string]struct{}, len(onlyLinks))
+		for _, link := range onlyLinks {
+			selected[link] = struct{}{}
+		}
+		kept := make([]*gofeed.Item, 0, len(selected))
+		for _, item := range items {
+			if _, ok := selected[item.Link]; ok {
+				kept = append(kept, item)
+			}
+		}
+		items = kept
+	}
 	if len(items) > MaxImportItems {
 		slog.Default().Warn("import rss: item count over the cap, extra entries skipped", "count", len(items), "cap", MaxImportItems)
 		result.Failed += len(items) - MaxImportItems
@@ -126,7 +197,9 @@ func (r *RSSImporter) Import(ctx context.Context, feedURL string, importImages b
 
 // importEntry mirrors ImportRss#import_entry: slug from the last path segment
 // of the unescaped link, title falling back to the published timestamp,
-// status publish, description from the summary.
+// status publish, description from the summary. created_at takes the
+// published timestamp and updated_at the entry's updated timestamp; each
+// falls back to the import time when the feed does not carry it.
 func (r *RSSImporter) importEntry(ctx context.Context, item *gofeed.Item, importImages bool) error {
 	decodedLink, err := url.QueryUnescape(item.Link) // CGI.unescape
 	if err != nil {
@@ -175,6 +248,10 @@ func (r *RSSImporter) importEntry(ctx context.Context, item *gofeed.Item, import
 	if published != nil {
 		createdAt = published.Unix()
 	}
+	updatedAt := now.Unix()
+	if item.UpdatedParsed != nil {
+		updatedAt = item.UpdatedParsed.Unix()
+	}
 	_, err = q.ImportInsertArticle(ctx, query.ImportInsertArticleParams{
 		Title:                       sql.NullString{String: title, Valid: title != ""},
 		Slug:                        sql.NullString{String: slug, Valid: true},
@@ -186,7 +263,7 @@ func (r *RSSImporter) importEntry(ctx context.Context, item *gofeed.Item, import
 		ScheduledCrosspostPlatforms: "[]",
 		ScheduledSendNewsletter:     0,
 		CreatedAt:                   createdAt,
-		UpdatedAt:                   now.Unix(),
+		UpdatedAt:                   updatedAt,
 	})
 	return err
 }
@@ -423,8 +500,8 @@ func registerImportRSSHandler(w *jobs.Worker, db *sql.DB, dataDir string) {
 		if p.URL == "" {
 			return fmt.Errorf("import_rss: url required")
 		}
-		activity.Log(ctx, db, "info", "started", "import", fmt.Sprintf("source=\"rss\" url=%s import_images=%t", activity.Quote(p.URL), p.ImportImages))
-		result, err := (&RSSImporter{DB: db, DataDir: dataDir}).Import(ctx, p.URL, p.ImportImages)
+		activity.Log(ctx, db, "info", "started", "import", fmt.Sprintf("source=\"rss\" url=%s import_images=%t links=%d", activity.Quote(p.URL), p.ImportImages, len(p.Links)))
+		result, err := (&RSSImporter{DB: db, DataDir: dataDir}).ImportOnly(ctx, p.URL, p.ImportImages, p.Links)
 		if err != nil {
 			activity.Log(ctx, db, "error", "failed", "import", fmt.Sprintf("source=\"rss\" url=%s error=%s import_images=%t", activity.Quote(p.URL), activity.Quote(err.Error()), p.ImportImages))
 			return nil // mirror ImportFromRssJob: failure is logged, not retried

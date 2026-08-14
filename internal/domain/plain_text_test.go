@@ -45,6 +45,31 @@ func TestPlainTextOversized(t *testing.T) {
 	}
 }
 
+func TestHasContent(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{name: "empty", in: "", want: false},
+		{name: "lexxy empty markup", in: "<p><br></p>", want: false},
+		{name: "nbsp only", in: "<p>&nbsp;</p>", want: false},
+		{name: "text", in: "<p>Hello</p>", want: true},
+		{name: "image only", in: `<img src="/files/abc123" alt="pic.png">`, want: true},
+		{name: "image only uppercased tag", in: `<IMG SRC="/files/abc123">`, want: true},
+		{name: "action-text-attachment only", in: `<action-text-attachment url="/files/abc123" content-type="image/png"></action-text-attachment>`, want: true},
+		{name: "video only", in: `<video src="/files/a.mp4" controls></video>`, want: true},
+		{name: "br and text", in: "<p><br></p><p>tail</p>", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasContent(tt.in); got != tt.want {
+				t.Errorf("HasContent(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSquish(t *testing.T) {
 	if got := Squish("  a  b\n\tc  "); got != "a b c" {
 		t.Errorf("Squish = %q, want %q", got, "a b c")

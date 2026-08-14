@@ -6,6 +6,13 @@
     <title>{{block "title" .}}{{end}}</title>
     <link rel="stylesheet" href="/assets/app.css">
     <link rel="stylesheet" href="/assets/admin.css">
+    <script type="importmap">
+      {
+        "imports": {
+          "@rails/activestorage": "/assets/activestorage_shim.js"
+        }
+      }
+    </script>
     <script src="/assets/app.js" defer></script>
     {{block "head" .}}{{end}}
   </head>

@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 
 	"rables/internal/config"
 	"rables/internal/db/query"
+	"rables/internal/service/transfer"
 	"rables/internal/templates"
 )
 
@@ -33,6 +35,11 @@ type Server struct {
 	//
 	// so the first caller wins and later callers reuse the same instance.
 	Ext sync.Map
+
+	// RSSPreview fetches a feed and lists its importable entries for the RSS
+	// import preview; nil fetches over the network with the default
+	// RSSImporter. Tests stub it to avoid real fetches.
+	RSSPreview func(ctx context.Context, feedURL string) ([]transfer.RSSPreviewItem, error)
 }
 
 // NewServer builds the application context. The renderer may be nil in tests

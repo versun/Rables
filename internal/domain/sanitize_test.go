@@ -137,6 +137,67 @@ func TestAddLazyLoading(t *testing.T) {
 	}
 }
 
+func TestSanitizeHTMLActionTextAttachments(t *testing.T) {
+	tests := []struct {
+		name        string
+		in          string
+		contains    []string
+		notContains []string
+	}{
+		{
+			name:     "image attachment becomes img with caption alt and dimensions",
+			in:       `<p>a</p><action-text-attachment url="/files/abc123" content-type="image/png" filename="pic.png" caption="My pic" width="800" height="600"></action-text-attachment><p>b</p>`,
+			contains: []string{`<p>a</p>`, `<p>b</p>`, `<img`, `src="/files/abc123"`, `alt="My pic"`, `width="800"`, `height="600"`},
+		},
+		{
+			name:     "image without caption falls back to filename alt",
+			in:       `<action-text-attachment url="/files/abc123" content-type="image/jpeg" filename="photo.jpg"></action-text-attachment>`,
+			contains: []string{`<img`, `src="/files/abc123"`, `alt="photo.jpg"`},
+		},
+		{
+			name:     "non-image attachment becomes download link",
+			in:       `<action-text-attachment url="/files/def456" content-type="application/pdf" filename="doc.pdf"></action-text-attachment>`,
+			contains: []string{`<a href="/files/def456">doc.pdf</a>`},
+		},
+		{
+			name:        "svg attachment is a link, never an inline img",
+			in:          `<action-text-attachment url="/files/ghi789" content-type="image/svg+xml" filename="logo.svg"></action-text-attachment>`,
+			contains:    []string{`<a href="/files/ghi789">logo.svg</a>`},
+			notContains: []string{"<img"},
+		},
+		{
+			name:        "attachment without url is dropped",
+			in:          `<p>a</p><action-text-attachment content-type="image/png" filename="x.png"></action-text-attachment><p>b</p>`,
+			contains:    []string{`<p>a</p>`, `<p>b</p>`},
+			notContains: []string{"action-text-attachment", "<img"},
+		},
+		{
+			name:        "no attachments passes through unchanged",
+			in:          `<p>plain</p><img src="/files/x.png" alt="x">`,
+			contains:    []string{`<p>plain</p>`, `src="/files/x.png"`},
+			notContains: []string{"action-text-attachment"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SanitizeHTML(tt.in)
+			for _, want := range tt.contains {
+				if !strings.Contains(got, want) {
+					t.Errorf("SanitizeHTML(%q) = %q, want it to contain %q", tt.in, got, want)
+				}
+			}
+			if strings.Contains(got, "action-text-attachment") {
+				t.Errorf("SanitizeHTML(%q) = %q, want no action-text-attachment left", tt.in, got)
+			}
+			for _, unwanted := range tt.notContains {
+				if strings.Contains(got, unwanted) {
+					t.Errorf("SanitizeHTML(%q) = %q, want it not to contain %q", tt.in, got, unwanted)
+				}
+			}
+		})
+	}
+}
+
 func TestDeepNesting(t *testing.T) {
 	// x/net/html refuses an open-element stack over 512 nodes; the helpers
 	// must take their parse-error fallback instead of panicking.

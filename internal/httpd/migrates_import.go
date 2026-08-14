@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -43,13 +44,15 @@ const (
 
 // RegisterMigratesImportRoutes mounts the import endpoints: the Rables
 // database upload goes to /admin/migrates/import, the Rails database upload
-// to /admin/migrates/import_rails, the RSS URL form to
-// /admin/migrates/import_rss.
+// to /admin/migrates/import_rails, the RSS feed fetch (preview) to
+// /admin/migrates/import_rss and the RSS selection submit to
+// /admin/migrates/import_rss_confirm.
 func RegisterMigratesImportRoutes(r chi.Router, s *Server) {
 	r.With(s.RequireAuth).Post("/admin/migrates/import", s.adminMigratesImportDB)
 	r.With(s.RequireAuth).Post("/admin/migrates/import_server", s.adminMigratesImportServerFile)
 	r.With(s.RequireAuth).Post("/admin/migrates/import_rails", s.adminMigratesImportRails)
 	r.With(s.RequireAuth).Post("/admin/migrates/import_rss", s.adminMigratesImportRSS)
+	r.With(s.RequireAuth).Post("/admin/migrates/import_rss_confirm", s.adminMigratesImportRSSConfirm)
 }
 
 // migratesImportFail redirects back to the import tab with an alert flash.
@@ -297,8 +300,10 @@ func (s *Server) saveImportUpload(src multipart.File, ext string) (string, error
 	return finalPath, nil
 }
 
-// adminMigratesImportRSS handles POST /admin/migrates/import_rss, mirroring
-// the url branch of handle_import.
+// adminMigratesImportRSS handles POST /admin/migrates/import_rss: it fetches
+// the feed and re-renders the import tab with the selectable entry list
+// (title + published time) below the form. The actual import is enqueued by
+// adminMigratesImportRSSConfirm once the admin picks the entries.
 func (s *Server) adminMigratesImportRSS(w http.ResponseWriter, r *http.Request) {
 	fail := func(alert string) { s.migratesImportFail(w, r, alert) }
 	// FormValue covers urlencoded and multipart forms alike.
@@ -307,9 +312,66 @@ func (s *Server) adminMigratesImportRSS(w http.ResponseWriter, r *http.Request) 
 		fail("Please provide an RSS URL for import")
 		return
 	}
+	preview := s.RSSPreview
+	if preview == nil {
+		preview = func(ctx context.Context, url string) ([]transfer.RSSPreviewItem, error) {
+			feed, err := (&transfer.RSSImporter{DB: s.DB, DataDir: s.Cfg.DataDir}).FetchFeed(ctx, url)
+			if err != nil {
+				return nil, err
+			}
+			return transfer.PreviewItems(feed), nil
+		}
+	}
+	items, err := preview(r.Context(), feedURL)
+	if err != nil {
+		s.Log.Error("fetch rss feed", "error", err)
+		fail("Import failed: " + err.Error())
+		return
+	}
+	ctx := r.Context()
+	st, err := s.Settings().Get(ctx)
+	if err != nil {
+		s.listError(w, "load site settings", err)
+		return
+	}
+	s.render(w, http.StatusOK, "admin_migrates", adminMigratesData{
+		Flash:           s.PopFlash(r, w),
+		ActiveTab:       "import",
+		TimeZone:        st.TimeZone,
+		Exports:         s.listExportFiles(),
+		Imports:         s.listImportFiles(),
+		RSSURL:          feedURL,
+		RSSImportImages: r.FormValue("import_images") != "",
+		RSSItems:        items,
+	})
+}
+
+// adminMigratesImportRSSConfirm handles POST
+// /admin/migrates/import_rss_confirm: it enqueues the import_rss job
+// restricted to the feed entries (by link) selected in the preview. The job
+// re-fetches the feed, so entries published between preview and confirm are
+// not picked up unless selected.
+func (s *Server) adminMigratesImportRSSConfirm(w http.ResponseWriter, r *http.Request) {
+	fail := func(alert string) { s.migratesImportFail(w, r, alert) }
+	feedURL := strings.TrimSpace(r.FormValue("url"))
+	if feedURL == "" {
+		fail("Please provide an RSS URL for import")
+		return
+	}
+	links := r.PostForm["links"]
+	if len(links) == 0 {
+		fail("Please select at least one entry to import")
+		return
+	}
+	// The job caps at MaxImportItems anyway; trim here so a bloated
+	// submission does not land in the payload wholesale.
+	if len(links) > transfer.MaxImportItems {
+		links = links[:transfer.MaxImportItems]
+	}
 	payload := transfer.ImportRSSPayload{
 		URL:          feedURL,
 		ImportImages: r.FormValue("import_images") != "",
+		Links:        links,
 	}
 	if _, err := s.Enqueuer().Enqueue(r.Context(), jobs.KindImportRSS, payload, time.Now()); err != nil {
 		s.Log.Error("enqueue rss import", "error", err)

@@ -398,6 +398,11 @@
         const editor = document.createElement("lexxy-editor");
         editor.setAttribute("name", textarea.getAttribute("name") || "content");
         editor.setAttribute("value", textarea.value);
+        // Attachment uploads post to the Go server's multipart endpoint via
+        // the @rails/activestorage shim (import map in admin_layout.html);
+        // non-image files derive their URL from the blob URL template.
+        editor.setAttribute("data-direct-upload-url", "/admin/uploads");
+        editor.setAttribute("data-blob-url-template", "/files/:signed_id");
         editor.className = "lexxy-content";
         textarea.replaceWith(editor);
       });
@@ -418,10 +423,13 @@
       });
     }
 
-    // Lexxy empty content is markup like "<p><br></p>": strip tags and &nbsp;
+    // Lexxy empty content is markup like "<p><br></p>": strip tags and &nbsp;.
+    // An attachment-only body (e.g. a lone uploaded image) is valid, matching
+    // Action Text's blank? semantics (HasContent on the Go side).
     richTextContentBlank(content) {
       const text = (content || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").trim();
-      return text.length === 0;
+      if (text.length > 0) return false;
+      return !/<(img|video|audio|iframe|action-text-attachment)[\s>]/i.test(content || "");
     }
 
     submit(event) {

@@ -213,7 +213,7 @@ func Save(ctx context.Context, db *sql.DB, existing *query.Article, p SaveParams
 		if domain.IsBlank(p.ContentHTML) {
 			errs = append(errs, "Content can't be blank")
 		}
-	case domain.IsBlank(domain.PlainText(contentHTML)):
+	case !domain.HasContent(contentHTML):
 		errs = append(errs, "Content can't be blank")
 	}
 	if len(errs) > 0 {

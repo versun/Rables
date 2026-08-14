@@ -6,6 +6,7 @@ import (
 
 	"github.com/microcosm-cc/bluemonday"
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // AllowedHTMLTags mirrors Sanitization::ALLOWED_HTML_TAGS (48 tags).
@@ -76,11 +77,106 @@ const maxHTMLParseBytes = 5 << 20
 // SanitizeHTML ports Article#sanitize_html: bluemonday with the §4.4
 // whitelist; src of iframe is restricted to absolute http/https URLs, and
 // src of video/audio/source to http/https or /files/ root-relative paths.
+// Submitted <action-text-attachment> elements (what the lexxy editor emits
+// for uploaded files) are rewritten to plain <img>/<a> first: that is the
+// canonical storage markup (same as the Rails migration rewrite produces),
+// and the unknown element would otherwise not survive the whitelist.
 func SanitizeHTML(rawHTML string) string {
 	if IsBlank(rawHTML) {
 		return ""
 	}
-	return restrictMediaSrc(sanitizePolicy.Sanitize(rawHTML))
+	return restrictMediaSrc(sanitizePolicy.Sanitize(rewriteActionTextAttachments(rawHTML)))
+}
+
+// rewriteActionTextAttachments replaces every <action-text-attachment> that
+// carries a url attribute per attachmentReplacement. Attachments without a
+// url (e.g. a failed upload left in the markup) are left in place for the
+// sanitizer to drop. Like the other DOM passes, input over maxHTMLParseBytes
+// is returned unchanged.
+func rewriteActionTextAttachments(rawHTML string) string {
+	if !strings.Contains(rawHTML, "action-text-attachment") || len(rawHTML) > maxHTMLParseBytes {
+		return rawHTML
+	}
+	nodes, err := html.ParseFragment(strings.NewReader(rawHTML), bodyContext)
+	if err != nil {
+		return rawHTML
+	}
+	// ParseFragment returns detached top-level nodes; attach them to a
+	// container so node replacement can rely on Parent pointers.
+	container := &html.Node{Type: html.ElementNode, DataAtom: atom.Div, Data: "div"}
+	for _, n := range nodes {
+		container.AppendChild(n)
+	}
+	var attachments []*html.Node
+	walkNodes(container, func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "action-text-attachment" {
+			attachments = append(attachments, n)
+		}
+	})
+	for _, n := range attachments {
+		if repl := attachmentReplacement(n); repl != nil {
+			n.Parent.InsertBefore(repl, n)
+			n.Parent.RemoveChild(n)
+		}
+	}
+	return renderFragment(containerChildren(container))
+}
+
+// attachmentReplacement builds the storage node for one
+// <action-text-attachment>: an <img> for image types, a download <a> for
+// everything else — mirroring the Rails migration rewrite. SVG is treated as
+// a file, not an image: serveFile forces it to download (active content
+// type), so an <img> would only render broken. Nil when the attachment has no
+// url attribute.
+func attachmentReplacement(n *html.Node) *html.Node {
+	u := getAttr(n, "url")
+	if u == "" {
+		return nil
+	}
+	contentType := getAttr(n, "content-type")
+	filename := getAttr(n, "filename")
+	if strings.HasPrefix(contentType, "image/") && !strings.HasPrefix(contentType, "image/svg") {
+		alt := getAttr(n, "caption")
+		if alt == "" {
+			alt = filename
+		}
+		img := &html.Node{Type: html.ElementNode, DataAtom: atom.Img, Data: "img", Attr: []html.Attribute{
+			{Key: "src", Val: u},
+			{Key: "alt", Val: alt},
+		}}
+		for _, key := range []string{"width", "height"} {
+			if v := getAttr(n, key); v != "" {
+				img.Attr = append(img.Attr, html.Attribute{Key: key, Val: v})
+			}
+		}
+		return img
+	}
+	text := filename
+	if text == "" {
+		text = u
+	}
+	a := &html.Node{Type: html.ElementNode, DataAtom: atom.A, Data: "a", Attr: []html.Attribute{
+		{Key: "href", Val: u},
+	}}
+	a.AppendChild(&html.Node{Type: html.TextNode, Data: text})
+	return a
+}
+
+func getAttr(n *html.Node, key string) string {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return a.Val
+		}
+	}
+	return ""
+}
+
+func containerChildren(container *html.Node) []*html.Node {
+	var out []*html.Node
+	for c := container.FirstChild; c != nil; c = c.NextSibling {
+		out = append(out, c)
+	}
+	return out
 }
 
 // mediaSrcElements are the elements whose src restrictMediaSrc hardens (§4.4).

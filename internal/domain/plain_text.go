@@ -52,5 +52,24 @@ func IsBlank(s string) bool {
 	return strings.TrimSpace(s) == ""
 }
 
+// HasContent backs the content-can't-be-blank validations, mirroring Action
+// Text's blank? semantics: an attachment-only body (e.g. a lone uploaded
+// image) is NOT blank because ActionText::Attachment#to_plain_text yields its
+// caption/filename. PlainText strips media elements, so they are detected
+// directly here. Everything else (excerpts, feeds, mail parts) keeps using
+// PlainText and is unaffected.
+func HasContent(rawHTML string) bool {
+	if !IsBlank(PlainText(rawHTML)) {
+		return true
+	}
+	lower := strings.ToLower(rawHTML)
+	for _, tag := range []string{"<img", "<video", "<audio", "<iframe", "<action-text-attachment"} {
+		if strings.Contains(lower, tag) {
+			return true
+		}
+	}
+	return false
+}
+
 // bodyContext is the fragment parsing context shared by the HTML helpers.
 var bodyContext = &html.Node{Type: html.ElementNode, DataAtom: atom.Body, Data: "body"}

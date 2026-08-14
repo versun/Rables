@@ -12,6 +12,7 @@ import (
 
 	"rables/internal/jobs"
 	"rables/internal/service/activity"
+	"rables/internal/service/transfer"
 	"rables/internal/templates"
 )
 
@@ -43,6 +44,12 @@ type adminMigratesData struct {
 	TimeZone  string
 	Exports   []migratesExportFile
 	Imports   []migratesExportFile
+	// RSS import preview state, set only after the feed fetch step
+	// (adminMigratesImportRSS): RSSURL non-empty marks the preview as loaded
+	// and refills the fetch form; RSSItems are the selectable feed entries.
+	RSSURL          string
+	RSSImportImages bool
+	RSSItems        []transfer.RSSPreviewItem
 }
 
 // adminMigratesIndex renders GET /admin/migrates, mirroring

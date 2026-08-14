@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,7 +102,7 @@ func clearJobs(t *testing.T, s *Server) {
 
 func TestAdminMigratesImportAuth(t *testing.T) {
 	_, h := newMigratesImportTestServer(t)
-	for _, path := range []string{"/admin/migrates/import", "/admin/migrates/import_server", "/admin/migrates/import_rails", "/admin/migrates/import_rss"} {
+	for _, path := range []string{"/admin/migrates/import", "/admin/migrates/import_server", "/admin/migrates/import_rails", "/admin/migrates/import_rss", "/admin/migrates/import_rss_confirm"} {
 		rec := doRequest(t, h, http.MethodPost, path, nil)
 		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/session/new" {
 			t.Errorf("POST %s unauthenticated: status = %d location = %q, want 302 /session/new",
@@ -123,20 +125,88 @@ func TestAdminMigratesImportFormActions(t *testing.T) {
 	}
 }
 
+// TestAdminMigratesImportRSS covers the preview step: the feed is fetched and
+// the import tab is re-rendered with the selectable entry list; no job is
+// enqueued at this point.
 func TestAdminMigratesImportRSS(t *testing.T) {
 	s, h := newMigratesImportTestServer(t)
 	session := redirectsSessionCookie(t, s)
 
+	t.Run("preview lists the feed entries", func(t *testing.T) {
+		clearJobs(t, s)
+		s.RSSPreview = func(_ context.Context, feedURL string) ([]transfer.RSSPreviewItem, error) {
+			if feedURL != "https://example.com/feed.xml" {
+				t.Errorf("preview url = %q, want the submitted url", feedURL)
+			}
+			return []transfer.RSSPreviewItem{
+				{Title: "First Post", Link: "https://blog.example/posts/first-post", Published: 1136214245},
+				{Title: "", Link: "https://blog.example/posts/second-post", Published: 0},
+			}, nil
+		}
+		defer func() { s.RSSPreview = nil }()
+		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_rss",
+			url.Values{"url": {"https://example.com/feed.xml"}, "import_images": {"1"}}, session)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		body := rec.Body.String()
+		for _, want := range []string{
+			`action="/admin/migrates/import_rss_confirm"`,
+			`<input type="hidden" name="url" value="https://example.com/feed.xml">`,
+			`<input type="hidden" name="import_images" value="1">`,
+			`value="https://blog.example/posts/first-post"`,
+			"First Post",
+			"2006-01-02 15:04:05", // published timestamp in the fallback UTC zone
+			"https://blog.example/posts/second-post",
+			"(untitled)",
+			`id="rss-select-all"`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("preview missing %q", want)
+			}
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected from the preview step, got kind %q", kind)
+		}
+	})
+
+	t.Run("empty feed renders no selection form", func(t *testing.T) {
+		s.RSSPreview = func(_ context.Context, _ string) ([]transfer.RSSPreviewItem, error) {
+			return nil, nil
+		}
+		defer func() { s.RSSPreview = nil }()
+		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_rss",
+			url.Values{"url": {"https://example.com/feed.xml"}}, session)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "No importable entries found in this feed.") {
+			t.Error("empty feed: missing the no-entries message")
+		}
+		if strings.Contains(body, `action="/admin/migrates/import_rss_confirm"`) {
+			t.Error("empty feed: the confirm form must not render")
+		}
+	})
+
+	t.Run("fetch error redirects with an alert", func(t *testing.T) {
+		s.RSSPreview = func(_ context.Context, _ string) ([]transfer.RSSPreviewItem, error) {
+			return nil, errors.New("import rss: fetch: connection refused")
+		}
+		defer func() { s.RSSPreview = nil }()
+		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_rss",
+			url.Values{"url": {"https://example.com/feed.xml"}}, session)
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
+			t.Fatalf("status = %d location = %q, want 302 /admin/migrates?tab=import", rec.Code, rec.Header().Get("Location"))
+		}
+	})
+
 	for _, tt := range []struct {
-		name       string
-		form       url.Values
-		wantJob    bool
-		wantImages bool
+		name string
+		form url.Values
 	}{
-		{"with images", url.Values{"url": {"https://example.com/feed.xml"}, "import_images": {"1"}}, true, true},
-		{"without images", url.Values{"url": {"https://example.com/feed.xml"}}, true, false},
-		{"blank url", url.Values{"url": {"  "}}, false, false},
-		{"missing url", url.Values{}, false, false},
+		{"blank url", url.Values{"url": {"  "}}},
+		{"missing url", url.Values{}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			clearJobs(t, s)
@@ -144,25 +214,64 @@ func TestAdminMigratesImportRSS(t *testing.T) {
 			if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
 				t.Fatalf("status = %d location = %q, want 302 /admin/migrates?tab=import", rec.Code, rec.Header().Get("Location"))
 			}
-			kind, payload, err := latestJob(t, s)
-			if !tt.wantJob {
-				if err == nil {
-					t.Errorf("no job expected, got kind %q", kind)
-				}
-				return
+			if kind, _, err := latestJob(t, s); err == nil {
+				t.Errorf("no job expected, got kind %q", kind)
 			}
-			if err != nil {
-				t.Fatalf("expected queued job: %v", err)
+		})
+	}
+}
+
+// TestAdminMigratesImportRSSConfirm covers the selection submit: the
+// import_rss job is enqueued with exactly the selected entry links.
+func TestAdminMigratesImportRSSConfirm(t *testing.T) {
+	s, h := newMigratesImportTestServer(t)
+	session := redirectsSessionCookie(t, s)
+
+	t.Run("selected links enqueued", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_rss_confirm", url.Values{
+			"url":           {"https://example.com/feed.xml"},
+			"import_images": {"1"},
+			"links":         {"https://blog.example/posts/first-post", "https://blog.example/posts/second-post"},
+		}, session)
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
+			t.Fatalf("status = %d location = %q, want 302 /admin/migrates?tab=import", rec.Code, rec.Header().Get("Location"))
+		}
+		kind, payload, err := latestJob(t, s)
+		if err != nil {
+			t.Fatalf("expected queued job: %v", err)
+		}
+		if kind != "import_rss" {
+			t.Errorf("kind = %q, want import_rss", kind)
+		}
+		var p transfer.ImportRSSPayload
+		if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
+			t.Fatalf("payload not JSON: %v", err)
+		}
+		if p.URL != "https://example.com/feed.xml" || !p.ImportImages {
+			t.Errorf("payload = %+v, want url set and import_images=true", p)
+		}
+		wantLinks := []string{"https://blog.example/posts/first-post", "https://blog.example/posts/second-post"}
+		if !slices.Equal(p.Links, wantLinks) {
+			t.Errorf("links = %v, want %v", p.Links, wantLinks)
+		}
+	})
+
+	for _, tt := range []struct {
+		name string
+		form url.Values
+	}{
+		{"no selection", url.Values{"url": {"https://example.com/feed.xml"}}},
+		{"blank url", url.Values{"url": {" "}, "links": {"https://blog.example/posts/first-post"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clearJobs(t, s)
+			rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_rss_confirm", tt.form, session)
+			if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
+				t.Fatalf("status = %d location = %q, want 302 /admin/migrates?tab=import", rec.Code, rec.Header().Get("Location"))
 			}
-			if kind != "import_rss" {
-				t.Errorf("kind = %q, want import_rss", kind)
-			}
-			var p transfer.ImportRSSPayload
-			if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
-				t.Fatalf("payload not JSON: %v", err)
-			}
-			if p.URL != "https://example.com/feed.xml" || p.ImportImages != tt.wantImages {
-				t.Errorf("payload = %+v, want url set and import_images=%v", p, tt.wantImages)
+			if kind, _, err := latestJob(t, s); err == nil {
+				t.Errorf("no job expected, got kind %q", kind)
 			}
 		})
 	}
