@@ -111,6 +111,13 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	submitted.ArticleRoutePrefix = str(prefix)
 
+	// Plain HTML checkbox: absent means unchecked (0), so unlike the social
+	// links JSON the column always follows the submitted state.
+	submitted.FeedAllArticles = 0
+	if v, _ := formCheckbox(r, "feed_all_articles"); v {
+		submitted.FeedAllArticles = 1
+	}
+
 	if strings.TrimSpace(socialLinksJSON) != "" {
 		normalized, err := settings.NormalizeSocialLinks(socialLinksJSON)
 		if err != nil {
@@ -144,6 +151,7 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 		Giscus:             submitted.Giscus,
 		SocialLinks:        submitted.SocialLinks,
 		ArticleRoutePrefix: submitted.ArticleRoutePrefix,
+		FeedAllArticles:    submitted.FeedAllArticles,
 		UpdatedAt:          time.Now().Unix(),
 	}); err != nil {
 		s.Log.Error("update settings", "error", err)

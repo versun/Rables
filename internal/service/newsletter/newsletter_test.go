@@ -606,13 +606,16 @@ func TestRenderSourceReferenceUnsafeURL(t *testing.T) {
 	if strings.Contains(out, "<a href=") {
 		t.Errorf("javascript: source_url rendered a link: %s", out)
 	}
-	if !strings.Contains(out, "alice") {
-		t.Error("author dropped together with the unsafe link")
+	if !strings.Contains(out, "引用") {
+		t.Error("quote label dropped together with the unsafe link")
 	}
 
 	article.SourceUrl = sql.NullString{String: "https://example.com/post", Valid: true}
 	out = renderSourceReference(article)
 	if !strings.Contains(out, `href="https://example.com/post"`) {
 		t.Errorf("https source_url not linked: %s", out)
+	}
+	if !strings.Contains(out, "fa-external-link-alt") {
+		t.Errorf("jump icon missing next to the 引用 link: %s", out)
 	}
 }

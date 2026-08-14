@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,7 +30,9 @@ import (
 const (
 	publicArticlesPerPage = 10
 	publicTagPerPage      = 20
-	publicFeedLimit       = 50
+	// publicFeedRecentLimit is the feed.xml / tag RSS size without
+	// feed_all_articles.
+	publicFeedRecentLimit = 10
 )
 
 // renderCacheTTL mirrors the 7-day Rails.cache expiry of rendered_content
@@ -262,7 +263,7 @@ type siteChrome struct {
 	NavPages    []navPage
 	HasTags     bool
 	Query       string            // current ?q= term, prefilled in the nav search box
-	Subscribe   subscribeFormData // navbar newsletter form; populated on "/" only (T16)
+	Subscribe   subscribeFormData // navbar newsletter form (T16)
 }
 
 type socialLink struct {
@@ -299,15 +300,14 @@ func (s *Server) chrome(ctx context.Context, query string) (siteChrome, error) {
 	if err != nil {
 		return siteChrome{}, err
 	}
-	for platform, link := range links {
+	for _, entry := range links {
 		c.SocialLinks = append(c.SocialLinks, socialLink{
-			Platform: platform,
-			Name:     titleize(platform),
-			URL:      link.URL,
-			Icon:     link.Icon,
+			Platform: entry.Platform,
+			Name:     titleize(entry.Platform),
+			URL:      entry.URL,
+			Icon:     entry.Icon,
 		})
 	}
-	sort.Slice(c.SocialLinks, func(i, j int) bool { return c.SocialLinks[i].Platform < c.SocialLinks[j].Platform })
 
 	navRows, err := s.Q.ListNavbarPages(ctx)
 	if err != nil {
@@ -326,6 +326,9 @@ func (s *Server) chrome(ctx context.Context, query string) (siteChrome, error) {
 		return siteChrome{}, err
 	}
 	c.HasTags = tagCount > 0
+	// The navbar subscription form shows on every public page (unlike Rails,
+	// which gates it to the root page with current_page?(root_path)).
+	c.Subscribe = s.subscribeInlineForm(ctx, 0)
 	return c, nil
 }
 
@@ -439,7 +442,7 @@ func (s *Server) listItems(ctx context.Context, articles []query.Article) ([]art
 			item.SummaryHTML = simpleFormat(summary)
 		}
 		if domain.IsBlank(a.Title.String) {
-			item.SourceRef = buildSourceReference(a.SourceAuthor.String, a.SourceContent.String, a.SourceUrl.String)
+			item.SourceRef = buildSourceReference(a.SourceContent.String, a.SourceUrl.String)
 		}
 		items = append(items, item)
 	}
@@ -464,31 +467,31 @@ func simpleFormat(text string) template.HTML {
 }
 
 // buildSourceReference renders articles/_source_reference.html.erb semantics:
-// present only when source_url is set (Article#has_source?).
-func buildSourceReference(author, content, rawURL string) template.HTML {
+// present only when source_url is set (Article#has_source?). The header is a
+// fixed 引用 link (with a jump icon) pointing at the source URL.
+func buildSourceReference(content, rawURL string) template.HTML {
 	if domain.IsBlank(rawURL) {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(`<div class="source-reference" style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">`)
 	b.WriteString(`<div style="flex: 1;">`)
-	if !domain.IsBlank(author) {
-		b.WriteString(`<span style="font-weight: 600; color: #495057; font-size: 0.95rem;">`)
-		b.WriteString(html.EscapeString(author))
-		b.WriteString(`</span>`)
+	// source_url may come from attacker-controlled imports; only link absolute
+	// http(s) URLs with a host (same rule as safeArchiveURL).
+	if safeURL := safeArchiveURL(rawURL); safeURL != "" {
+		b.WriteString(`<a href="` + html.EscapeString(safeURL) + `" target="_blank" rel="noopener noreferrer" style="color: #495057; text-decoration: none;">`)
+		b.WriteString(`<span style="font-weight: 600; font-size: 0.95rem;">引用</span>`)
+		b.WriteString(` <i class="fas fa-external-link-alt" style="font-size: 0.75rem;"></i>`)
+		b.WriteString(`</a>`)
+	} else {
+		b.WriteString(`<span style="font-weight: 600; color: #495057; font-size: 0.95rem;">引用</span>`)
 	}
 	b.WriteString(`</div></div>`)
 	b.WriteString(`<blockquote class="source-reference__quote">`)
 	if !domain.IsBlank(content) {
 		b.WriteString(string(simpleFormat(content)))
 	}
-	b.WriteString(`<div class="source-reference__links" style="display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.85rem;">`)
-	// source_url may come from attacker-controlled imports; only link absolute
-	// http(s) URLs with a host (same rule as safeArchiveURL).
-	if safeURL := safeArchiveURL(rawURL); safeURL != "" {
-		b.WriteString(`<a href="` + html.EscapeString(safeURL) + `" target="_blank" rel="noopener noreferrer" style="color: #007bff; text-decoration: none;"><small>Original</small></a>`)
-	}
-	b.WriteString(`</div></blockquote>`)
+	b.WriteString(`</blockquote>`)
 	return template.HTML(b.String()) //nolint:gosec // parts escaped above
 }
 

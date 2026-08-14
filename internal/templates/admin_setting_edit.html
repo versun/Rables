@@ -59,6 +59,16 @@
   </div>
 
   <div class="card">
+    <h2 class="card-title">RSS Feed</h2>
+    <div class="field-checkbox">
+      <input type="hidden" name="feed_all_articles" value="0">
+      <input type="checkbox" id="feed_all_articles" name="feed_all_articles" value="1" {{if ne .Setting.FeedAllArticles 0}}checked{{end}}>
+      <label for="feed_all_articles">Include all articles in feed.xml</label>
+    </div>
+    <small>Unchecked: feed.xml and tag feeds contain only the 10 newest published articles. Checked: every published article.</small>
+  </div>
+
+  <div class="card">
     <h2 class="card-title">Custom Code</h2>
     <div class="field">
       <label for="head_code">Head Code</label>
@@ -73,7 +83,7 @@
     <div class="field">
       <label for="tool_code">Tool Code</label>
       <textarea id="tool_code" name="tool_code" class="code-editor">{{.Setting.ToolCode.String}}</textarea>
-      <small>Additional tool scripts or tracking codes</small>
+      <small>Additional tool scripts or tracking codes, inserted just before the closing &lt;/body&gt; tag of every public page</small>
     </div>
   </div>
 

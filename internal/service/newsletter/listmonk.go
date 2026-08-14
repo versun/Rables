@@ -198,32 +198,29 @@ func campaignBody(article query.Article) string {
 // renderSourceReference ports articles/_source_reference.html.erb for the
 // campaign body (the Rails model renders it via
 // ApplicationController.renderer). Called only when has_source?, so the
-// blockquote branch is always present.
+// blockquote branch is always present. The header is a fixed 引用 link (with
+// a jump icon) pointing at the source URL.
 func renderSourceReference(article query.Article) string {
 	var b strings.Builder
 	b.WriteString(`<div style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">`)
 	b.WriteString(`<i class="fas fa-quote-left" style="color: #6c757d; font-size: 1.25rem; margin-top: 0.125rem; opacity: 0.6;"></i>`)
 	b.WriteString(`<div style="flex: 1;">`)
-	if !domain.IsBlank(article.SourceAuthor.String) {
-		b.WriteString(`<span style="font-weight: 600; color: #495057; font-size: 0.95rem;">`)
-		b.WriteString(html.EscapeString(article.SourceAuthor.String))
-		b.WriteString(`</span>`)
+	// source_url may come from attacker-controlled imports; only link absolute
+	// http(s) URLs with a host (same rule as safeArchiveURL in internal/httpd).
+	if safeURL := safeSourceURL(article.SourceUrl.String); safeURL != "" {
+		b.WriteString(`<a href="` + html.EscapeString(safeURL) + `" target="_blank" rel="noopener noreferrer" style="color: #495057; text-decoration: none;">`)
+		b.WriteString(`<span style="font-weight: 600; font-size: 0.95rem;">引用</span>`)
+		b.WriteString(` <i class="fas fa-external-link-alt" style="font-size: 0.75rem;"></i>`)
+		b.WriteString(`</a>`)
+	} else {
+		b.WriteString(`<span style="font-weight: 600; color: #495057; font-size: 0.95rem;">引用</span>`)
 	}
 	b.WriteString(`</div></div>`)
 	b.WriteString(`<blockquote class="source-reference__quote">`)
 	if !domain.IsBlank(article.SourceContent.String) {
 		b.WriteString(string(simpleFormat(article.SourceContent.String, "span")))
 	}
-	b.WriteString(`<div class="source-reference__links" style="display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.85rem;">`)
-	// source_url may come from attacker-controlled imports; only link absolute
-	// http(s) URLs with a host (same rule as safeArchiveURL in internal/httpd).
-	if safeURL := safeSourceURL(article.SourceUrl.String); safeURL != "" {
-		b.WriteString(`<a href="` + html.EscapeString(safeURL) + `" target="_blank" rel="noopener noreferrer" style="color: #007bff; text-decoration: none; display: inline-flex; align-items: center; gap: 0.375rem; transition: color 0.2s;">`)
-		b.WriteString(`<i class="fas fa-external-link-alt" style="font-size: 0.75rem;"></i>`)
-		b.WriteString(`<small>Original</small>`)
-		b.WriteString(`</a>`)
-	}
-	b.WriteString(`</div></blockquote>`)
+	b.WriteString(`</blockquote>`)
 	return b.String()
 }
 

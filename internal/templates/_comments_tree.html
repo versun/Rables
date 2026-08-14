@@ -17,7 +17,7 @@
 
     <div style="flex: 1; min-width: 0;">
       <div style="margin-bottom: {{if gt .Depth 0}}0.125rem{{else}}0.25rem{{end}};">
-        {{if .Comment.AuthorUrl.Valid}}
+        {{if and .Comment.AuthorUrl.Valid (ne .Comment.AuthorUrl.String "")}}
           <strong style="font-size: {{if gt .Depth 0}}0.8rem{{else}}0.875rem{{end}}; color: #111;"><a href="{{.Comment.AuthorUrl.String}}" target="_blank" rel="noopener nofollow ugc" style="text-decoration: none; color: inherit;">{{.Comment.AuthorName}}</a></strong>
         {{else}}
           <strong style="font-size: {{if gt .Depth 0}}0.8rem{{else}}0.875rem{{end}}; color: #111;">{{.Comment.AuthorName}}</strong>

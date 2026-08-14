@@ -5,5 +5,6 @@
 UPDATE settings
 SET title = ?, description = ?, author = ?, url = ?, time_zone = ?,
     head_code = ?, custom_css = ?, tool_code = ?, giscus = ?,
-    social_links = ?, article_route_prefix = ?, updated_at = ?
+    social_links = ?, article_route_prefix = ?, feed_all_articles = ?,
+    updated_at = ?
 WHERE id = 1;

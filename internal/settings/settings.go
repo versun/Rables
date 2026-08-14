@@ -5,6 +5,7 @@
 package settings
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -106,43 +107,83 @@ type SocialLink struct {
 	Icon string `json:"icon"`
 }
 
-// SocialLinks maps platform names to their link data.
-type SocialLinks map[string]SocialLink
+// SocialLinkEntry is a SocialLink together with its platform name.
+type SocialLinkEntry struct {
+	Platform string
+	SocialLink
+}
 
-// UnmarshalSocialLinks decodes the stored social_links JSON. An empty string
-// (NULL column) yields nil. Entries without the SocialLink shape are skipped,
-// like the Rails view ignoring links it cannot render, and a row that fails
-// to decode at all degrades to no links, so a malformed row stored before
-// validation tightened never takes down every public page.
+// SocialLinks lists the platform links in the order they appear in the
+// stored JSON document; the admin's entry order is never re-sorted.
+type SocialLinks []SocialLinkEntry
+
+// UnmarshalSocialLinks decodes the stored social_links JSON, preserving the
+// document order of the entries. An empty string (NULL column) yields nil.
+// Entries without the SocialLink shape are skipped, like the Rails view
+// ignoring links it cannot render, and a row that fails to decode at all
+// degrades to no links, so a malformed row stored before validation tightened
+// never takes down every public page.
 func UnmarshalSocialLinks(text string) (SocialLinks, error) {
 	if text == "" {
 		return nil, nil
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(text), &raw); err != nil {
+	dec := json.NewDecoder(strings.NewReader(text))
+	open, err := dec.Token()
+	if err != nil {
 		return nil, nil
 	}
-	links := make(SocialLinks, len(raw))
-	for platform, value := range raw {
+	if d, ok := open.(json.Delim); !ok || d != '{' {
+		return nil, nil
+	}
+	var links SocialLinks
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return nil, nil
+		}
+		platform, ok := key.(string)
+		if !ok {
+			return nil, nil
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, nil
+		}
 		var link SocialLink
-		if err := json.Unmarshal(value, &link); err != nil {
+		if err := json.Unmarshal(raw, &link); err != nil {
 			continue
 		}
-		links[platform] = link
+		links = append(links, SocialLinkEntry{Platform: platform, SocialLink: link})
 	}
 	return links, nil
 }
 
-// MarshalSocialLinks encodes links for storage; nil yields "" (NULL column).
+// MarshalSocialLinks encodes links for storage, preserving entry order; nil
+// yields "" (NULL column).
 func MarshalSocialLinks(links SocialLinks) string {
 	if links == nil {
 		return ""
 	}
-	data, err := json.Marshal(links)
-	if err != nil {
-		return ""
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, entry := range links {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		key, err := json.Marshal(entry.Platform)
+		if err != nil {
+			return ""
+		}
+		value, err := json.Marshal(entry.SocialLink)
+		if err != nil {
+			return ""
+		}
+		buf.Write(key)
+		buf.WriteByte(':')
+		buf.Write(value)
 	}
-	return string(data)
+	buf.WriteByte('}')
+	return buf.String()
 }
 
 // SocialLinks returns the decoded social links of the current settings.
@@ -182,9 +223,12 @@ func NormalizeSocialLinks(raw string) (string, error) {
 			return "", fmt.Errorf("settings: invalid social link %q: %w", platform, err)
 		}
 	}
-	data, err := json.Marshal(parsed)
-	if err != nil {
+	// Compact the submitted document rather than re-marshaling the decoded
+	// map: encoding/json sorts map keys, which would reorder the entries
+	// alphabetically instead of keeping the admin's order.
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, []byte(raw)); err != nil {
 		return "", fmt.Errorf("settings: encode social links: %w", err)
 	}
-	return string(data), nil
+	return buf.String(), nil
 }

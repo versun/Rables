@@ -36,6 +36,7 @@ import (
 	"rables/internal/db/query"
 	"rables/internal/service/activity"
 	"rables/internal/service/media"
+	"rables/internal/service/tags"
 	"rables/internal/ssrf"
 )
 
@@ -61,6 +62,10 @@ const (
 	// refused outright: truncating it silently would store a corrupt file
 	// that the slug dedup never retries.
 	maxMediaBytes = 100 << 20
+
+	// articleTagName is the tag attached to every article archived from a
+	// tweet, so synced posts stay recognizable as twitter content.
+	articleTagName = "twitter"
 
 	defaultBaseURL = "https://api.twitter.com/2"
 )
@@ -567,7 +572,8 @@ var (
 
 // archiveTweet ports archive_tweet: defensive retweet/reply filter, X-Article
 // announcement skip, start-date filter, slug dedupe, then the Article +
-// social_media_posts rows and the activity entry.
+// social_media_posts rows and the activity entry. Every archived article also
+// carries the twitter tag (find-or-created on first use).
 func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tweet apiTweet, inc includes) error {
 	// Defensive filter: exclude retweets/replies even if the API returned them.
 	quotedID := ""
@@ -626,11 +632,12 @@ func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tw
 
 	now := s.clock().Unix()
 
-	// The Article, its media attachments and the social_media_posts row land
-	// in one transaction: a mid-way failure must not leave a committed
-	// article without its social post row (since_id advances past the tweet
-	// either way, so a partial write would never be repaired). The media
-	// stored above lives outside the transaction, so a failure reclaims it.
+	// The Article, its tag join row, its media attachments and the
+	// social_media_posts row land in one transaction: a mid-way failure must
+	// not leave a committed article without its social post row (since_id
+	// advances past the tweet either way, so a partial write would never be
+	// repaired). The media stored above lives outside the transaction, so a
+	// failure reclaims it.
 	err = func() error {
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
@@ -653,6 +660,17 @@ func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tw
 		})
 		if err != nil {
 			return err
+		}
+		tagIDs, err := tags.FindOrCreateByNames(ctx, qtx, []string{articleTagName})
+		if err != nil {
+			return err
+		}
+		for _, tagID := range tagIDs {
+			if err := qtx.InsertArticleTag(ctx, query.InsertArticleTagParams{
+				ArticleID: article.ID, TagID: tagID, CreatedAt: now, UpdatedAt: now,
+			}); err != nil {
+				return err
+			}
 		}
 		for _, m := range stored {
 			if err := qtx.CreateAttachment(ctx, query.CreateAttachmentParams{

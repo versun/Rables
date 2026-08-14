@@ -26,17 +26,22 @@ type rssItem struct {
 }
 
 // publicFeed serves GET /feed.xml, mirroring ArticlesController#index (RSS
-// format): the 50 newest published articles.
+// format): the 10 newest published articles, or all of them when the
+// feed_all_articles setting is enabled.
 func (s *Server) publicFeed(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	articles, err := s.Q.ListPublishedArticles(ctx, query.ListPublishedArticlesParams{Limit: publicFeedLimit, Offset: 0})
-	if err != nil {
-		s.listError(w, "list feed articles", err)
-		return
-	}
 	st, err := s.Settings().Get(ctx)
 	if err != nil {
 		s.listError(w, "load site settings", err)
+		return
+	}
+	limit := int64(publicFeedRecentLimit)
+	if st.FeedAllArticles != 0 {
+		limit = -1 // SQLite LIMIT -1: no limit
+	}
+	articles, err := s.Q.ListPublishedArticles(ctx, query.ListPublishedArticlesParams{Limit: limit, Offset: 0})
+	if err != nil {
+		s.listError(w, "list feed articles", err)
 		return
 	}
 	siteURL := normalizeSiteURL(st.Url.String)
@@ -54,7 +59,7 @@ func (s *Server) publicFeed(w http.ResponseWriter, r *http.Request) {
 		}
 		// content_html is sanitized and lazy-loaded at write time; the source
 		// reference is prepended like the RSS builder does.
-		content := string(buildSourceReference(a.SourceAuthor.String, a.SourceContent.String, a.SourceUrl.String)) + a.ContentHtml.String
+		content := string(buildSourceReference(a.SourceContent.String, a.SourceUrl.String)) + a.ContentHtml.String
 		items = append(items, rssItem{
 			Title:       rssItemTitle(a, tzLocation(st.TimeZone)),
 			Description: firstPresent(a.Description.String, a.Excerpt.String),
@@ -71,7 +76,8 @@ func (s *Server) publicFeed(w http.ResponseWriter, r *http.Request) {
 }
 
 // publicTagRSS serves GET /tags/{slug}.rss, mirroring TagsController#show
-// (RSS format): the 50 newest published articles of the tag.
+// (RSS format): the 10 newest published articles of the tag, or all of them
+// when the feed_all_articles setting is enabled.
 func (s *Server) publicTagRSS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tag, err := s.Q.GetPublicTagBySlug(ctx, slugParam(r, "slug"))
@@ -83,14 +89,18 @@ func (s *Server) publicTagRSS(w http.ResponseWriter, r *http.Request) {
 		s.listError(w, "get tag by slug", err)
 		return
 	}
-	articles, err := s.Q.ListPublishedArticlesByTag(ctx, query.ListPublishedArticlesByTagParams{TagID: tag.ID, Limit: publicFeedLimit, Offset: 0})
-	if err != nil {
-		s.listError(w, "list tag feed articles", err)
-		return
-	}
 	st, err := s.Settings().Get(ctx)
 	if err != nil {
 		s.listError(w, "load site settings", err)
+		return
+	}
+	limit := int64(publicFeedRecentLimit)
+	if st.FeedAllArticles != 0 {
+		limit = -1 // SQLite LIMIT -1: no limit
+	}
+	articles, err := s.Q.ListPublishedArticlesByTag(ctx, query.ListPublishedArticlesByTagParams{TagID: tag.ID, Limit: limit, Offset: 0})
+	if err != nil {
+		s.listError(w, "list tag feed articles", err)
 		return
 	}
 	siteURL := normalizeSiteURL(st.Url.String)

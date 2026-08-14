@@ -642,10 +642,6 @@ h2 {
     padding-left: 0.6em;
 }
 
-.source-reference__links {
-    margin-top: 0.75rem;
-}
-
 /* Pagination (public, will_paginate markup) */
 .pagination {
     display: flex;

@@ -213,11 +213,13 @@ func TestAdminArticlesCreateFlow(t *testing.T) {
 	session := articlesSessionCookie(t, s)
 	ctx := t.Context()
 
-	// New form renders with the create action and comments enabled by default.
+	// New form renders with the create action, comments enabled by default and
+	// the tags field prefilled with the default "blog" tag.
 	rec := doRequest(t, h, http.MethodGet, "/admin/posts/new", nil, session)
 	if rec.Code != http.StatusOK ||
 		!strings.Contains(rec.Body.String(), `action="/admin/posts"`) ||
-		!strings.Contains(rec.Body.String(), `name="comment" value="1" checked`) {
+		!strings.Contains(rec.Body.String(), `name="comment" value="1" checked`) ||
+		!strings.Contains(rec.Body.String(), `name="tag_list" value="blog"`) {
 		t.Fatalf("new form: status = %d", rec.Code)
 	}
 

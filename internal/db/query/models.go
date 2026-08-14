@@ -213,6 +213,7 @@ type Setting struct {
 	CreatedAt          int64
 	UpdatedAt          int64
 	ArticleRoutePrefix sql.NullString
+	FeedAllArticles    int64
 }
 
 type SocialMediaPost struct {

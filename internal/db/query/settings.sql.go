@@ -15,7 +15,8 @@ const updateSettings = `-- name: UpdateSettings :exec
 UPDATE settings
 SET title = ?, description = ?, author = ?, url = ?, time_zone = ?,
     head_code = ?, custom_css = ?, tool_code = ?, giscus = ?,
-    social_links = ?, article_route_prefix = ?, updated_at = ?
+    social_links = ?, article_route_prefix = ?, feed_all_articles = ?,
+    updated_at = ?
 WHERE id = 1
 `
 
@@ -31,6 +32,7 @@ type UpdateSettingsParams struct {
 	Giscus             sql.NullString
 	SocialLinks        sql.NullString
 	ArticleRoutePrefix sql.NullString
+	FeedAllArticles    int64
 	UpdatedAt          int64
 }
 
@@ -49,6 +51,7 @@ func (q *Queries) UpdateSettings(ctx context.Context, arg UpdateSettingsParams) 
 		arg.Giscus,
 		arg.SocialLinks,
 		arg.ArticleRoutePrefix,
+		arg.FeedAllArticles,
 		arg.UpdatedAt,
 	)
 	return err

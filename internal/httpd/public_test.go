@@ -817,20 +817,50 @@ func TestPublicChromeUndecodableSocialLinks(t *testing.T) {
 	}
 }
 
+// TestPublicChromeSocialLinksOrder covers the sidebar rendering the social
+// links in the stored JSON's entry order, never re-sorted alphabetically.
+func TestPublicChromeSocialLinksOrder(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	if _, err := s.Settings().Get(t.Context()); err != nil {
+		t.Fatalf("ensure settings: %v", err)
+	}
+	if _, err := s.DB.Exec(`UPDATE settings SET social_links = '{"rss":{"url":"https://example.com/feed","icon":"fa-solid fa-square-rss"},"github":{"url":"https://github.com/versun","icon":"fa-brands fa-github"}}' WHERE id = 1`); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	s.Settings().Invalidate()
+
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	rss := strings.Index(body, `href="https://example.com/feed"`)
+	github := strings.Index(body, `href="https://github.com/versun"`)
+	if rss == -1 || github == -1 {
+		t.Fatalf("social links not rendered: rss at %d, github at %d", rss, github)
+	}
+	if rss > github {
+		t.Error("social links re-sorted alphabetically; want the stored entry order (rss before github)")
+	}
+}
+
 // TestBuildSourceReferenceUnsafeURL: a source_url persisted from an
 // attacker-controlled import (railsmigrate/transfer) must not become an href
 // unless it is an absolute http(s) URL with a host.
 func TestBuildSourceReferenceUnsafeURL(t *testing.T) {
-	out := string(buildSourceReference("alice", "quoted", "javascript:alert(1)"))
+	out := string(buildSourceReference("quoted", "javascript:alert(1)"))
 	if strings.Contains(out, "<a href=") {
 		t.Errorf("javascript: source_url rendered a link: %s", out)
 	}
-	if !strings.Contains(out, "alice") {
-		t.Error("author dropped together with the unsafe link")
+	if !strings.Contains(out, "引用") {
+		t.Error("quote label dropped together with the unsafe link")
 	}
 
-	out = string(buildSourceReference("alice", "quoted", "https://example.com/post"))
+	out = string(buildSourceReference("quoted", "https://example.com/post"))
 	if !strings.Contains(out, `href="https://example.com/post"`) {
 		t.Errorf("https source_url not linked: %s", out)
+	}
+	if !strings.Contains(out, "fa-external-link-alt") {
+		t.Errorf("jump icon missing next to the 引用 link: %s", out)
 	}
 }

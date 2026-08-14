@@ -464,7 +464,7 @@ func TestSendNewsletterListmonk(t *testing.T) {
 		t.Errorf("create body lists = %v", body["lists"])
 	}
 	campaignBody, _ := body["body"].(string)
-	for _, fragment := range []string{"source-reference__quote", "Jane", "quoted", "https://x.test/a", "<p>hello</p>"} {
+	for _, fragment := range []string{"source-reference__quote", "引用", "quoted", "https://x.test/a", "<p>hello</p>"} {
 		if !strings.Contains(campaignBody, fragment) {
 			t.Errorf("campaign body missing %q", fragment)
 		}

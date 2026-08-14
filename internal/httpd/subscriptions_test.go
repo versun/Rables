@@ -21,6 +21,7 @@ import (
 	"rables/internal/config"
 	"rables/internal/db"
 	"rables/internal/db/query"
+	"rables/internal/domain"
 	"rables/internal/jobs"
 	"rables/internal/service/captcha"
 	subscribersvc "rables/internal/service/subscribers"
@@ -1130,8 +1131,8 @@ func TestSubscriptionsIndexPage(t *testing.T) {
 }
 
 // TestInlineSubscribeFormGate covers the navbar/tag-page form visibility:
-// only the native+enabled newsletter shows the form, and only on the pages
-// the Rails views gate it to.
+// only the native+enabled newsletter shows the form; the navbar form renders
+// on every public page (unlike Rails, which gates it to the root page).
 func TestInlineSubscribeFormGate(t *testing.T) {
 	setNewsletter := func(t *testing.T, s *Server, enabled int, provider string) {
 		t.Helper()
@@ -1172,6 +1173,20 @@ func TestInlineSubscribeFormGate(t *testing.T) {
 		}
 		if !strings.Contains(body, `name="captcha[token]"`) {
 			t.Error("navbar form misses the captcha token")
+		}
+	})
+
+	t.Run("article page shows the navbar form", func(t *testing.T) {
+		s, h := newSubscriptionTestServer(t)
+		setNewsletter(t, s, 1, "native")
+		insertArticle(t, s, "hello", int64(domain.StatusPublish), 1)
+		rec := doRequest(t, h, http.MethodGet, "/hello", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "newsletter-subscription") || !strings.Contains(body, `name="subscription[email]"`) {
+			t.Error("navbar form not rendered on the article page")
 		}
 	})
 

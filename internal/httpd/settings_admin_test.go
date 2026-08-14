@@ -82,7 +82,7 @@ func settingsForm() url.Values {
 		"custom_css":        {"body{}"},
 		"tool_code":         {""},
 		"giscus":            {""},
-		"social_links_json": {`{"github":{"url":"https://github.com/versun","icon":"fa-brands fa-github"}}`},
+		"social_links_json": {`{"rss":{"url":"/feed.rss","icon":"fa-solid fa-square-rss"},"github":{"url":"https://github.com/versun","icon":"fa-brands fa-github"}}`},
 	}
 }
 
@@ -170,7 +170,8 @@ func TestSettingsUpdateThenTitleChanges(t *testing.T) {
 		t.Error("edit page does not show the new time zone after update")
 	}
 
-	// The stored row matches, with social_links compacted.
+	// The stored row matches, with social_links compacted and the submitted
+	// entry order preserved (never sorted alphabetically).
 	st, err := s.Q.GetSettings(t.Context())
 	if err != nil {
 		t.Fatalf("get settings: %v", err)
@@ -178,7 +179,7 @@ func TestSettingsUpdateThenTitleChanges(t *testing.T) {
 	if st.Title.String != "Renamed Blog" || st.TimeZone != "Asia/Shanghai" {
 		t.Errorf("stored row: title = %q time_zone = %q", st.Title.String, st.TimeZone)
 	}
-	if want := `{"github":{"icon":"fa-brands fa-github","url":"https://github.com/versun"}}`; st.SocialLinks.String != want {
+	if want := `{"rss":{"url":"/feed.rss","icon":"fa-solid fa-square-rss"},"github":{"url":"https://github.com/versun","icon":"fa-brands fa-github"}}`; st.SocialLinks.String != want {
 		t.Errorf("stored social_links = %q, want %q", st.SocialLinks.String, want)
 	}
 }
@@ -417,6 +418,49 @@ func TestSettingsUpdateArticleRoutePrefix(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestSettingsUpdateFeedAllArticles covers the feed size checkbox: checked
+// stores 1, unchecked (hidden "0" only) stores 0, and the edit page reflects
+// the stored state.
+func TestSettingsUpdateFeedAllArticles(t *testing.T) {
+	s, h := newSettingsTestServer(t)
+	session := settingsSession(t, s)
+	markSetupCompleted(t, s)
+
+	form := settingsForm()
+	form["feed_all_articles"] = []string{"0", "1"} // Rails hidden field + checkbox
+	rec := doRequest(t, h, http.MethodPost, "/admin/setting", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	st, err := s.Q.GetSettings(t.Context())
+	if err != nil {
+		t.Fatalf("get settings: %v", err)
+	}
+	if st.FeedAllArticles != 1 {
+		t.Errorf("feed_all_articles = %d, want 1", st.FeedAllArticles)
+	}
+
+	rec = doRequest(t, h, http.MethodGet, "/admin/setting/edit", nil, session)
+	if !strings.Contains(rec.Body.String(), `name="feed_all_articles" value="1" checked`) {
+		t.Error("edit page does not show the stored checkbox state")
+	}
+
+	// Unchecked: the browser submits only the hidden "0".
+	form = settingsForm()
+	form.Set("feed_all_articles", "0")
+	rec = doRequest(t, h, http.MethodPost, "/admin/setting", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	st, err = s.Q.GetSettings(t.Context())
+	if err != nil {
+		t.Fatalf("get settings: %v", err)
+	}
+	if st.FeedAllArticles != 0 {
+		t.Errorf("feed_all_articles = %d, want 0", st.FeedAllArticles)
+	}
 }
 
 // TestSettingsSharedAccessor: Settings() returns the same cache instance and

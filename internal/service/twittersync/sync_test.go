@@ -258,6 +258,49 @@ func TestRunIncrementalSinceID(t *testing.T) {
 	}
 }
 
+func TestRunTagsArticleAsTwitter(t *testing.T) {
+	database := newTestDB(t)
+	enableSync(t, database, "alice")
+	fx := &fakeX{t: t, userID: "42", pages: [][]map[string]any{{tweetJSON(1, "hello")}}}
+	s := newSyncer(database, t.TempDir(), fx.server())
+
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	article := articleBySlug(t, database, "tweet-1")
+	var tagName string
+	if err := database.QueryRow(`SELECT tags.name FROM article_tags
+		JOIN tags ON tags.id = article_tags.tag_id
+		WHERE article_tags.article_id = ?`, article.ID).Scan(&tagName); err != nil {
+		t.Fatalf("query article tag: %v", err)
+	}
+	if tagName != "twitter" {
+		t.Errorf("tag = %q, want twitter", tagName)
+	}
+
+	// A later sync reuses the existing tag row instead of duplicating it.
+	fx.pages = [][]map[string]any{{tweetJSON(2, "again")}}
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	var tagCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM tags WHERE LOWER(name) = 'twitter'`).Scan(&tagCount); err != nil {
+		t.Fatalf("count tags: %v", err)
+	}
+	if tagCount != 1 {
+		t.Errorf("twitter tag rows = %d, want 1", tagCount)
+	}
+	article2 := articleBySlug(t, database, "tweet-2")
+	var linked int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM article_tags
+		WHERE article_id = ? AND tag_id = (SELECT id FROM tags WHERE name = 'twitter')`, article2.ID).Scan(&linked); err != nil {
+		t.Fatalf("query article_tags: %v", err)
+	}
+	if linked != 1 {
+		t.Errorf("tweet-2 twitter tag links = %d, want 1", linked)
+	}
+}
+
 func TestRunStartDateBackfill(t *testing.T) {
 	database := newTestDB(t)
 	enableSync(t, database, "alice")

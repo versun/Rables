@@ -90,6 +90,40 @@ func TestCommentsTreePartial(t *testing.T) {
 	}
 }
 
+// TestCommentsTreeAuthorLink: the author name is linked only when a non-empty
+// author_url was left. Rows may hold "" instead of NULL (migrated data), and
+// an empty href would resolve to the article itself.
+func TestCommentsTreeAuthorLink(t *testing.T) {
+	r, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	noURL := treeFixture(1, "", domain.CommentApproved, 0, 100)
+	noURL.AuthorName = "NoLink"
+	noURL.AuthorUrl = sql.NullString{String: "", Valid: true}
+	withURL := treeFixture(2, "", domain.CommentApproved, 0, 200)
+	withURL.AuthorName = "WithLink"
+	withURL.AuthorUrl = sql.NullString{String: "https://blog.example.com", Valid: true}
+
+	nodes := comments.BuildTree([]query.Comment{noURL, withURL})
+	comments.PrepareDisplay(nodes, "UTC", comments.FormData{
+		Action: "/comments?article_id=x", Question: "1 + 2 =", Token: "tok", A: 1, B: 2, Op: "+",
+	})
+
+	var b strings.Builder
+	if err := r.pages["dummy"].tpl.ExecuteTemplate(&b, "comments_tree", nodes); err != nil {
+		t.Fatalf("execute comments_tree: %v", err)
+	}
+	out := b.String()
+	if strings.Contains(out, `<a href=""`) || strings.Contains(out, `>NoLink</a>`) {
+		t.Error("empty author_url rendered as a link (resolves to the article page)")
+	}
+	if !strings.Contains(out, `<a href="https://blog.example.com"`) {
+		t.Error("author_url not linked")
+	}
+}
+
 // TestCommentFormPartial renders the top-level form (no parent_id field).
 func TestCommentFormPartial(t *testing.T) {
 	r, err := New()

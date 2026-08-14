@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"io"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -162,14 +163,14 @@ func TestSocialLinksRoundTrip(t *testing.T) {
 			want  string
 		}{
 			{name: "nil is empty", links: nil, want: ""},
-			{name: "empty map", links: SocialLinks{}, want: "{}"},
+			{name: "empty slice", links: SocialLinks{}, want: "{}"},
 			{
-				name: "platforms",
+				name: "platforms keep document order",
 				links: SocialLinks{
-					"github": {URL: "https://github.com/versun", Icon: "fa-brands fa-github"},
-					"rss":    {URL: "/feed.rss", Icon: "fa-solid fa-square-rss"},
+					{Platform: "rss", SocialLink: SocialLink{URL: "/feed.rss", Icon: "fa-solid fa-square-rss"}},
+					{Platform: "github", SocialLink: SocialLink{URL: "https://github.com/versun", Icon: "fa-brands fa-github"}},
 				},
-				want: `{"github":{"url":"https://github.com/versun","icon":"fa-brands fa-github"},"rss":{"url":"/feed.rss","icon":"fa-solid fa-square-rss"}}`,
+				want: `{"rss":{"url":"/feed.rss","icon":"fa-solid fa-square-rss"},"github":{"url":"https://github.com/versun","icon":"fa-brands fa-github"}}`,
 			},
 		}
 		for _, tt := range tests {
@@ -182,13 +183,8 @@ func TestSocialLinksRoundTrip(t *testing.T) {
 				if err != nil {
 					t.Fatalf("UnmarshalSocialLinks(%q): %v", got, err)
 				}
-				if len(back) != len(tt.links) {
-					t.Fatalf("round trip lost entries: got %v, want %v", back, tt.links)
-				}
-				for k, v := range tt.links {
-					if back[k] != v {
-						t.Errorf("round trip entry %q = %+v, want %+v", k, back[k], v)
-					}
+				if !slices.Equal(back, tt.links) {
+					t.Errorf("round trip = %v, want %v", back, tt.links)
 				}
 			})
 		}
@@ -208,12 +204,19 @@ func TestSocialLinksRoundTrip(t *testing.T) {
 		}
 	})
 
+	t.Run("unmarshal non-object degrades to nil", func(t *testing.T) {
+		links, err := UnmarshalSocialLinks(`["github"]`)
+		if err != nil || links != nil {
+			t.Errorf("UnmarshalSocialLinks(%q) = %v, %v; want nil, nil", `["github"]`, links, err)
+		}
+	})
+
 	t.Run("malformed entries are skipped", func(t *testing.T) {
 		links, err := UnmarshalSocialLinks(`{"github":"https://github.com/versun","rss":{"url":"/feed.rss","icon":"i"},"x":{"url":123}}`)
 		if err != nil {
 			t.Fatalf("UnmarshalSocialLinks: %v", err)
 		}
-		if len(links) != 1 || links["rss"].URL != "/feed.rss" {
+		if len(links) != 1 || links[0].Platform != "rss" || links[0].URL != "/feed.rss" {
 			t.Errorf("links = %v, want only the well-formed rss entry", links)
 		}
 	})
@@ -230,7 +233,7 @@ func TestSocialLinksRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SocialLinks: %v", err)
 		}
-		if links["github"].URL != "https://github.com/versun" || links["github"].Icon != "fa-brands fa-github" {
+		if len(links) != 1 || links[0].Platform != "github" || links[0].URL != "https://github.com/versun" || links[0].Icon != "fa-brands fa-github" {
 			t.Errorf("SocialLinks = %v", links)
 		}
 	})
@@ -248,7 +251,8 @@ func TestNormalizeSocialLinks(t *testing.T) {
 	}{
 		{name: "object compacted", raw: "{\n  \"github\": {\"url\": \"https://github.com/versun\"}\n}", want: `{"github":{"url":"https://github.com/versun"}}`},
 		{name: "empty object", raw: "{}", want: "{}"},
-		{name: "unknown keys preserved", raw: `{"x":{"url":"u","icon":"i","color":"red"}}`, want: `{"x":{"color":"red","icon":"i","url":"u"}}`},
+		{name: "unknown keys preserved", raw: `{"x":{"url":"u","icon":"i","color":"red"}}`, want: `{"x":{"url":"u","icon":"i","color":"red"}}`},
+		{name: "entry order preserved, never sorted", raw: `{"rss":{"url":"/feed.rss"},"github":{"url":"https://github.com/versun"}}`, want: `{"rss":{"url":"/feed.rss"},"github":{"url":"https://github.com/versun"}}`},
 		{name: "malformed JSON", raw: "{nope", wantErr: true},
 		{name: "array rejected", raw: `[1,2]`, wantErr: true},
 		{name: "string rejected", raw: `"x"`, wantErr: true},

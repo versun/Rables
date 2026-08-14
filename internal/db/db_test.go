@@ -196,8 +196,8 @@ func TestMigrationsValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectMigrations: %v", err)
 	}
-	if got := len(migs); got != 4 {
-		t.Fatalf("collected %d migrations, want 4", got)
+	if got := len(migs); got != 5 {
+		t.Fatalf("collected %d migrations, want 5", got)
 	}
 
 	db := open(t)

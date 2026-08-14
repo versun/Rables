@@ -30,7 +30,8 @@ type sitemapProbe struct {
 	} `xml:"url"`
 }
 
-// TestPublicFeed covers the RSS feed: 50-item cap, valid XML, publish-only.
+// TestPublicFeed covers the RSS feed: 10-item default, all published articles
+// with feed_all_articles, valid XML, publish-only.
 func TestPublicFeed(t *testing.T) {
 	s, h := newPublicTestServer(t, "")
 	for i := int64(1); i <= 55; i++ {
@@ -50,8 +51,8 @@ func TestPublicFeed(t *testing.T) {
 	if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("feed is not valid XML: %v", err)
 	}
-	if n := len(doc.Channel.Items); n != 50 {
-		t.Errorf("items = %d, want 50 (RSS limit)", n)
+	if n := len(doc.Channel.Items); n != publicFeedRecentLimit {
+		t.Errorf("items = %d, want %d (default feed limit)", n, publicFeedRecentLimit)
 	}
 	// Newest first: the first item is the highest created_at.
 	if len(doc.Channel.Items) > 0 && !strings.HasSuffix(doc.Channel.Items[0].Link, "/feed-55") {
@@ -63,6 +64,22 @@ func TestPublicFeed(t *testing.T) {
 	if len(doc.Channel.Items) > 0 && !strings.HasPrefix(doc.Channel.Items[0].Link, "https://blog.example.com/") {
 		t.Errorf("item link not absolute: %q", doc.Channel.Items[0].Link)
 	}
+
+	t.Run("all articles with feed_all_articles enabled", func(t *testing.T) {
+		setFeedAllArticles(t, s, true)
+		defer setFeedAllArticles(t, s, false)
+		rec := get(t, h, "/feed.xml")
+		var doc rssProbe
+		if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+			t.Fatalf("feed is not valid XML: %v", err)
+		}
+		if n := len(doc.Channel.Items); n != 55 {
+			t.Errorf("items = %d, want 55 (all published)", n)
+		}
+		if len(doc.Channel.Items) > 0 && !strings.HasSuffix(doc.Channel.Items[0].Link, "/feed-55") {
+			t.Errorf("first item link = %q, want newest /feed-55", doc.Channel.Items[0].Link)
+		}
+	})
 
 	t.Run("CDATA with forbidden sequence stays valid", func(t *testing.T) {
 		seedArticle(t, s, seedArticleOpts{slug: "cdata-trap", title: "Trap", content: "<p>a]]>b</p>", status: 1, createdAt: 200})
@@ -137,6 +154,37 @@ func TestPublicTagFeed(t *testing.T) {
 		rec := get(t, h, "/tags/go")
 		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 			t.Errorf("/tags/go Content-Type = %q, want html (param edge order)", ct)
+		}
+	})
+
+	t.Run("tag feed honors feed_all_articles", func(t *testing.T) {
+		manyID := seedTag(t, s, "Many", "many")
+		for i := int64(1); i <= 15; i++ {
+			a := seedArticle(t, s, seedArticleOpts{slug: "many-" + pad2(i), title: "Many " + pad2(i), status: 1, createdAt: i})
+			tagArticle(t, s, a, manyID)
+		}
+
+		rec := get(t, h, "/tags/many.rss")
+		var doc rssProbe
+		if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+			t.Fatalf("tag feed invalid XML: %v", err)
+		}
+		if n := len(doc.Channel.Items); n != publicFeedRecentLimit {
+			t.Errorf("items = %d, want %d (default feed limit)", n, publicFeedRecentLimit)
+		}
+		if len(doc.Channel.Items) > 0 && !strings.HasSuffix(doc.Channel.Items[0].Link, "/many-15") {
+			t.Errorf("first item link = %q, want newest /many-15", doc.Channel.Items[0].Link)
+		}
+
+		setFeedAllArticles(t, s, true)
+		defer setFeedAllArticles(t, s, false)
+		rec = get(t, h, "/tags/many.rss")
+		doc = rssProbe{}
+		if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+			t.Fatalf("tag feed invalid XML: %v", err)
+		}
+		if n := len(doc.Channel.Items); n != 15 {
+			t.Errorf("items = %d, want 15 (all published)", n)
 		}
 	})
 }
@@ -255,6 +303,23 @@ func setRoutePrefix(t *testing.T, s *Server, prefix string) {
 	}
 	if _, err := s.DB.Exec(`UPDATE settings SET article_route_prefix = ? WHERE id = 1`, prefix); err != nil {
 		t.Fatalf("set route prefix: %v", err)
+	}
+	s.Settings().Invalidate()
+}
+
+// setFeedAllArticles flips settings.feed_all_articles directly, like the admin
+// settings form would, and drops the cached row.
+func setFeedAllArticles(t *testing.T, s *Server, all bool) {
+	t.Helper()
+	if _, err := s.Settings().Get(t.Context()); err != nil {
+		t.Fatalf("ensure settings: %v", err)
+	}
+	var v int
+	if all {
+		v = 1
+	}
+	if _, err := s.DB.Exec(`UPDATE settings SET feed_all_articles = ? WHERE id = 1`, v); err != nil {
+		t.Fatalf("set feed_all_articles: %v", err)
 	}
 	s.Settings().Invalidate()
 }

@@ -30,6 +30,10 @@ const adminArticlesPerPage = 100
 // overflow int64, mirroring will_paginate's BIGINT offset guard (InvalidPage).
 const maxAdminPageNumber int64 = math.MaxInt64 / adminArticlesPerPage
 
+// defaultArticleTag prefills the new-post form's tag field, so an admin post
+// carries the "blog" tag unless the field is edited before saving.
+const defaultArticleTag = "blog"
+
 // RegisterArticlesAdminRoutes mounts the admin article UI, mirroring Rails
 // namespace :admin: the admin root is the article list and resources
 // :articles are served under /admin/posts. HTML forms cannot PATCH/DELETE,
@@ -398,6 +402,7 @@ func (s *Server) newArticleFormData(w http.ResponseWriter, r *http.Request) (adm
 		Form: adminArticleForm{
 			Status:      "draft",
 			ContentType: string(domain.ContentTypeRichText),
+			TagList:     defaultArticleTag,
 			Comment:     true,
 			Crosspost:   map[string]bool{},
 			SocialURLs:  map[string]string{},

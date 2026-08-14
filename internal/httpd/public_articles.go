@@ -136,11 +136,6 @@ func (s *Server) publicArticleIndex(w http.ResponseWriter, r *http.Request) {
 		s.listError(w, "load site settings", err)
 		return
 	}
-	// The navbar subscription form shows only on the root page
-	// (current_page?(root_path) in the Rails _nav_bar partial).
-	if r.URL.Path == "/" {
-		chrome.Subscribe = s.subscribeInlineForm(ctx, 0)
-	}
 	items, err := s.listItems(ctx, articles)
 	if err != nil {
 		s.listError(w, "list article tags", err)
@@ -263,7 +258,7 @@ func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request, slug 
 		MetaImage:       metaImage,
 		FullURL:         chrome.SiteURL + comments.ArticlePath(s.routePrefix(ctx), slug),
 		Tags:            tags,
-		SourceRef:       buildSourceReference(article.SourceAuthor.String, article.SourceContent.String, article.SourceUrl.String),
+		SourceRef:       buildSourceReference(article.SourceContent.String, article.SourceUrl.String),
 		Comments:        section,
 	})
 }
