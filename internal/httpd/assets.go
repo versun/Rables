@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -11,42 +12,44 @@ import (
 )
 
 // RegisterAssetsRoutes mounts GET /assets/* for the embedded frontend files
-// (plan T28). URLs are fixed (no content hash) so the embedded layout
-// template can reference them statically; every response carries a strong
-// ETag (content sha256) plus a short max-age, so repeat visits revalidate
-// cheaply with 304s and a deploy is picked up within an hour.
+// (plan T28). Templates reference content-fingerprinted URLs
+// (/assets/app.c694bfa3.js, see assets.Name), served immutable for a year: a
+// deploy changes the URL, so no cache layer can pin a stale copy. The plain
+// logical URLs keep serving with ETag + a one-hour TTL for pages rendered
+// before a deploy.
 func RegisterAssetsRoutes(r chi.Router, s *Server) {
-	r.Get("/assets/app.js", serveEmbeddedAsset("app.js", "text/javascript; charset=utf-8"))
-	r.Get("/assets/app.css", serveEmbeddedAsset("app.css", "text/css; charset=utf-8"))
-	r.Get("/assets/admin.css", serveEmbeddedAsset("admin.css", "text/css; charset=utf-8"))
-	r.Get("/assets/lexxy.min.js", serveEmbeddedAsset("lexxy.min.js", "text/javascript; charset=utf-8"))
-	r.Get("/assets/lexxy.css", serveEmbeddedAsset("lexxy.css", "text/css; charset=utf-8"))
-	r.Get("/assets/activestorage_shim.js", serveEmbeddedAsset("activestorage_shim.js", "text/javascript; charset=utf-8"))
-	r.Get("/assets/easymde.min.js", serveEmbeddedAsset("easymde.min.js", "text/javascript; charset=utf-8"))
-	r.Get("/assets/easymde.min.css", serveEmbeddedAsset("easymde.min.css", "text/css; charset=utf-8"))
+	r.Get("/assets/{file}", serveAsset)
 }
 
-// serveEmbeddedAsset loads name from the embedded FS once and returns a
-// handler serving it with ETag/Cache-Control. A missing file panics at
-// registration time: //go:embed makes that a build-time asset, so a typo
-// must fail fast at startup, not per request.
-func serveEmbeddedAsset(name, contentType string) http.HandlerFunc {
-	body, err := assets.FS.ReadFile(name)
-	if err != nil {
-		panic("httpd: embedded asset " + name + ": " + err.Error())
+// serveAsset serves one embedded file resolved by assets.Resolve. Only .js
+// and .css are ever embedded; the content type derives from the extension.
+func serveAsset(w http.ResponseWriter, r *http.Request) {
+	name, fingerprinted, ok := assets.Resolve(chi.URLParam(r, "file"))
+	if !ok {
+		http.NotFound(w, r)
+		return
 	}
-	sum := sha256.Sum256(body)
-	etag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	// Resolve only returns names from the embedded FS, so this cannot fail.
+	body, _ := assets.FS.ReadFile(name)
 
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", contentType)
+	contentType := "text/javascript; charset=utf-8"
+	if strings.HasSuffix(name, ".css") {
+		contentType = "text/css; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", contentType)
+
+	if fingerprinted {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		sum := sha256.Sum256(body)
+		etag := `"` + hex.EncodeToString(sum[:8]) + `"`
 		w.Header().Set("ETag", etag)
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		if r.Header.Get("If-None-Match") == etag {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
 	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }

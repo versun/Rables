@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>{{block "title" .}}{{end}}</title>
-    <link rel="stylesheet" href="/assets/app.css">
-    <script src="/assets/app.js" defer></script>
+    <link rel="stylesheet" href="{{assetURL "app.css"}}">
+    <script src="{{assetURL "app.js"}}" defer></script>
     {{block "head" .}}{{end}}
   </head>
   <body>

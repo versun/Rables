@@ -4,16 +4,16 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>{{block "title" .}}{{end}}</title>
-    <link rel="stylesheet" href="/assets/app.css">
-    <link rel="stylesheet" href="/assets/admin.css">
+    <link rel="stylesheet" href="{{assetURL "app.css"}}">
+    <link rel="stylesheet" href="{{assetURL "admin.css"}}">
     <script type="importmap">
       {
         "imports": {
-          "@rails/activestorage": "/assets/activestorage_shim.js"
+          "@rails/activestorage": "{{assetURL "activestorage_shim.js"}}"
         }
       }
     </script>
-    <script src="/assets/app.js" defer></script>
+    <script src="{{assetURL "app.js"}}" defer></script>
     {{block "head" .}}{{end}}
   </head>
   <body class="admin-body">

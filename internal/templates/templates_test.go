@@ -3,6 +3,8 @@ package templates
 import (
 	"strings"
 	"testing"
+
+	"rables/internal/assets"
 )
 
 type dummyData struct {
@@ -85,8 +87,8 @@ func TestRenderAccountPageUsesAdminLayout(t *testing.T) {
 	out := b.String()
 
 	wants := []string{
-		"admin-sidebar",          // admin shell sidebar
-		`<link rel="stylesheet" href="/assets/admin.css">`,
+		"admin-sidebar", // admin shell sidebar
+		`<link rel="stylesheet" href="/assets/` + assets.Name("admin.css") + `">`,
 		"<title>Account Settings</title>",
 		`action="/users/1"`,
 		`value="alice"`,

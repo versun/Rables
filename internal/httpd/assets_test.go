@@ -6,37 +6,39 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+
+	"rables/internal/assets"
 )
 
-// TestAssetsRoutes covers the embedded frontend assets: 200 with the right
-// Content-Type, an ETag + Cache-Control on every file, 304 on revalidation,
-// and 404 for anything else under /assets/.
+// TestAssetsRoutes covers the embedded frontend assets: fingerprinted URLs
+// are served immutable for a year, the plain logical URLs keep ETag + a
+// one-hour TTL with 304 revalidation, and unknown names 404.
 func TestAssetsRoutes(t *testing.T) {
 	r := chi.NewRouter()
 	RegisterAssetsRoutes(r, nil)
 
-	cases := []struct {
-		path        string
-		contentType string
-	}{
-		{"/assets/app.js", "text/javascript; charset=utf-8"},
-		{"/assets/app.css", "text/css; charset=utf-8"},
-		{"/assets/admin.css", "text/css; charset=utf-8"},
-		{"/assets/lexxy.min.js", "text/javascript; charset=utf-8"},
-		{"/assets/lexxy.css", "text/css; charset=utf-8"},
-		{"/assets/activestorage_shim.js", "text/javascript; charset=utf-8"},
+	names := []string{
+		"app.js", "app.css", "admin.css",
+		"lexxy.min.js", "lexxy.css", "activestorage_shim.js",
+		"easymde.min.js", "easymde.min.css",
+	}
+	contentType := func(name string) string {
+		if name[len(name)-4:] == ".css" {
+			return "text/css; charset=utf-8"
+		}
+		return "text/javascript; charset=utf-8"
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.path, func(t *testing.T) {
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/"+name, nil))
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", rec.Code)
 			}
-			if ct := rec.Header().Get("Content-Type"); ct != tc.contentType {
-				t.Errorf("Content-Type = %q, want %q", ct, tc.contentType)
+			if ct := rec.Header().Get("Content-Type"); ct != contentType(name) {
+				t.Errorf("Content-Type = %q, want %q", ct, contentType(name))
 			}
 			if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=3600" {
 				t.Errorf("Cache-Control = %q", cc)
@@ -50,7 +52,7 @@ func TestAssetsRoutes(t *testing.T) {
 			}
 
 			re := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			req := httptest.NewRequest(http.MethodGet, "/assets/"+name, nil)
 			req.Header.Set("If-None-Match", etag)
 			r.ServeHTTP(re, req)
 			if re.Code != http.StatusNotModified {
@@ -60,11 +62,37 @@ func TestAssetsRoutes(t *testing.T) {
 				t.Errorf("304 body = %d bytes, want 0", re.Body.Len())
 			}
 		})
+
+		t.Run(name+" fingerprinted", func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/"+assets.Name(name), nil))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != contentType(name) {
+				t.Errorf("Content-Type = %q, want %q", ct, contentType(name))
+			}
+			if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
+				t.Errorf("Cache-Control = %q", cc)
+			}
+			if rec.Body.Len() == 0 {
+				t.Fatal("empty body")
+			}
+		})
 	}
 
 	t.Run("unknown asset 404", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/nope.js", nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("wrong fingerprint 404", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/app.00000000.js", nil))
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("status = %d, want 404", rec.Code)
 		}

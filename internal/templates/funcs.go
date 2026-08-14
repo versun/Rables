@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"rables/internal/assets"
 )
 
 // Flash carries the one-time notice/alert messages shown at the top of a
@@ -23,7 +25,16 @@ func FuncMap() template.FuncMap {
 		"formatTime":       FormatTime,
 		"paginationWindow": PaginationWindow,
 		"flashHTML":        FlashHTML,
+		"assetURL":         AssetURL,
 	}
+}
+
+// AssetURL returns the content-fingerprinted /assets/ URL for a logical
+// asset name (see assets.Name): a deploy changes the URL, so caches can never
+// pin a stale copy of app.js/app.css/admin.css or the import-mapped
+// activestorage shim.
+func AssetURL(name string) string {
+	return "/assets/" + assets.Name(name)
 }
 
 // FormatTime formats unix seconds (stored UTC) in the IANA time zone tzName
