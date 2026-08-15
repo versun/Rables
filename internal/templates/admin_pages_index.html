@@ -9,17 +9,6 @@
     </div>
   </div>
 
-  <div class="toolbar">
-    <div class="tabs">
-      <a href="/admin/pages" class="tab {{if eq .Status ""}}active{{end}}">All</a>
-      <a href="/admin/pages?status=publish" class="tab {{if eq .Status "publish"}}active{{end}}">Published</a>
-      <a href="/admin/pages?status=draft" class="tab {{if eq .Status "draft"}}active{{end}}">Draft</a>
-      <a href="/admin/pages?status=schedule" class="tab {{if eq .Status "schedule"}}active{{end}}">Scheduled</a>
-      <a href="/admin/pages?status=shared" class="tab {{if eq .Status "shared"}}active{{end}}">Shared</a>
-      <a href="/admin/pages?status=trash" class="tab {{if eq .Status "trash"}}active{{end}}">Trash</a>
-    </div>
-  </div>
-
   <div class="batch-bar" data-batch-selection-target="actions" style="display: none;">
     <span class="batch-count"><span data-batch-selection-target="count">0</span> selected</span>
     <button type="submit" form="batch-pages" formaction="/admin/pages/batch_publish" class="btn btn-sm btn-success">Publish</button>
@@ -36,10 +25,29 @@
             <input type="checkbox" data-batch-selection-target="selectAll" data-action="change->batch-selection#toggleAll" aria-label="Select all">
           </th>
           <th>Title</th>
-          <th>Order</th>
+          <th>
+            <details class="th-filter">
+              <summary class="{{if ne .Status "all"}}filtered{{end}}">Status</summary>
+              <div class="th-filter-menu">
+                <a href="{{.StatusURL "all"}}" class="{{if eq .Status "all"}}active{{end}}">All</a>
+                <a href="{{.StatusURL "publish"}}" class="{{if eq .Status "publish"}}active{{end}}">Published</a>
+                <a href="{{.StatusURL "draft"}}" class="{{if eq .Status "draft"}}active{{end}}">Draft</a>
+                <a href="{{.StatusURL "schedule"}}" class="{{if eq .Status "schedule"}}active{{end}}">Scheduled</a>
+                <a href="{{.StatusURL "shared"}}" class="{{if eq .Status "shared"}}active{{end}}">Shared</a>
+                <a href="{{.StatusURL "trash"}}" class="{{if eq .Status "trash"}}active{{end}}">Trash</a>
+              </div>
+            </details>
+          </th>
+          <th>
+            <a href="{{.SortURL "order"}}" class="th-sort {{if eq .Sort "order"}}active{{end}}">Order{{if eq .Sort "order"}}{{if eq .Dir "asc"}} ↑{{else}} ↓{{end}}{{end}}</a>
+          </th>
           <th>Redirect</th>
-          <th>Created</th>
-          <th>Updated</th>
+          <th>
+            <a href="{{.SortURL "created"}}" class="th-sort {{if eq .Sort "created"}}active{{end}}">Created{{if eq .Sort "created"}}{{if eq .Dir "asc"}} ↑{{else}} ↓{{end}}{{end}}</a>
+          </th>
+          <th>
+            <a href="{{.SortURL "updated"}}" class="th-sort {{if eq .Sort "updated"}}active{{end}}">Updated{{if eq .Sort "updated"}}{{if eq .Dir "asc"}} ↑{{else}} ↓{{end}}{{end}}</a>
+          </th>
           <th class="row-actions">Actions</th>
         </tr>
       </thead>
@@ -53,6 +61,9 @@
               </td>
               <td>
                 <a href="/admin/pages/{{.Page.Slug.String}}/edit" class="title-link">{{.Page.Title.String}}</a>
+              </td>
+              <td>
+                <span class="badge badge-{{.StatusName}}">{{.StatusName}}</span>
               </td>
               <td>
                 <small class="text-muted">{{.Page.PageOrder}}</small>
@@ -87,7 +98,7 @@
           {{end}}
         {{else}}
           <tr>
-            <td colspan="7" class="empty">No pages found.</td>
+            <td colspan="8" class="empty">No pages found.</td>
           </tr>
         {{end}}
       </tbody>
@@ -102,7 +113,7 @@
         {{else if eq .Page $.Page}}
           <span class="pagination-current">{{.Page}}</span>
         {{else}}
-          <a href="/admin/pages?page={{.Page}}{{if $.Status}}&status={{$.Status}}{{end}}" class="pagination-link">{{.Page}}</a>
+          <a href="{{$.PageURL .Page}}" class="pagination-link">{{.Page}}</a>
         {{end}}
       {{end}}
     </div>

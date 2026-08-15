@@ -51,6 +51,19 @@ func (q *Queries) ConfirmSubscriber(ctx context.Context, arg ConfirmSubscriberPa
 	return err
 }
 
+const countUnconfirmedSubscribers = `-- name: CountUnconfirmedSubscribers :one
+SELECT COUNT(*) FROM subscribers WHERE confirmed_at IS NULL
+`
+
+// Sidebar badge: subscribers still pending confirmation (the admin index's
+// "unconfirmed" filter).
+func (q *Queries) CountUnconfirmedSubscribers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countUnconfirmedSubscribers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createSubscriber = `-- name: CreateSubscriber :one
 INSERT INTO subscribers (email, confirmation_token, unsubscribe_token, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?) RETURNING id, email, confirmation_token, unsubscribe_token, confirmed_at, unsubscribed_at, created_at, updated_at

@@ -5,22 +5,52 @@
 -- name: GetAdminPageBySlug :one
 SELECT * FROM pages WHERE slug = ?;
 
--- name: CountAdminPages :one
-SELECT COUNT(*) FROM pages;
-
--- name: CountAdminPagesByStatus :one
-SELECT COUNT(*) FROM pages WHERE status = ?;
-
--- name: ListAdminPages :many
+-- Admin list: optional status filter (status_filter -1 = all), 100 per page.
+-- sqlc cannot parameterize the ORDER BY column or direction, so the six sort
+-- combinations the admin list offers (page_order/created_at/updated_at x
+-- asc/desc) are separate queries; the default is page_order DESC. id breaks
+-- sort-key ties (page_order ties are common) so pagination is stable. The
+-- CASTs pin the reused filter param's Go type (without them sqlc falls back
+-- to interface{}).
+-- name: ListAdminPagesFilteredOrderDesc :many
 SELECT * FROM pages
-ORDER BY page_order DESC
-LIMIT ? OFFSET ?;
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+ORDER BY page_order DESC, id DESC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
 
--- name: ListAdminPagesByStatus :many
+-- name: ListAdminPagesFilteredOrderAsc :many
 SELECT * FROM pages
-WHERE status = ?
-ORDER BY page_order DESC
-LIMIT ? OFFSET ?;
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+ORDER BY page_order ASC, id ASC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: ListAdminPagesFilteredCreatedDesc :many
+SELECT * FROM pages
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: ListAdminPagesFilteredCreatedAsc :many
+SELECT * FROM pages
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+ORDER BY created_at ASC, id ASC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: ListAdminPagesFilteredUpdatedDesc :many
+SELECT * FROM pages
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+ORDER BY updated_at DESC, id DESC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: ListAdminPagesFilteredUpdatedAsc :many
+SELECT * FROM pages
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+ORDER BY updated_at ASC, id ASC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: CountAdminPagesFiltered :one
+SELECT COUNT(*) FROM pages
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER));
 
 -- name: AdminPageSlugCount :one
 -- Uniqueness check; excludeID is 0 on create so any row matches.

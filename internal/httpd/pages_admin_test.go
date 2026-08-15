@@ -402,7 +402,7 @@ func TestAdminPagesFormErrorKeepsScheduledAt(t *testing.T) {
 }
 
 // TestAdminPagesIndexOrderAndFilter mirrors fetch_articles(sort_by:
-// :page_order): page_order DESC and the status tabs.
+// :page_order): page_order DESC and the status filter.
 func TestAdminPagesIndexOrderAndFilter(t *testing.T) {
 	s, h := newPagesTestServer(t)
 	session := pagesSessionCookie(t, s)
@@ -451,6 +451,77 @@ func TestAdminPagesIndexOrderAndFilter(t *testing.T) {
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("index %q: status = %d, want 404", bad, rec.Code)
 		}
+	}
+}
+
+// TestAdminPagesIndexSort covers the sortable Order/Created/Updated headers.
+func TestAdminPagesIndexSort(t *testing.T) {
+	s, h := newPagesTestServer(t)
+	session := pagesSessionCookie(t, s)
+
+	base := time.Now().Unix() - 10000
+	// The order/created/updated rankings disagree on purpose: Beta ranks first
+	// by page_order but last by updated_at.
+	insert := func(title, slug string, order, created, updated int64) {
+		t.Helper()
+		if _, err := s.Q.CreatePage(t.Context(), query.CreatePageParams{
+			Title:       sql.NullString{String: title, Valid: true},
+			Slug:        sql.NullString{String: slug, Valid: true},
+			ContentHtml: sql.NullString{String: "<p>x</p>", Valid: true},
+			ContentType: string(domain.ContentTypeRichText),
+			PageOrder:   order,
+			Status:      int64(domain.StatusPublish),
+			CreatedAt:   created,
+			UpdatedAt:   updated,
+		}); err != nil {
+			t.Fatalf("insert page %q: %v", slug, err)
+		}
+	}
+	insert("Alpha", "alpha", 1, base+1, base+30)
+	insert("Beta", "beta", 9, base+2, base+10)
+	insert("Gamma", "gamma", 5, base+3, base+20)
+
+	assertOrder := func(path string, want ...string) {
+		t.Helper()
+		rec := doRequest(t, h, http.MethodGet, path, nil, session)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d", path, rec.Code)
+		}
+		body := rec.Body.String()
+		prev := -1
+		for _, title := range want {
+			idx := strings.Index(body, title)
+			if idx < 0 {
+				t.Fatalf("%s: %q missing", path, title)
+			}
+			if idx < prev {
+				t.Errorf("%s: %q is out of order", path, title)
+			}
+			prev = idx
+		}
+	}
+
+	assertOrder("/admin/pages", "Beta", "Gamma", "Alpha") // default page_order DESC
+	assertOrder("/admin/pages?sort=order&dir=asc", "Alpha", "Gamma", "Beta")
+	assertOrder("/admin/pages?sort=created&dir=asc", "Alpha", "Beta", "Gamma")
+	assertOrder("/admin/pages?sort=created&dir=desc", "Gamma", "Beta", "Alpha")
+	assertOrder("/admin/pages?sort=updated&dir=desc", "Alpha", "Gamma", "Beta")
+	assertOrder("/admin/pages?sort=updated&dir=asc", "Beta", "Gamma", "Alpha")
+	// Unknown sort/dir values fall back to page_order DESC.
+	assertOrder("/admin/pages?sort=bogus&dir=sideways", "Beta", "Gamma", "Alpha")
+
+	// The sort links mark the active column, rows carry a status badge, and
+	// the toolbar tabs are gone.
+	rec := doRequest(t, h, http.MethodGet, "/admin/pages", nil, session)
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="th-sort active"`) {
+		t.Errorf("default page should mark Order as the active sort")
+	}
+	if !strings.Contains(body, `badge badge-publish`) {
+		t.Errorf("status badge column missing")
+	}
+	if strings.Contains(body, `class="toolbar"`) {
+		t.Errorf("toolbar should be replaced by header filters")
 	}
 }
 

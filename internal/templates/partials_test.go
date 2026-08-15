@@ -150,3 +150,46 @@ func TestCommentFormPartial(t *testing.T) {
 		t.Error("top-level form must not carry a parent_id")
 	}
 }
+
+// TestAdminSidebarBadges renders the sidebar partial with the badge
+// predicates unset, set, and cleared: the Comments dot follows
+// AdminBadges.Comments, the Newsletter dot AdminBadges.Newsletter, and a nil
+// predicate never shows.
+func TestAdminSidebarBadges(t *testing.T) {
+	r, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	render := func() string {
+		var b strings.Builder
+		if err := r.pages["dummy"].tpl.ExecuteTemplate(&b, "admin_sidebar", nil); err != nil {
+			t.Fatalf("execute admin_sidebar: %v", err)
+		}
+		return b.String()
+	}
+
+	if out := render(); strings.Contains(out, `class="nav-dot"`) {
+		t.Errorf("no badges installed, but a dot rendered:\n%s", out)
+	}
+
+	yes := func() bool { return true }
+	r.SetAdminBadges(AdminBadges{Comments: yes})
+	out := render()
+	if !strings.Contains(out, `title="Pending comments"`) {
+		t.Error("Comments badge: dot missing")
+	}
+	if strings.Contains(out, `title="Unconfirmed subscribers"`) {
+		t.Error("Newsletter badge: dot rendered without a predicate")
+	}
+
+	r.SetAdminBadges(AdminBadges{Comments: yes, Newsletter: yes})
+	out = render()
+	if !strings.Contains(out, `title="Pending comments"`) || !strings.Contains(out, `title="Unconfirmed subscribers"`) {
+		t.Error("both badges set: want both dots")
+	}
+
+	r.SetAdminBadges(AdminBadges{})
+	if out := render(); strings.Contains(out, `class="nav-dot"`) {
+		t.Errorf("badges cleared, but a dot rendered:\n%s", out)
+	}
+}

@@ -32,24 +32,30 @@ SELECT * FROM comments
 WHERE commentable_type = ? AND commentable_id = ?
 ORDER BY published_at ASC;
 
--- name: ListAdminComments :many
--- Admin moderation list (plan section 4.5):
--- COALESCE(published_at, created_at) DESC, 30 per page.
-SELECT * FROM comments
-ORDER BY COALESCE(published_at, created_at) DESC
-LIMIT ? OFFSET ?;
-
--- name: ListAdminCommentsByStatus :many
-SELECT * FROM comments
-WHERE status = ?
-ORDER BY COALESCE(published_at, created_at) DESC
-LIMIT ? OFFSET ?;
-
--- name: CountAdminComments :one
-SELECT COUNT(*) FROM comments;
-
 -- name: CountAdminCommentsByStatus :one
 SELECT COUNT(*) FROM comments WHERE status = ?;
+
+-- Admin moderation list (plan section 4.5): optional status filter
+-- (status_filter -1 = all), COALESCE(published_at, created_at) date sort, 30
+-- per page. sqlc cannot parameterize the ORDER BY direction, so asc/desc are
+-- separate queries; DESC is the default. id breaks date ties so pagination is
+-- stable. The CASTs pin the reused filter param's Go type (without them sqlc
+-- falls back to interface{}).
+-- name: ListAdminCommentsFilteredDateDesc :many
+SELECT * FROM comments
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+ORDER BY COALESCE(published_at, created_at) DESC, id DESC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: ListAdminCommentsFilteredDateAsc :many
+SELECT * FROM comments
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+ORDER BY COALESCE(published_at, created_at) ASC, id ASC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: CountAdminCommentsFiltered :one
+SELECT COUNT(*) FROM comments
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER));
 
 -- name: UpdateCommentStatus :one
 UPDATE comments SET status = ?, updated_at = ?

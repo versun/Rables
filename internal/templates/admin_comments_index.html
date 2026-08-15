@@ -6,15 +6,6 @@
     <h1 class="page-title">Comments</h1>
   </div>
 
-  <div class="toolbar">
-    <div class="tabs">
-      <a href="/admin/comments" class="tab {{if eq .Status ""}}active{{end}}">All</a>
-      <a href="/admin/comments?status=pending" class="tab {{if eq .Status "pending"}}active{{end}}">Pending</a>
-      <a href="/admin/comments?status=approved" class="tab {{if eq .Status "approved"}}active{{end}}">Approved</a>
-      <a href="/admin/comments?status=rejected" class="tab {{if eq .Status "rejected"}}active{{end}}">Rejected</a>
-    </div>
-  </div>
-
   <div class="batch-bar" data-batch-selection-target="actions" style="display: none;">
     <span class="batch-count"><span data-batch-selection-target="count">0</span> selected</span>
     <button type="submit" form="batch-comments" formaction="/admin/comments/batch_approve" class="btn btn-sm btn-success">Approve</button>
@@ -30,11 +21,23 @@
           <th class="row-check">
             <input type="checkbox" data-batch-selection-target="selectAll" data-action="change->batch-selection#toggleAll" aria-label="Select all">
           </th>
-          <th>Status</th>
+          <th>
+            <details class="th-filter">
+              <summary class="{{if ne .Status "all"}}filtered{{end}}">Status</summary>
+              <div class="th-filter-menu">
+                <a href="{{.StatusURL "all"}}" class="{{if eq .Status "all"}}active{{end}}">All</a>
+                <a href="{{.StatusURL "pending"}}" class="{{if eq .Status "pending"}}active{{end}}">Pending</a>
+                <a href="{{.StatusURL "approved"}}" class="{{if eq .Status "approved"}}active{{end}}">Approved</a>
+                <a href="{{.StatusURL "rejected"}}" class="{{if eq .Status "rejected"}}active{{end}}">Rejected</a>
+              </div>
+            </details>
+          </th>
           <th>Content</th>
           <th>Article/Page</th>
           <th>Author</th>
-          <th>Date</th>
+          <th>
+            <a href="{{.DateURL}}" class="th-sort active">Date{{if eq .Dir "asc"}} ↑{{else}} ↓{{end}}</a>
+          </th>
           <th class="row-actions">Actions</th>
         </tr>
       </thead>
@@ -131,7 +134,7 @@
         {{else if eq .Page $.Page}}
           <span class="pagination-current">{{.Page}}</span>
         {{else}}
-          <a href="/admin/comments?page={{.Page}}{{if $.Status}}&status={{$.Status}}{{end}}" class="pagination-link">{{.Page}}</a>
+          <a href="{{$.PageURL .Page}}" class="pagination-link">{{.Page}}</a>
         {{end}}
       {{end}}
     </div>

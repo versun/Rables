@@ -160,6 +160,72 @@ func TestAdminCommentsIndexStatusFilter(t *testing.T) {
 	}
 }
 
+// TestAdminCommentsIndexDateSort covers the sortable Date header.
+func TestAdminCommentsIndexDateSort(t *testing.T) {
+	s, h := newCommentTestServer(t)
+	session := commentSession(t, s)
+	insertArticle(t, s, "post", 1, 1)
+
+	base := query.CreateCommentParams{
+		CommentableType: sql.NullString{String: "Article", Valid: true},
+		CommentableID:   sql.NullInt64{Int64: 1, Valid: true},
+		Status:          int64(domain.CommentPending),
+		Content:         "x",
+	}
+	mk := func(name string, publishedAt, createdAt int64) {
+		p := base
+		p.AuthorName = name
+		p.PublishedAt = sql.NullInt64{Int64: publishedAt, Valid: publishedAt != 0}
+		p.CreatedAt = createdAt
+		p.UpdatedAt = createdAt
+		insertComment(t, s, p)
+	}
+	mk("oldest", 100, 100)
+	mk("middle-via-created", 0, 300) // no published_at: created_at wins
+	mk("newest", 200, 200)
+
+	assertOrder := func(path string, want ...string) {
+		t.Helper()
+		rec := doRequest(t, h, http.MethodGet, path, nil, session)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d", path, rec.Code)
+		}
+		body := rec.Body.String()
+		prev := -1
+		for _, name := range want {
+			idx := strings.Index(body, name)
+			if idx < 0 {
+				t.Fatalf("%s: %q missing", path, name)
+			}
+			if idx < prev {
+				t.Errorf("%s: %q is out of order", path, name)
+			}
+			prev = idx
+		}
+	}
+
+	assertOrder("/admin/comments", "middle-via-created", "newest", "oldest") // default DESC
+	assertOrder("/admin/comments?dir=asc", "oldest", "newest", "middle-via-created")
+	// An unknown direction falls back to DESC.
+	assertOrder("/admin/comments?dir=sideways", "middle-via-created", "newest", "oldest")
+	// The date sort combines with the status filter.
+	assertOrder("/admin/comments?status=pending&dir=asc", "oldest", "newest", "middle-via-created")
+
+	// The toolbar tabs are gone; the Status header carries the filter.
+	rec := doRequest(t, h, http.MethodGet, "/admin/comments", nil, session)
+	body := rec.Body.String()
+	if strings.Contains(body, `class="toolbar"`) {
+		t.Errorf("toolbar should be replaced by header filters")
+	}
+	if !strings.Contains(body, `class="th-filter"`) {
+		t.Errorf("Status header filter missing")
+	}
+	rec = doRequest(t, h, http.MethodGet, "/admin/comments?status=pending", nil, session)
+	if !strings.Contains(rec.Body.String(), `<summary class="filtered">Status</summary>`) {
+		t.Errorf("active status filter should mark the header")
+	}
+}
+
 func TestAdminCommentsPagination(t *testing.T) {
 	s, h := newCommentTestServer(t)
 	session := commentSession(t, s)

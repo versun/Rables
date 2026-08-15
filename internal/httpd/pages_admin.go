@@ -49,16 +49,87 @@ func RegisterPageAdminRoutes(r chi.Router, s *Server) {
 // adminPagesIndexData feeds admin_pages_index.html.
 type adminPagesIndexData struct {
 	Flash      templates.Flash
-	Status     string // current filter: "", "publish", "draft", "schedule", "shared", "trash"
+	Status     string // current status filter ("all" when unset)
 	Pages      []adminPageRow
+	Sort       string // current sort column: "order", "created" or "updated"
+	Dir        string // current sort direction: "asc" or "desc"
 	Page       int
 	TotalPages int
 	TimeZone   string
 }
 
+// filterValues carries every active filter/sort param, omitting defaults so
+// URLs stay bare. It is the single source for list links.
+func (d adminPagesIndexData) filterValues() url.Values {
+	v := url.Values{}
+	if d.Status != "" && d.Status != "all" {
+		v.Set("status", d.Status)
+	}
+	if d.Sort != "order" {
+		v.Set("sort", d.Sort)
+	}
+	if d.Dir != "desc" {
+		v.Set("dir", d.Dir)
+	}
+	return v
+}
+
+// listURL renders a list link preserving every current filter/sort param;
+// mutate adjusts the query for the specific link (page jump, filter change,
+// sort toggle). Filters/sorts never carry the page over: changing them
+// restarts at page 1.
+func (d adminPagesIndexData) listURL(mutate func(url.Values)) string {
+	v := d.filterValues()
+	if mutate != nil {
+		mutate(v)
+	}
+	if len(v) == 0 {
+		return "/admin/pages"
+	}
+	return "/admin/pages?" + v.Encode()
+}
+
+// PageURL is the pagination link for one page; page 1 stays the bare URL.
+func (d adminPagesIndexData) PageURL(page int) string {
+	return d.listURL(func(v url.Values) {
+		if page > 1 {
+			v.Set("page", strconv.Itoa(page))
+		}
+	})
+}
+
+// SortURL toggles the direction when the column is already sorted on,
+// otherwise switches to the column sorted DESC-first.
+func (d adminPagesIndexData) SortURL(column string) string {
+	return d.listURL(func(v url.Values) {
+		dir := "desc"
+		if d.Sort == column && d.Dir == "desc" {
+			dir = "asc"
+		}
+		v.Set("sort", column)
+		v.Set("dir", dir)
+	})
+}
+
+// StatusURL filters by one status ("all" clears the filter).
+func (d adminPagesIndexData) StatusURL(status string) string {
+	return d.listURL(func(v url.Values) {
+		if status == "all" {
+			v.Del("status")
+		} else {
+			v.Set("status", status)
+		}
+	})
+}
+
 // adminPageRow is one list row; Page carries the record.
 type adminPageRow struct {
 	Page query.Page
+}
+
+// StatusName mirrors page.status (badge label).
+func (row adminPageRow) StatusName() string {
+	return domain.Status(row.Page.Status).String()
 }
 
 // TruncatedRedirect mirrors truncate(page.redirect_url, length: 30).
@@ -67,28 +138,23 @@ func (row adminPageRow) TruncatedRedirect() string {
 }
 
 // adminPagesIndex renders GET /admin/pages, mirroring
-// Admin::PagesController#index: optional status filter, page_order DESC,
-// 100 per page. (load_comment_counts returns {} for Page, so no counts here.)
+// Admin::PagesController#index: optional status filter in the Status header,
+// sortable Order/Created/Updated headers (page_order DESC by default), 100
+// per page. (load_comment_counts returns {} for Page, so no counts here.)
 // Invalid page params 404 like WillPaginate::InvalidPage.
 func (s *Server) adminPagesIndex(w http.ResponseWriter, r *http.Request) {
-	var statusFilter *domain.Status
-	statusName := ""
-	switch r.URL.Query().Get("status") {
-	case "publish":
-		st := domain.StatusPublish
-		statusFilter, statusName = &st, "publish"
-	case "draft":
-		st := domain.StatusDraft
-		statusFilter, statusName = &st, "draft"
-	case "schedule":
-		st := domain.StatusSchedule
-		statusFilter, statusName = &st, "schedule"
-	case "shared":
-		st := domain.StatusShared
-		statusFilter, statusName = &st, "shared"
-	case "trash":
-		st := domain.StatusTrash
-		statusFilter, statusName = &st, "trash"
+	ctx := r.Context()
+
+	statusName := r.URL.Query().Get("status")
+	statusFilter, filtered := parseStatusFilter(statusName)
+	if !filtered {
+		// Unknown statuses filter nothing, so the view must not present them
+		// as an active filter either.
+		statusName = "all"
+	}
+	statusValue := int64(-1) // -1: no status filter
+	if filtered {
+		statusValue = statusFilter
 	}
 
 	page := 1
@@ -102,35 +168,22 @@ func (s *Server) adminPagesIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := int64(page-1) * adminPagesPerPage
 
-	var total int64
-	var list []query.Page
-	var err error
-	if statusFilter == nil {
-		total, err = s.Q.CountAdminPages(r.Context())
-	} else {
-		total, err = s.Q.CountAdminPagesByStatus(r.Context(), int64(*statusFilter))
-	}
+	sort, dir := parsePageSort(r.URL.Query().Get("sort"), r.URL.Query().Get("dir"))
+
+	total, err := s.Q.CountAdminPagesFiltered(ctx, statusValue)
 	if err != nil {
 		s.Log.Error("count pages", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if statusFilter == nil {
-		list, err = s.Q.ListAdminPages(r.Context(), query.ListAdminPagesParams{
-			Limit: adminPagesPerPage, Offset: offset,
-		})
-	} else {
-		list, err = s.Q.ListAdminPagesByStatus(r.Context(), query.ListAdminPagesByStatusParams{
-			Status: int64(*statusFilter), Limit: adminPagesPerPage, Offset: offset,
-		})
-	}
+	list, err := s.listAdminPagesSorted(ctx, statusValue, sort, dir, offset)
 	if err != nil {
 		s.Log.Error("list pages", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	settings, err := s.Settings().Get(r.Context())
+	settings, err := s.Settings().Get(ctx)
 	if err != nil {
 		s.Log.Error("load settings", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -146,10 +199,55 @@ func (s *Server) adminPagesIndex(w http.ResponseWriter, r *http.Request) {
 		Flash:      s.PopFlash(r, w),
 		Status:     statusName,
 		Pages:      rows,
+		Sort:       sort,
+		Dir:        dir,
 		Page:       page,
 		TotalPages: int((total + adminPagesPerPage - 1) / adminPagesPerPage),
 		TimeZone:   settings.TimeZone,
 	})
+}
+
+// listAdminPagesSorted dispatches to the fixed ORDER BY variant matching the
+// validated sort column and direction (sqlc cannot parameterize ORDER BY).
+func (s *Server) listAdminPagesSorted(ctx context.Context, statusFilter int64, sort, dir string, offset int64) ([]query.Page, error) {
+	switch {
+	case sort == "created" && dir == "asc":
+		return s.Q.ListAdminPagesFilteredCreatedAsc(ctx, query.ListAdminPagesFilteredCreatedAscParams{
+			StatusFilter: statusFilter, Limit: adminPagesPerPage, Offset: offset,
+		})
+	case sort == "created":
+		return s.Q.ListAdminPagesFilteredCreatedDesc(ctx, query.ListAdminPagesFilteredCreatedDescParams{
+			StatusFilter: statusFilter, Limit: adminPagesPerPage, Offset: offset,
+		})
+	case sort == "updated" && dir == "asc":
+		return s.Q.ListAdminPagesFilteredUpdatedAsc(ctx, query.ListAdminPagesFilteredUpdatedAscParams{
+			StatusFilter: statusFilter, Limit: adminPagesPerPage, Offset: offset,
+		})
+	case sort == "updated":
+		return s.Q.ListAdminPagesFilteredUpdatedDesc(ctx, query.ListAdminPagesFilteredUpdatedDescParams{
+			StatusFilter: statusFilter, Limit: adminPagesPerPage, Offset: offset,
+		})
+	case dir == "asc":
+		return s.Q.ListAdminPagesFilteredOrderAsc(ctx, query.ListAdminPagesFilteredOrderAscParams{
+			StatusFilter: statusFilter, Limit: adminPagesPerPage, Offset: offset,
+		})
+	default:
+		return s.Q.ListAdminPagesFilteredOrderDesc(ctx, query.ListAdminPagesFilteredOrderDescParams{
+			StatusFilter: statusFilter, Limit: adminPagesPerPage, Offset: offset,
+		})
+	}
+}
+
+// parsePageSort validates the header sort params; anything unknown falls back
+// to the Rails index's page_order DESC order.
+func parsePageSort(sort, dir string) (string, string) {
+	if sort != "order" && sort != "created" && sort != "updated" {
+		sort = "order"
+	}
+	if dir != "asc" && dir != "desc" {
+		dir = "desc"
+	}
+	return sort, dir
 }
 
 // adminPageFormData feeds admin_pages_new.html and admin_pages_edit.html.

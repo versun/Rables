@@ -75,6 +75,11 @@ WHERE (sqlc.arg(status) = '' OR
   (sqlc.arg(status) = 'unsubscribed' AND confirmed_at IS NOT NULL AND unsubscribed_at IS NOT NULL))
 ORDER BY created_at DESC;
 
+-- Sidebar badge: subscribers still pending confirmation (the admin index's
+-- "unconfirmed" filter).
+-- name: CountUnconfirmedSubscribers :one
+SELECT COUNT(*) FROM subscribers WHERE confirmed_at IS NULL;
+
 -- Tag-filter candidates: subscribers carrying one given tag.
 -- name: ListSubscriberIDsByTagID :many
 SELECT subscriber_id FROM subscriber_tags WHERE tag_id = ?;

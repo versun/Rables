@@ -45,8 +45,21 @@ type pageTemplate struct {
 // Renderer executes the embedded page templates. Construct it once with New;
 // it is safe for concurrent use.
 type Renderer struct {
-	pages map[string]pageTemplate
+	pages  map[string]pageTemplate
+	badges AdminBadges
 }
+
+// AdminBadges reports which admin sidebar nav items show their "pending" dot.
+// A nil predicate means the dot never shows.
+type AdminBadges struct {
+	Comments   func() bool // pending comment moderation
+	Newsletter func() bool // subscribers pending confirmation
+}
+
+// SetAdminBadges installs the sidebar badge predicates evaluated by the
+// adminBadgeComments/adminBadgeNewsletter template functions. Call once at
+// startup, before the first Render.
+func (r *Renderer) SetAdminBadges(b AdminBadges) { r.badges = b }
 
 // useAdminLayout reports whether the page renders inside the admin shell
 // (sidebar nav + main column) instead of the bare layout. auth_password_edit
@@ -59,11 +72,22 @@ func useAdminLayout(page string) bool {
 
 // New parses the layouts and every embedded page template.
 func New() (*Renderer, error) {
-	base := template.New("").Funcs(FuncMap())
+	r := &Renderer{pages: make(map[string]pageTemplate)}
+	funcs := FuncMap()
+	// Sidebar badge predicates read the renderer's AdminBadges at execution
+	// time, so SetAdminBadges can be called after New (the funcs must exist
+	// at parse time regardless).
+	funcs["adminBadgeComments"] = func() bool {
+		return r.badges.Comments != nil && r.badges.Comments()
+	}
+	funcs["adminBadgeNewsletter"] = func() bool {
+		return r.badges.Newsletter != nil && r.badges.Newsletter()
+	}
+	base := template.New("").Funcs(funcs)
 	if _, err := base.ParseFS(templateFS, layoutName); err != nil {
 		return nil, fmt.Errorf("templates: parse layout: %w", err)
 	}
-	adminBase := template.New("").Funcs(FuncMap())
+	adminBase := template.New("").Funcs(funcs)
 	if _, err := adminBase.ParseFS(templateFS, adminLayoutName); err != nil {
 		return nil, fmt.Errorf("templates: parse admin layout: %w", err)
 	}
@@ -97,7 +121,6 @@ func New() (*Renderer, error) {
 		}
 	}
 
-	r := &Renderer{pages: make(map[string]pageTemplate, len(pages))}
 	for _, name := range pages {
 		// Each page gets its own template set (layout clone + page defines)
 		// so per-page "title"/"content" blocks do not collide.

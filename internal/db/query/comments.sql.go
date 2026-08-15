@@ -10,23 +10,24 @@ import (
 	"database/sql"
 )
 
-const countAdminComments = `-- name: CountAdminComments :one
-SELECT COUNT(*) FROM comments
-`
-
-func (q *Queries) CountAdminComments(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAdminComments)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countAdminCommentsByStatus = `-- name: CountAdminCommentsByStatus :one
 SELECT COUNT(*) FROM comments WHERE status = ?
 `
 
 func (q *Queries) CountAdminCommentsByStatus(ctx context.Context, status int64) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countAdminCommentsByStatus, status)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countAdminCommentsFiltered = `-- name: CountAdminCommentsFiltered :one
+SELECT COUNT(*) FROM comments
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+`
+
+func (q *Queries) CountAdminCommentsFiltered(ctx context.Context, statusFilter int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAdminCommentsFiltered, statusFilter)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -308,21 +309,21 @@ func (q *Queries) GetExternalComment(ctx context.Context, arg GetExternalComment
 	return i, err
 }
 
-const listAdminComments = `-- name: ListAdminComments :many
+const listAdminCommentsFilteredDateAsc = `-- name: ListAdminCommentsFilteredDateAsc :many
 SELECT id, commentable_type, commentable_id, article_id, parent_id, author_name, author_email, author_url, author_username, author_avatar_url, content, status, platform, external_id, url, published_at, created_at, updated_at FROM comments
-ORDER BY COALESCE(published_at, created_at) DESC
-LIMIT ? OFFSET ?
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+ORDER BY COALESCE(published_at, created_at) ASC, id ASC
+LIMIT ?3 OFFSET ?2
 `
 
-type ListAdminCommentsParams struct {
-	Limit  int64
-	Offset int64
+type ListAdminCommentsFilteredDateAscParams struct {
+	StatusFilter int64
+	Offset       int64
+	Limit        int64
 }
 
-// Admin moderation list (plan section 4.5):
-// COALESCE(published_at, created_at) DESC, 30 per page.
-func (q *Queries) ListAdminComments(ctx context.Context, arg ListAdminCommentsParams) ([]Comment, error) {
-	rows, err := q.db.QueryContext(ctx, listAdminComments, arg.Limit, arg.Offset)
+func (q *Queries) ListAdminCommentsFilteredDateAsc(ctx context.Context, arg ListAdminCommentsFilteredDateAscParams) ([]Comment, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminCommentsFilteredDateAsc, arg.StatusFilter, arg.Offset, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -363,21 +364,27 @@ func (q *Queries) ListAdminComments(ctx context.Context, arg ListAdminCommentsPa
 	return items, nil
 }
 
-const listAdminCommentsByStatus = `-- name: ListAdminCommentsByStatus :many
+const listAdminCommentsFilteredDateDesc = `-- name: ListAdminCommentsFilteredDateDesc :many
 SELECT id, commentable_type, commentable_id, article_id, parent_id, author_name, author_email, author_url, author_username, author_avatar_url, content, status, platform, external_id, url, published_at, created_at, updated_at FROM comments
-WHERE status = ?
-ORDER BY COALESCE(published_at, created_at) DESC
-LIMIT ? OFFSET ?
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+ORDER BY COALESCE(published_at, created_at) DESC, id DESC
+LIMIT ?3 OFFSET ?2
 `
 
-type ListAdminCommentsByStatusParams struct {
-	Status int64
-	Limit  int64
-	Offset int64
+type ListAdminCommentsFilteredDateDescParams struct {
+	StatusFilter int64
+	Offset       int64
+	Limit        int64
 }
 
-func (q *Queries) ListAdminCommentsByStatus(ctx context.Context, arg ListAdminCommentsByStatusParams) ([]Comment, error) {
-	rows, err := q.db.QueryContext(ctx, listAdminCommentsByStatus, arg.Status, arg.Limit, arg.Offset)
+// Admin moderation list (plan section 4.5): optional status filter
+// (status_filter -1 = all), COALESCE(published_at, created_at) date sort, 30
+// per page. sqlc cannot parameterize the ORDER BY direction, so asc/desc are
+// separate queries; DESC is the default. id breaks date ties so pagination is
+// stable. The CASTs pin the reused filter param's Go type (without them sqlc
+// falls back to interface{}).
+func (q *Queries) ListAdminCommentsFilteredDateDesc(ctx context.Context, arg ListAdminCommentsFilteredDateDescParams) ([]Comment, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminCommentsFilteredDateDesc, arg.StatusFilter, arg.Offset, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

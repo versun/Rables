@@ -12,6 +12,7 @@ import (
 
 	"rables/internal/config"
 	"rables/internal/db/query"
+	"rables/internal/domain"
 	"rables/internal/service/transfer"
 	"rables/internal/templates"
 )
@@ -45,13 +46,42 @@ type Server struct {
 // NewServer builds the application context. The renderer may be nil in tests
 // that never render a page.
 func NewServer(db *sql.DB, cfg config.Config, logger *slog.Logger, renderer *templates.Renderer) *Server {
-	return &Server{
+	s := &Server{
 		DB:       db,
 		Q:        query.New(db),
 		Cfg:      cfg,
 		Log:      logger,
 		Renderer: renderer,
 	}
+	if renderer != nil {
+		renderer.SetAdminBadges(templates.AdminBadges{
+			Comments:   s.hasPendingComments,
+			Newsletter: s.hasUnconfirmedSubscribers,
+		})
+	}
+	return s
+}
+
+// hasPendingComments backs the sidebar Comments badge: comments awaiting
+// moderation. A query failure hides the dot rather than breaking the page.
+func (s *Server) hasPendingComments() bool {
+	n, err := s.Q.CountAdminCommentsByStatus(context.Background(), int64(domain.CommentPending))
+	if err != nil {
+		s.Log.Error("count pending comments", "error", err)
+		return false
+	}
+	return n > 0
+}
+
+// hasUnconfirmedSubscribers backs the sidebar Newsletter badge: subscribers
+// who never confirmed their address.
+func (s *Server) hasUnconfirmedSubscribers() bool {
+	n, err := s.Q.CountUnconfirmedSubscribers(context.Background())
+	if err != nil {
+		s.Log.Error("count unconfirmed subscribers", "error", err)
+		return false
+	}
+	return n > 0
 }
 
 // Route-registration convention: later features do NOT edit router.go.

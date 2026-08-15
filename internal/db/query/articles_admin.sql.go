@@ -519,7 +519,9 @@ type ListAdminArticlesFilteredCreatedDescParams struct {
 // term in %...%, sanitize_sql_like semantics). sqlc cannot parameterize the
 // ORDER BY column or direction, so the four sort combinations the admin list
 // offers (created_at/updated_at x asc/desc) are separate queries; the default
-// is created_at DESC. id breaks sort-key ties so pagination is stable.
+// is created_at DESC. id breaks sort-key ties so pagination is stable. The
+// CASTs pin the reused filter params' Go types (without them sqlc falls back
+// to interface{}).
 func (q *Queries) ListAdminArticlesFilteredCreatedDesc(ctx context.Context, arg ListAdminArticlesFilteredCreatedDescParams) ([]Article, error) {
 	rows, err := q.db.QueryContext(ctx, listAdminArticlesFilteredCreatedDesc,
 		arg.StatusFilter,

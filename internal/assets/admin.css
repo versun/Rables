@@ -189,6 +189,16 @@ body.admin-body {
     font-weight: 500;
 }
 
+/* Red dot on a nav item with pending items (comments awaiting moderation,
+   subscribers awaiting confirmation). */
+.admin-sidebar .nav-dot {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ad-danger);
+}
+
 .admin-sidebar .side-foot {
     border-top: 1px solid var(--ad-border);
     padding: 8px;

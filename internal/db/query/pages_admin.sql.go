@@ -49,23 +49,13 @@ func (q *Queries) CancelQueuedPublishPageJobs(ctx context.Context, arg CancelQue
 	return result.RowsAffected()
 }
 
-const countAdminPages = `-- name: CountAdminPages :one
+const countAdminPagesFiltered = `-- name: CountAdminPagesFiltered :one
 SELECT COUNT(*) FROM pages
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
 `
 
-func (q *Queries) CountAdminPages(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAdminPages)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const countAdminPagesByStatus = `-- name: CountAdminPagesByStatus :one
-SELECT COUNT(*) FROM pages WHERE status = ?
-`
-
-func (q *Queries) CountAdminPagesByStatus(ctx context.Context, status int64) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAdminPagesByStatus, status)
+func (q *Queries) CountAdminPagesFiltered(ctx context.Context, statusFilter int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAdminPagesFiltered, statusFilter)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -178,19 +168,21 @@ func (q *Queries) GetAdminPageBySlug(ctx context.Context, slug sql.NullString) (
 	return i, err
 }
 
-const listAdminPages = `-- name: ListAdminPages :many
+const listAdminPagesFilteredCreatedAsc = `-- name: ListAdminPagesFilteredCreatedAsc :many
 SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages
-ORDER BY page_order DESC
-LIMIT ? OFFSET ?
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+ORDER BY created_at ASC, id ASC
+LIMIT ?3 OFFSET ?2
 `
 
-type ListAdminPagesParams struct {
-	Limit  int64
-	Offset int64
+type ListAdminPagesFilteredCreatedAscParams struct {
+	StatusFilter int64
+	Offset       int64
+	Limit        int64
 }
 
-func (q *Queries) ListAdminPages(ctx context.Context, arg ListAdminPagesParams) ([]Page, error) {
-	rows, err := q.db.QueryContext(ctx, listAdminPages, arg.Limit, arg.Offset)
+func (q *Queries) ListAdminPagesFilteredCreatedAsc(ctx context.Context, arg ListAdminPagesFilteredCreatedAscParams) ([]Page, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminPagesFilteredCreatedAsc, arg.StatusFilter, arg.Offset, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -226,21 +218,228 @@ func (q *Queries) ListAdminPages(ctx context.Context, arg ListAdminPagesParams) 
 	return items, nil
 }
 
-const listAdminPagesByStatus = `-- name: ListAdminPagesByStatus :many
+const listAdminPagesFilteredCreatedDesc = `-- name: ListAdminPagesFilteredCreatedDesc :many
 SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages
-WHERE status = ?
-ORDER BY page_order DESC
-LIMIT ? OFFSET ?
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+ORDER BY created_at DESC, id DESC
+LIMIT ?3 OFFSET ?2
 `
 
-type ListAdminPagesByStatusParams struct {
-	Status int64
-	Limit  int64
-	Offset int64
+type ListAdminPagesFilteredCreatedDescParams struct {
+	StatusFilter int64
+	Offset       int64
+	Limit        int64
 }
 
-func (q *Queries) ListAdminPagesByStatus(ctx context.Context, arg ListAdminPagesByStatusParams) ([]Page, error) {
-	rows, err := q.db.QueryContext(ctx, listAdminPagesByStatus, arg.Status, arg.Limit, arg.Offset)
+func (q *Queries) ListAdminPagesFilteredCreatedDesc(ctx context.Context, arg ListAdminPagesFilteredCreatedDescParams) ([]Page, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminPagesFilteredCreatedDesc, arg.StatusFilter, arg.Offset, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Page
+	for rows.Next() {
+		var i Page
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Slug,
+			&i.ContentHtml,
+			&i.ContentType,
+			&i.RedirectUrl,
+			&i.PageOrder,
+			&i.Status,
+			&i.Comment,
+			&i.ScheduledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ContentMarkdown,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAdminPagesFilteredOrderAsc = `-- name: ListAdminPagesFilteredOrderAsc :many
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+ORDER BY page_order ASC, id ASC
+LIMIT ?3 OFFSET ?2
+`
+
+type ListAdminPagesFilteredOrderAscParams struct {
+	StatusFilter int64
+	Offset       int64
+	Limit        int64
+}
+
+func (q *Queries) ListAdminPagesFilteredOrderAsc(ctx context.Context, arg ListAdminPagesFilteredOrderAscParams) ([]Page, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminPagesFilteredOrderAsc, arg.StatusFilter, arg.Offset, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Page
+	for rows.Next() {
+		var i Page
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Slug,
+			&i.ContentHtml,
+			&i.ContentType,
+			&i.RedirectUrl,
+			&i.PageOrder,
+			&i.Status,
+			&i.Comment,
+			&i.ScheduledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ContentMarkdown,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAdminPagesFilteredOrderDesc = `-- name: ListAdminPagesFilteredOrderDesc :many
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+ORDER BY page_order DESC, id DESC
+LIMIT ?3 OFFSET ?2
+`
+
+type ListAdminPagesFilteredOrderDescParams struct {
+	StatusFilter int64
+	Offset       int64
+	Limit        int64
+}
+
+// Admin list: optional status filter (status_filter -1 = all), 100 per page.
+// sqlc cannot parameterize the ORDER BY column or direction, so the six sort
+// combinations the admin list offers (page_order/created_at/updated_at x
+// asc/desc) are separate queries; the default is page_order DESC. id breaks
+// sort-key ties (page_order ties are common) so pagination is stable. The
+// CASTs pin the reused filter param's Go type (without them sqlc falls back
+// to interface{}).
+func (q *Queries) ListAdminPagesFilteredOrderDesc(ctx context.Context, arg ListAdminPagesFilteredOrderDescParams) ([]Page, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminPagesFilteredOrderDesc, arg.StatusFilter, arg.Offset, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Page
+	for rows.Next() {
+		var i Page
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Slug,
+			&i.ContentHtml,
+			&i.ContentType,
+			&i.RedirectUrl,
+			&i.PageOrder,
+			&i.Status,
+			&i.Comment,
+			&i.ScheduledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ContentMarkdown,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAdminPagesFilteredUpdatedAsc = `-- name: ListAdminPagesFilteredUpdatedAsc :many
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+ORDER BY updated_at ASC, id ASC
+LIMIT ?3 OFFSET ?2
+`
+
+type ListAdminPagesFilteredUpdatedAscParams struct {
+	StatusFilter int64
+	Offset       int64
+	Limit        int64
+}
+
+func (q *Queries) ListAdminPagesFilteredUpdatedAsc(ctx context.Context, arg ListAdminPagesFilteredUpdatedAscParams) ([]Page, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminPagesFilteredUpdatedAsc, arg.StatusFilter, arg.Offset, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Page
+	for rows.Next() {
+		var i Page
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Slug,
+			&i.ContentHtml,
+			&i.ContentType,
+			&i.RedirectUrl,
+			&i.PageOrder,
+			&i.Status,
+			&i.Comment,
+			&i.ScheduledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ContentMarkdown,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAdminPagesFilteredUpdatedDesc = `-- name: ListAdminPagesFilteredUpdatedDesc :many
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+ORDER BY updated_at DESC, id DESC
+LIMIT ?3 OFFSET ?2
+`
+
+type ListAdminPagesFilteredUpdatedDescParams struct {
+	StatusFilter int64
+	Offset       int64
+	Limit        int64
+}
+
+func (q *Queries) ListAdminPagesFilteredUpdatedDesc(ctx context.Context, arg ListAdminPagesFilteredUpdatedDescParams) ([]Page, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminPagesFilteredUpdatedDesc, arg.StatusFilter, arg.Offset, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

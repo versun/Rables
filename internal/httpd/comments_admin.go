@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -39,13 +40,73 @@ func RegisterCommentAdminRoutes(r chi.Router, s *Server) {
 // adminCommentsPage feeds admin_comments_index.html.
 type adminCommentsPage struct {
 	Flash      templates.Flash
-	Status     string // current filter: "", "pending", "approved", "rejected"
+	Status     string // current status filter ("all" when unset)
 	Comments   []adminCommentRow
+	Dir        string // current date sort direction: "desc" (default) or "asc"
 	Page       int
 	Pages      int
 	TimeZone   string
 	SiteAuthor string
 	SiteURL    string
+}
+
+// filterValues carries every active filter/sort param, omitting defaults so
+// URLs stay bare. It is the single source for list links.
+func (d adminCommentsPage) filterValues() url.Values {
+	v := url.Values{}
+	if d.Status != "" && d.Status != "all" {
+		v.Set("status", d.Status)
+	}
+	if d.Dir != "desc" {
+		v.Set("dir", d.Dir)
+	}
+	return v
+}
+
+// listURL renders a list link preserving every current filter/sort param;
+// mutate adjusts the query for the specific link (page jump, filter change,
+// sort toggle). Filters/sorts never carry the page over: changing them
+// restarts at page 1.
+func (d adminCommentsPage) listURL(mutate func(url.Values)) string {
+	v := d.filterValues()
+	if mutate != nil {
+		mutate(v)
+	}
+	if len(v) == 0 {
+		return "/admin/comments"
+	}
+	return "/admin/comments?" + v.Encode()
+}
+
+// PageURL is the pagination link for one page; page 1 stays the bare URL.
+func (d adminCommentsPage) PageURL(page int) string {
+	return d.listURL(func(v url.Values) {
+		if page > 1 {
+			v.Set("page", strconv.Itoa(page))
+		}
+	})
+}
+
+// DateURL toggles the Date header sort direction.
+func (d adminCommentsPage) DateURL() string {
+	return d.listURL(func(v url.Values) {
+		if d.Dir == "desc" {
+			v.Set("dir", "asc")
+		} else {
+			v.Set("dir", "desc")
+		}
+	})
+}
+
+// StatusURL filters by one status ("all" clears the filter).
+func (d adminCommentsPage) StatusURL(status string) string {
+	return d.listURL(func(v url.Values) {
+		if status == "all" {
+			v.Del("status")
+		} else {
+			v.Set("status", status)
+		}
+	})
 }
 
 // adminCommentRow is one list row with its display_commentable resolved.
@@ -91,22 +152,23 @@ func truncateRunes(s string, n int) string {
 }
 
 // adminCommentsIndex renders GET /admin/comments, mirroring
-// Admin::CommentsController#index: optional status filter,
-// COALESCE(published_at, created_at) DESC, 30 per page. Invalid page params
-// 404 like WillPaginate::InvalidPage.
+// Admin::CommentsController#index: optional status filter in the Status
+// header, sortable Date header (COALESCE(published_at, created_at) DESC by
+// default), 30 per page. Invalid page params 404 like
+// WillPaginate::InvalidPage.
 func (s *Server) adminCommentsIndex(w http.ResponseWriter, r *http.Request) {
-	var statusFilter *domain.CommentStatus
-	statusName := ""
-	switch r.URL.Query().Get("status") {
-	case "pending":
-		st := domain.CommentPending
-		statusFilter, statusName = &st, "pending"
-	case "approved":
-		st := domain.CommentApproved
-		statusFilter, statusName = &st, "approved"
-	case "rejected":
-		st := domain.CommentRejected
-		statusFilter, statusName = &st, "rejected"
+	ctx := r.Context()
+
+	statusName := r.URL.Query().Get("status")
+	statusFilter, filtered := parseCommentStatusFilter(statusName)
+	if !filtered {
+		// Unknown statuses filter nothing, so the view must not present them
+		// as an active filter either.
+		statusName = "all"
+	}
+	statusValue := int64(-1) // -1: no status filter
+	if filtered {
+		statusValue = statusFilter
 	}
 
 	page := 1
@@ -120,26 +182,25 @@ func (s *Server) adminCommentsIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := int64(page-1) * adminCommentsPerPage
 
-	var total int64
-	var list []query.Comment
-	var err error
-	if statusFilter == nil {
-		total, err = s.Q.CountAdminComments(r.Context())
-	} else {
-		total, err = s.Q.CountAdminCommentsByStatus(r.Context(), int64(*statusFilter))
+	dir := r.URL.Query().Get("dir")
+	if dir != "asc" {
+		dir = "desc" // unknown directions fall back to the default DESC order
 	}
+
+	total, err := s.Q.CountAdminCommentsFiltered(ctx, statusValue)
 	if err != nil {
 		s.Log.Error("count comments", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if statusFilter == nil {
-		list, err = s.Q.ListAdminComments(r.Context(), query.ListAdminCommentsParams{
-			Limit: adminCommentsPerPage, Offset: offset,
+	var list []query.Comment
+	if dir == "asc" {
+		list, err = s.Q.ListAdminCommentsFilteredDateAsc(ctx, query.ListAdminCommentsFilteredDateAscParams{
+			StatusFilter: statusValue, Limit: adminCommentsPerPage, Offset: offset,
 		})
 	} else {
-		list, err = s.Q.ListAdminCommentsByStatus(r.Context(), query.ListAdminCommentsByStatusParams{
-			Status: int64(*statusFilter), Limit: adminCommentsPerPage, Offset: offset,
+		list, err = s.Q.ListAdminCommentsFilteredDateDesc(ctx, query.ListAdminCommentsFilteredDateDescParams{
+			StatusFilter: statusValue, Limit: adminCommentsPerPage, Offset: offset,
 		})
 	}
 	if err != nil {
@@ -148,7 +209,7 @@ func (s *Server) adminCommentsIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, err := s.Settings().Get(r.Context())
+	settings, err := s.Settings().Get(ctx)
 	if err != nil {
 		s.Log.Error("load settings", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -157,7 +218,7 @@ func (s *Server) adminCommentsIndex(w http.ResponseWriter, r *http.Request) {
 
 	rows := make([]adminCommentRow, 0, len(list))
 	for _, c := range list {
-		title, url := s.displayCommentable(r.Context(), c)
+		title, url := s.displayCommentable(ctx, c)
 		rows = append(rows, adminCommentRow{Comment: c, CommentableTitle: title, CommentableURL: url})
 	}
 
@@ -166,12 +227,27 @@ func (s *Server) adminCommentsIndex(w http.ResponseWriter, r *http.Request) {
 		Flash:      s.PopFlash(r, w),
 		Status:     statusName,
 		Comments:   rows,
+		Dir:        dir,
 		Page:       page,
 		Pages:      pages,
 		TimeZone:   settings.TimeZone,
 		SiteAuthor: strings.TrimSpace(settings.Author.String),
 		SiteURL:    strings.TrimSpace(settings.Url.String),
 	})
+}
+
+// parseCommentStatusFilter mirrors the status filter: only the three
+// known statuses filter; anything else (including "all") lists everything.
+func parseCommentStatusFilter(name string) (int64, bool) {
+	switch name {
+	case "pending":
+		return int64(domain.CommentPending), true
+	case "approved":
+		return int64(domain.CommentApproved), true
+	case "rejected":
+		return int64(domain.CommentRejected), true
+	}
+	return 0, false
 }
 
 // displayCommentable resolves the row's public title and URL, mirroring
