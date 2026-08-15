@@ -261,7 +261,10 @@ func (s *Scheduler) enqueueDueCommentFetches(ctx context.Context) error {
 }
 
 // runSyncTwitterHook invokes the registered "sync_twitter" hook when the
-// twitter_syncs row is enabled and due (SyncTwitterJob wake-up).
+// twitter_syncs row is enabled and due (SyncTwitterJob wake-up). The "daily"
+// schedule is wall-clock based (08:00 in settings.time_zone), so the site
+// time zone is loaded each tick; a missing row or an unknown zone falls back
+// to UTC, matching the admin time displays.
 func (s *Scheduler) runSyncTwitterHook(ctx context.Context) error {
 	sync, err := s.q.GetTwitterSync(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -278,7 +281,13 @@ func (s *Scheduler) runSyncTwitterHook(ctx context.Context) error {
 		t := time.Unix(sync.LastSyncedAt.Int64, 0).UTC()
 		lastSynced = &t
 	}
-	if !TwitterSyncDue(sync.SyncSchedule, lastSynced, s.now().UTC()) {
+	loc := time.UTC
+	if settings, err := s.q.GetSettings(ctx); err == nil {
+		if l, err := time.LoadLocation(settings.TimeZone); err == nil {
+			loc = l
+		}
+	}
+	if !TwitterSyncDue(sync.SyncSchedule, lastSynced, s.now().UTC(), loc) {
 		return nil
 	}
 	hook := s.hooks["sync_twitter"]

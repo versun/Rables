@@ -36,7 +36,7 @@ var twitterSyncSchedules = []struct {
 	{"Every 15 minutes", "every_15_minutes"},
 	{"Hourly", "hourly"},
 	{"Every 6 hours", "every_6_hours"},
-	{"Daily", "daily"},
+	{"Daily at 8:00 AM", "daily"},
 	{"Weekly", "weekly"},
 }
 
@@ -49,6 +49,7 @@ type twitterSyncPageData struct {
 		Value string
 	}
 	LastSyncedLong string // formatted like Rails l(..., format: :long); "" = Never
+	NextRunLong    string // next scheduled run (same format); "" = sync disabled
 	TimeZone       string
 }
 
@@ -70,15 +71,25 @@ func (s *Server) twitterSyncShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tz := s.siteTimeZone(r)
-	lastSynced := ""
+	loc := tzLocation(tz)
+	var lastSynced *time.Time
+	lastSyncedLong := ""
 	if syncRow.LastSyncedAt.Valid {
-		lastSynced = time.Unix(syncRow.LastSyncedAt.Int64, 0).In(tzLocation(tz)).Format("January 2, 2006 15:04")
+		t := time.Unix(syncRow.LastSyncedAt.Int64, 0).UTC()
+		lastSynced = &t
+		lastSyncedLong = t.In(loc).Format("January 2, 2006 15:04")
+	}
+	nextRun := ""
+	if syncRow.Enabled == 1 {
+		next := jobs.NextTwitterSyncRun(syncRow.SyncSchedule, lastSynced, time.Now().UTC(), loc)
+		nextRun = next.In(loc).Format("January 2, 2006 15:04")
 	}
 	s.render(w, http.StatusOK, "admin_twitter_sync", twitterSyncPageData{
 		Flash:          s.PopFlash(r, w),
 		Sync:           syncRow,
 		Schedules:      twitterSyncSchedules,
-		LastSyncedLong: lastSynced,
+		LastSyncedLong: lastSyncedLong,
+		NextRunLong:    nextRun,
 		TimeZone:       tz,
 	})
 }

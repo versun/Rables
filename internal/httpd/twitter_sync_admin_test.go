@@ -91,7 +91,8 @@ func TestTwitterSyncShow(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"Twitter Sync", `name="twitter_sync[username]"`, `name="twitter_sync[start_date]"`,
-		`name="twitter_sync[sync_schedule]"`, "every_15_minutes", "Never",
+		`name="twitter_sync[sync_schedule]"`, "every_15_minutes", "Daily at 8:00 AM", "Never",
+		"Next run:", "Disabled",
 		`/admin/twitter_sync/sync_now`,
 	} {
 		if !strings.Contains(body, want) {
@@ -102,6 +103,41 @@ func TestTwitterSyncShow(t *testing.T) {
 	row := getTwitterSyncRow(t, s)
 	if row.SyncSchedule != "every_15_minutes" {
 		t.Errorf("default sync_schedule = %q, want every_15_minutes", row.SyncSchedule)
+	}
+}
+
+// The Sync Status section shows the next scheduled run: with the daily
+// schedule and a fresh last_synced_at, that is the next 08:00 slot (UTC here,
+// the settings default).
+func TestTwitterSyncShowNextRun(t *testing.T) {
+	s, h := newTwitterSyncTestServer(t)
+	cookie := twitterSyncSessionCookie(t, s)
+
+	now := time.Now().UTC()
+	if err := s.Q.EnsureTwitterSync(t.Context(), query.EnsureTwitterSyncParams{CreatedAt: now.Unix(), UpdatedAt: now.Unix()}); err != nil {
+		t.Fatalf("ensure twitter_syncs: %v", err)
+	}
+	if _, err := s.DB.Exec(
+		`UPDATE twitter_syncs SET enabled = 1, sync_schedule = 'daily', last_synced_at = ? WHERE id = 1`,
+		now.Unix(),
+	); err != nil {
+		t.Fatalf("update twitter_syncs: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/twitter_sync", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	next := time.Date(now.Year(), now.Month(), now.Day(), 8, 0, 0, 0, time.UTC)
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 1)
+	}
+	if want := next.Format("January 2, 2006 15:04"); !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("show body missing next run %q", want)
 	}
 }
 

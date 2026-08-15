@@ -486,7 +486,8 @@ func TestRunSyncTwitterHook(t *testing.T) {
 	}{
 		{"due", true, 1, "every_15_minutes", int64(1000), true},
 		{"never synced", true, 1, "hourly", nil, true},
-		{"not due", true, 1, "daily", time.Date(2026, 8, 3, 11, 0, 0, 0, time.UTC).Unix(), false},
+		{"daily due (synced before today's 08:00 slot)", true, 1, "daily", time.Date(2026, 8, 3, 7, 0, 0, 0, time.UTC).Unix(), true},
+		{"daily not due (synced after today's 08:00 slot)", true, 1, "daily", time.Date(2026, 8, 3, 11, 0, 0, 0, time.UTC).Unix(), false},
 		{"disabled", true, 0, "every_15_minutes", int64(1000), false},
 		{"no row", false, 0, "", nil, false},
 	}

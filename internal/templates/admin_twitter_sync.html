@@ -56,6 +56,7 @@
 <div class="card">
   <h2 class="card-title">Sync Status</h2>
   <p class="stat-line"><strong>Last synced:</strong> <span class="text-muted">{{if .LastSyncedLong}}{{.LastSyncedLong}}{{else}}Never{{end}}</span></p>
+  <p class="stat-line"><strong>Next run:</strong> <span class="text-muted">{{if .NextRunLong}}{{.NextRunLong}} ({{.TimeZone}}){{else}}Disabled{{end}}</span></p>
   <p class="stat-line"><strong>Cursor (since_id):</strong> <span class="text-muted">{{if .Sync.SinceID.Valid}}{{.Sync.SinceID.String}}{{else}}-{{end}}</span></p>
   <p class="stat-line"><strong>Resolved user id:</strong> <span class="text-muted">{{if .Sync.UserID.Valid}}{{.Sync.UserID.String}}{{else}}-{{end}}</span></p>
   {{if .Sync.LastError.Valid}}
