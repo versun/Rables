@@ -11,17 +11,6 @@ import (
 	"strings"
 )
 
-const countAdminArticles = `-- name: CountAdminArticles :one
-SELECT COUNT(*) FROM articles
-`
-
-func (q *Queries) CountAdminArticles(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAdminArticles)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countAdminArticlesBySlug = `-- name: CountAdminArticlesBySlug :one
 SELECT COUNT(*) FROM articles WHERE slug = ? AND id != ?
 `
@@ -39,12 +28,24 @@ func (q *Queries) CountAdminArticlesBySlug(ctx context.Context, arg CountAdminAr
 	return count, err
 }
 
-const countAdminArticlesByStatus = `-- name: CountAdminArticlesByStatus :one
-SELECT COUNT(*) FROM articles WHERE status = ?
+const countAdminArticlesFiltered = `-- name: CountAdminArticlesFiltered :one
+SELECT COUNT(*) FROM articles
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+  AND (CAST(?2 AS TEXT) = '' OR like(CAST(?2 AS TEXT), title, '\') OR like(CAST(?2 AS TEXT), slug, '\')
+       OR like(CAST(?2 AS TEXT), description, '\') OR like(CAST(?2 AS TEXT), content_html, '\'))
+  AND (CAST(?3 AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
 `
 
-func (q *Queries) CountAdminArticlesByStatus(ctx context.Context, status int64) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAdminArticlesByStatus, status)
+type CountAdminArticlesFilteredParams struct {
+	StatusFilter int64
+	SearchLike   string
+	Tag          string
+}
+
+func (q *Queries) CountAdminArticlesFiltered(ctx context.Context, arg CountAdminArticlesFilteredParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAdminArticlesFiltered, arg.StatusFilter, arg.SearchLike, arg.Tag)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -94,58 +95,6 @@ func (q *Queries) CountCommentsForArticles(ctx context.Context, ids []sql.NullIn
 		return nil, err
 	}
 	return items, nil
-}
-
-const countSearchAdminArticles = `-- name: CountSearchAdminArticles :one
-SELECT COUNT(*) FROM articles
-WHERE like(?, title, '\') OR like(?, slug, '\')
-   OR like(?, description, '\') OR like(?, content_html, '\')
-`
-
-type CountSearchAdminArticlesParams struct {
-	LIKE   string
-	LIKE_2 string
-	LIKE_3 string
-	LIKE_4 string
-}
-
-func (q *Queries) CountSearchAdminArticles(ctx context.Context, arg CountSearchAdminArticlesParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countSearchAdminArticles,
-		arg.LIKE,
-		arg.LIKE_2,
-		arg.LIKE_3,
-		arg.LIKE_4,
-	)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const countSearchAdminArticlesByStatus = `-- name: CountSearchAdminArticlesByStatus :one
-SELECT COUNT(*) FROM articles
-WHERE status = ? AND (like(?, title, '\') OR like(?, slug, '\')
-   OR like(?, description, '\') OR like(?, content_html, '\'))
-`
-
-type CountSearchAdminArticlesByStatusParams struct {
-	Status int64
-	LIKE   string
-	LIKE_2 string
-	LIKE_3 string
-	LIKE_4 string
-}
-
-func (q *Queries) CountSearchAdminArticlesByStatus(ctx context.Context, arg CountSearchAdminArticlesByStatusParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countSearchAdminArticlesByStatus,
-		arg.Status,
-		arg.LIKE,
-		arg.LIKE_2,
-		arg.LIKE_3,
-		arg.LIKE_4,
-	)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
 }
 
 const createArticle = `-- name: CreateArticle :one
@@ -472,18 +421,33 @@ func (q *Queries) InsertArticleTag(ctx context.Context, arg InsertArticleTagPara
 	return err
 }
 
-const listAdminArticles = `-- name: ListAdminArticles :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles ORDER BY created_at DESC LIMIT ? OFFSET ?
+const listAdminArticlesFilteredCreatedAsc = `-- name: ListAdminArticlesFilteredCreatedAsc :many
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+  AND (CAST(?2 AS TEXT) = '' OR like(CAST(?2 AS TEXT), title, '\') OR like(CAST(?2 AS TEXT), slug, '\')
+       OR like(CAST(?2 AS TEXT), description, '\') OR like(CAST(?2 AS TEXT), content_html, '\'))
+  AND (CAST(?3 AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
+ORDER BY created_at ASC, id ASC LIMIT ?5 OFFSET ?4
 `
 
-type ListAdminArticlesParams struct {
-	Limit  int64
-	Offset int64
+type ListAdminArticlesFilteredCreatedAscParams struct {
+	StatusFilter int64
+	SearchLike   string
+	Tag          string
+	Offset       int64
+	Limit        int64
 }
 
-// Admin list: fetch_articles orders created_at DESC, 100 per page.
-func (q *Queries) ListAdminArticles(ctx context.Context, arg ListAdminArticlesParams) ([]Article, error) {
-	rows, err := q.db.QueryContext(ctx, listAdminArticles, arg.Limit, arg.Offset)
+func (q *Queries) ListAdminArticlesFilteredCreatedAsc(ctx context.Context, arg ListAdminArticlesFilteredCreatedAscParams) ([]Article, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminArticlesFilteredCreatedAsc,
+		arg.StatusFilter,
+		arg.SearchLike,
+		arg.Tag,
+		arg.Offset,
+		arg.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -527,18 +491,183 @@ func (q *Queries) ListAdminArticles(ctx context.Context, arg ListAdminArticlesPa
 	return items, nil
 }
 
-const listAdminArticlesByStatus = `-- name: ListAdminArticlesByStatus :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?
+const listAdminArticlesFilteredCreatedDesc = `-- name: ListAdminArticlesFilteredCreatedDesc :many
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+  AND (CAST(?2 AS TEXT) = '' OR like(CAST(?2 AS TEXT), title, '\') OR like(CAST(?2 AS TEXT), slug, '\')
+       OR like(CAST(?2 AS TEXT), description, '\') OR like(CAST(?2 AS TEXT), content_html, '\'))
+  AND (CAST(?3 AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
+ORDER BY created_at DESC, id DESC LIMIT ?5 OFFSET ?4
 `
 
-type ListAdminArticlesByStatusParams struct {
-	Status int64
-	Limit  int64
-	Offset int64
+type ListAdminArticlesFilteredCreatedDescParams struct {
+	StatusFilter int64
+	SearchLike   string
+	Tag          string
+	Offset       int64
+	Limit        int64
 }
 
-func (q *Queries) ListAdminArticlesByStatus(ctx context.Context, arg ListAdminArticlesByStatusParams) ([]Article, error) {
-	rows, err := q.db.QueryContext(ctx, listAdminArticlesByStatus, arg.Status, arg.Limit, arg.Offset)
+// Admin list (fetch_articles), 100 per page. The optional filters are shared
+// by all variants: status_filter -1 lists every status, an empty tag lists
+// every tag (the filter matches on the tag name), an empty search_like skips
+// Article.search_content (LIKE on title/slug/description/content_html with
+// ESCAPE '\', written in the equivalent like(pattern, string, escape)
+// function form; the caller pre-escapes %, _ and backslash, then wraps the
+// term in %...%, sanitize_sql_like semantics). sqlc cannot parameterize the
+// ORDER BY column or direction, so the four sort combinations the admin list
+// offers (created_at/updated_at x asc/desc) are separate queries; the default
+// is created_at DESC. id breaks sort-key ties so pagination is stable.
+func (q *Queries) ListAdminArticlesFilteredCreatedDesc(ctx context.Context, arg ListAdminArticlesFilteredCreatedDescParams) ([]Article, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminArticlesFilteredCreatedDesc,
+		arg.StatusFilter,
+		arg.SearchLike,
+		arg.Tag,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Article
+	for rows.Next() {
+		var i Article
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Slug,
+			&i.ContentHtml,
+			&i.ContentType,
+			&i.Description,
+			&i.Excerpt,
+			&i.MetaDescription,
+			&i.MetaTitle,
+			&i.MetaImage,
+			&i.SourceAuthor,
+			&i.SourceUrl,
+			&i.SourceContent,
+			&i.Status,
+			&i.Comment,
+			&i.ScheduledAt,
+			&i.ScheduledCrosspostPlatforms,
+			&i.ScheduledSendNewsletter,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ContentMarkdown,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAdminArticlesFilteredUpdatedAsc = `-- name: ListAdminArticlesFilteredUpdatedAsc :many
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+  AND (CAST(?2 AS TEXT) = '' OR like(CAST(?2 AS TEXT), title, '\') OR like(CAST(?2 AS TEXT), slug, '\')
+       OR like(CAST(?2 AS TEXT), description, '\') OR like(CAST(?2 AS TEXT), content_html, '\'))
+  AND (CAST(?3 AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
+ORDER BY updated_at ASC, id ASC LIMIT ?5 OFFSET ?4
+`
+
+type ListAdminArticlesFilteredUpdatedAscParams struct {
+	StatusFilter int64
+	SearchLike   string
+	Tag          string
+	Offset       int64
+	Limit        int64
+}
+
+func (q *Queries) ListAdminArticlesFilteredUpdatedAsc(ctx context.Context, arg ListAdminArticlesFilteredUpdatedAscParams) ([]Article, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminArticlesFilteredUpdatedAsc,
+		arg.StatusFilter,
+		arg.SearchLike,
+		arg.Tag,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Article
+	for rows.Next() {
+		var i Article
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Slug,
+			&i.ContentHtml,
+			&i.ContentType,
+			&i.Description,
+			&i.Excerpt,
+			&i.MetaDescription,
+			&i.MetaTitle,
+			&i.MetaImage,
+			&i.SourceAuthor,
+			&i.SourceUrl,
+			&i.SourceContent,
+			&i.Status,
+			&i.Comment,
+			&i.ScheduledAt,
+			&i.ScheduledCrosspostPlatforms,
+			&i.ScheduledSendNewsletter,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ContentMarkdown,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAdminArticlesFilteredUpdatedDesc = `-- name: ListAdminArticlesFilteredUpdatedDesc :many
+SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
+WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
+  AND (CAST(?2 AS TEXT) = '' OR like(CAST(?2 AS TEXT), title, '\') OR like(CAST(?2 AS TEXT), slug, '\')
+       OR like(CAST(?2 AS TEXT), description, '\') OR like(CAST(?2 AS TEXT), content_html, '\'))
+  AND (CAST(?3 AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
+ORDER BY updated_at DESC, id DESC LIMIT ?5 OFFSET ?4
+`
+
+type ListAdminArticlesFilteredUpdatedDescParams struct {
+	StatusFilter int64
+	SearchLike   string
+	Tag          string
+	Offset       int64
+	Limit        int64
+}
+
+func (q *Queries) ListAdminArticlesFilteredUpdatedDesc(ctx context.Context, arg ListAdminArticlesFilteredUpdatedDescParams) ([]Article, error) {
+	rows, err := q.db.QueryContext(ctx, listAdminArticlesFilteredUpdatedDesc,
+		arg.StatusFilter,
+		arg.SearchLike,
+		arg.Tag,
+		arg.Offset,
+		arg.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -805,148 +934,6 @@ func (q *Queries) ListSocialPostsForArticles(ctx context.Context, ids []int64) (
 			&i.Url,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const searchAdminArticles = `-- name: SearchAdminArticles :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
-WHERE like(?, title, '\') OR like(?, slug, '\')
-   OR like(?, description, '\') OR like(?, content_html, '\')
-ORDER BY created_at DESC LIMIT ? OFFSET ?
-`
-
-type SearchAdminArticlesParams struct {
-	LIKE   string
-	LIKE_2 string
-	LIKE_3 string
-	LIKE_4 string
-	Limit  int64
-	Offset int64
-}
-
-// Article.search_content: LIKE on title/slug/description/content_html with
-// ESCAPE '\', written in the equivalent like(pattern, string, escape)
-// function form. The caller pre-escapes %, _ and backslash, then wraps the
-// term in %...% (sanitize_sql_like semantics).
-func (q *Queries) SearchAdminArticles(ctx context.Context, arg SearchAdminArticlesParams) ([]Article, error) {
-	rows, err := q.db.QueryContext(ctx, searchAdminArticles,
-		arg.LIKE,
-		arg.LIKE_2,
-		arg.LIKE_3,
-		arg.LIKE_4,
-		arg.Limit,
-		arg.Offset,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Article
-	for rows.Next() {
-		var i Article
-		if err := rows.Scan(
-			&i.ID,
-			&i.Title,
-			&i.Slug,
-			&i.ContentHtml,
-			&i.ContentType,
-			&i.Description,
-			&i.Excerpt,
-			&i.MetaDescription,
-			&i.MetaTitle,
-			&i.MetaImage,
-			&i.SourceAuthor,
-			&i.SourceUrl,
-			&i.SourceContent,
-			&i.Status,
-			&i.Comment,
-			&i.ScheduledAt,
-			&i.ScheduledCrosspostPlatforms,
-			&i.ScheduledSendNewsletter,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ContentMarkdown,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const searchAdminArticlesByStatus = `-- name: SearchAdminArticlesByStatus :many
-SELECT id, title, slug, content_html, content_type, description, excerpt, meta_description, meta_title, meta_image, source_author, source_url, source_content, status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter, created_at, updated_at, content_markdown FROM articles
-WHERE status = ? AND (like(?, title, '\') OR like(?, slug, '\')
-   OR like(?, description, '\') OR like(?, content_html, '\'))
-ORDER BY created_at DESC LIMIT ? OFFSET ?
-`
-
-type SearchAdminArticlesByStatusParams struct {
-	Status int64
-	LIKE   string
-	LIKE_2 string
-	LIKE_3 string
-	LIKE_4 string
-	Limit  int64
-	Offset int64
-}
-
-func (q *Queries) SearchAdminArticlesByStatus(ctx context.Context, arg SearchAdminArticlesByStatusParams) ([]Article, error) {
-	rows, err := q.db.QueryContext(ctx, searchAdminArticlesByStatus,
-		arg.Status,
-		arg.LIKE,
-		arg.LIKE_2,
-		arg.LIKE_3,
-		arg.LIKE_4,
-		arg.Limit,
-		arg.Offset,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Article
-	for rows.Next() {
-		var i Article
-		if err := rows.Scan(
-			&i.ID,
-			&i.Title,
-			&i.Slug,
-			&i.ContentHtml,
-			&i.ContentType,
-			&i.Description,
-			&i.Excerpt,
-			&i.MetaDescription,
-			&i.MetaTitle,
-			&i.MetaImage,
-			&i.SourceAuthor,
-			&i.SourceUrl,
-			&i.SourceContent,
-			&i.Status,
-			&i.Comment,
-			&i.ScheduledAt,
-			&i.ScheduledCrosspostPlatforms,
-			&i.ScheduledSendNewsletter,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ContentMarkdown,
 		); err != nil {
 			return nil, err
 		}

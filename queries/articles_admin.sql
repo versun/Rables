@@ -11,44 +11,66 @@ SELECT * FROM articles WHERE id = ?;
 -- name: CountAdminArticlesBySlug :one
 SELECT COUNT(*) FROM articles WHERE slug = ? AND id != ?;
 
--- Admin list: fetch_articles orders created_at DESC, 100 per page.
--- name: ListAdminArticles :many
-SELECT * FROM articles ORDER BY created_at DESC LIMIT ? OFFSET ?;
-
--- name: CountAdminArticles :one
-SELECT COUNT(*) FROM articles;
-
--- name: ListAdminArticlesByStatus :many
-SELECT * FROM articles WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?;
-
--- name: CountAdminArticlesByStatus :one
-SELECT COUNT(*) FROM articles WHERE status = ?;
-
--- Article.search_content: LIKE on title/slug/description/content_html with
+-- Admin list (fetch_articles), 100 per page. The optional filters are shared
+-- by all variants: status_filter -1 lists every status, an empty tag lists
+-- every tag (the filter matches on the tag name), an empty search_like skips
+-- Article.search_content (LIKE on title/slug/description/content_html with
 -- ESCAPE '\', written in the equivalent like(pattern, string, escape)
--- function form. The caller pre-escapes %, _ and backslash, then wraps the
--- term in %...% (sanitize_sql_like semantics).
--- name: SearchAdminArticles :many
+-- function form; the caller pre-escapes %, _ and backslash, then wraps the
+-- term in %...%, sanitize_sql_like semantics). sqlc cannot parameterize the
+-- ORDER BY column or direction, so the four sort combinations the admin list
+-- offers (created_at/updated_at x asc/desc) are separate queries; the default
+-- is created_at DESC. id breaks sort-key ties so pagination is stable. The
+-- CASTs pin the reused filter params' Go types (without them sqlc falls back
+-- to interface{}).
+-- name: ListAdminArticlesFilteredCreatedDesc :many
 SELECT * FROM articles
-WHERE like(?, title, '\') OR like(?, slug, '\')
-   OR like(?, description, '\') OR like(?, content_html, '\')
-ORDER BY created_at DESC LIMIT ? OFFSET ?;
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+  AND (CAST(sqlc.arg(search_like) AS TEXT) = '' OR like(CAST(sqlc.arg(search_like) AS TEXT), title, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), slug, '\')
+       OR like(CAST(sqlc.arg(search_like) AS TEXT), description, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), content_html, '\'))
+  AND (CAST(sqlc.arg(tag) AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(sqlc.arg(tag) AS TEXT)))
+ORDER BY created_at DESC, id DESC LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
 
--- name: CountSearchAdminArticles :one
-SELECT COUNT(*) FROM articles
-WHERE like(?, title, '\') OR like(?, slug, '\')
-   OR like(?, description, '\') OR like(?, content_html, '\');
-
--- name: SearchAdminArticlesByStatus :many
+-- name: ListAdminArticlesFilteredCreatedAsc :many
 SELECT * FROM articles
-WHERE status = ? AND (like(?, title, '\') OR like(?, slug, '\')
-   OR like(?, description, '\') OR like(?, content_html, '\'))
-ORDER BY created_at DESC LIMIT ? OFFSET ?;
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+  AND (CAST(sqlc.arg(search_like) AS TEXT) = '' OR like(CAST(sqlc.arg(search_like) AS TEXT), title, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), slug, '\')
+       OR like(CAST(sqlc.arg(search_like) AS TEXT), description, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), content_html, '\'))
+  AND (CAST(sqlc.arg(tag) AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(sqlc.arg(tag) AS TEXT)))
+ORDER BY created_at ASC, id ASC LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
 
--- name: CountSearchAdminArticlesByStatus :one
+-- name: ListAdminArticlesFilteredUpdatedDesc :many
+SELECT * FROM articles
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+  AND (CAST(sqlc.arg(search_like) AS TEXT) = '' OR like(CAST(sqlc.arg(search_like) AS TEXT), title, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), slug, '\')
+       OR like(CAST(sqlc.arg(search_like) AS TEXT), description, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), content_html, '\'))
+  AND (CAST(sqlc.arg(tag) AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(sqlc.arg(tag) AS TEXT)))
+ORDER BY updated_at DESC, id DESC LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: ListAdminArticlesFilteredUpdatedAsc :many
+SELECT * FROM articles
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+  AND (CAST(sqlc.arg(search_like) AS TEXT) = '' OR like(CAST(sqlc.arg(search_like) AS TEXT), title, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), slug, '\')
+       OR like(CAST(sqlc.arg(search_like) AS TEXT), description, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), content_html, '\'))
+  AND (CAST(sqlc.arg(tag) AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(sqlc.arg(tag) AS TEXT)))
+ORDER BY updated_at ASC, id ASC LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: CountAdminArticlesFiltered :one
 SELECT COUNT(*) FROM articles
-WHERE status = ? AND (like(?, title, '\') OR like(?, slug, '\')
-   OR like(?, description, '\') OR like(?, content_html, '\'));
+WHERE (CAST(sqlc.arg(status_filter) AS INTEGER) = -1 OR status = CAST(sqlc.arg(status_filter) AS INTEGER))
+  AND (CAST(sqlc.arg(search_like) AS TEXT) = '' OR like(CAST(sqlc.arg(search_like) AS TEXT), title, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), slug, '\')
+       OR like(CAST(sqlc.arg(search_like) AS TEXT), description, '\') OR like(CAST(sqlc.arg(search_like) AS TEXT), content_html, '\'))
+  AND (CAST(sqlc.arg(tag) AS TEXT) = '' OR EXISTS (
+       SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
+       WHERE article_tags.article_id = articles.id AND tags.name = CAST(sqlc.arg(tag) AS TEXT)));
 
 -- name: CreateArticle :one
 INSERT INTO articles (

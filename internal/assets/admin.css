@@ -655,11 +655,11 @@ body.admin-body {
     box-shadow: var(--ad-shadow);
 }
 
-.toolbar .search-form {
-    margin-left: auto;
+.page-actions .search-form {
+    display: flex;
 }
 
-.toolbar .search-input {
+.page-actions .search-input {
     width: 240px;
     max-width: 100%;
 }
@@ -745,6 +745,98 @@ body.admin-body {
 
 .admin-body .table tbody tr:hover {
     background: var(--ad-hover);
+}
+
+/* Sortable column headers (click toggles asc/desc) */
+.admin-body .table th .th-sort {
+    color: inherit;
+    text-decoration: none;
+}
+
+.admin-body .table th .th-sort:hover,
+.admin-body .table th .th-sort.active {
+    color: var(--ad-text);
+}
+
+/* Filterable column headers: <details> dropdown, no JS. The fixed ::before
+   overlay closes the menu on an outside click. */
+.th-filter {
+    position: relative;
+    display: inline-block;
+}
+
+/* .table-card scrolls horizontally (overflow-x: auto), which also clips
+   vertical overflow; reserve room so an open filter menu over a short table
+   is not cut off (menu max-height + breathing room). */
+.table-card:has(.th-filter[open]) {
+    padding-bottom: 300px;
+}
+
+.th-filter summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.th-filter summary::-webkit-details-marker {
+    display: none;
+}
+
+.th-filter summary::after {
+    content: " ▾";
+}
+
+.th-filter summary:hover {
+    color: var(--ad-text);
+}
+
+.th-filter summary.filtered {
+    color: var(--ad-accent);
+}
+
+.th-filter[open] summary::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    cursor: default;
+}
+
+.th-filter-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 11;
+    min-width: 140px;
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 4px;
+    background: var(--ad-surface);
+    border: 1px solid var(--ad-border);
+    border-radius: var(--ad-radius);
+    box-shadow: var(--ad-shadow);
+}
+
+.th-filter-menu a {
+    display: block;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--ad-text-2);
+    text-decoration: none;
+    border-radius: 6px;
+    white-space: nowrap;
+}
+
+.th-filter-menu a:hover {
+    background: var(--ad-hover);
+    color: var(--ad-text);
+}
+
+.th-filter-menu a.active {
+    color: var(--ad-text);
+    font-weight: 600;
 }
 
 .admin-body .table .row-check {
@@ -1047,12 +1139,11 @@ body.admin-body {
         padding: 60px 16px 32px;
     }
 
-    .toolbar .search-form {
-        margin-left: 0;
+    .page-actions .search-form {
         width: 100%;
     }
 
-    .toolbar .search-input {
+    .page-actions .search-input {
         width: 100%;
     }
 

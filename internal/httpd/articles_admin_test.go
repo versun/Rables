@@ -896,6 +896,140 @@ func TestAdminArticlesIndex(t *testing.T) {
 	}
 }
 
+// TestAdminArticlesIndexTagFilter covers the Tags header filter.
+func TestAdminArticlesIndexTagFilter(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	ctx := t.Context()
+	now := time.Now().Unix()
+
+	goOne := insertAdminArticle(t, s, "Go One", "go-one", domain.StatusPublish)
+	goTwo := insertAdminArticle(t, s, "Go Two", "go-two", domain.StatusDraft)
+	insertAdminArticle(t, s, "Rust Post", "rust-post", domain.StatusPublish)
+
+	tag, err := s.Q.CreateTag(ctx, query.CreateTagParams{Name: "go", Slug: "go", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	for _, a := range []query.Article{goOne, goTwo} {
+		if err := s.Q.InsertArticleTag(ctx, query.InsertArticleTagParams{
+			ArticleID: a.ID, TagID: tag.ID, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("tag article: %v", err)
+		}
+	}
+
+	rec := doRequest(t, h, http.MethodGet, "/admin/posts?tag=go", nil, session)
+	body := rec.Body.String()
+	if !strings.Contains(body, "Go One") || !strings.Contains(body, "Go Two") || strings.Contains(body, "Rust Post") {
+		t.Errorf("tag=go filter wrong")
+	}
+
+	// The tag filter combines with the status filter and the search term.
+	rec = doRequest(t, h, http.MethodGet, "/admin/posts?tag=go&status=publish", nil, session)
+	if body := rec.Body.String(); !strings.Contains(body, "Go One") || strings.Contains(body, "Go Two") {
+		t.Errorf("tag=go&status=publish filter wrong")
+	}
+	rec = doRequest(t, h, http.MethodGet, "/admin/posts?tag=go&q=Two", nil, session)
+	if body := rec.Body.String(); !strings.Contains(body, "Go Two") || strings.Contains(body, "Go One") {
+		t.Errorf("tag=go&q=Two filter wrong")
+	}
+	// An unknown tag renders the empty page.
+	rec = doRequest(t, h, http.MethodGet, "/admin/posts?tag=nope", nil, session)
+	if !strings.Contains(rec.Body.String(), "No posts found.") {
+		t.Errorf("tag=nope should be empty")
+	}
+}
+
+// TestAdminArticlesIndexSort covers the clickable Created/Updated headers.
+func TestAdminArticlesIndexSort(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+
+	base := time.Now().Unix() - 10000
+	// The created/updated orders disagree on purpose: Alpha has the oldest
+	// created_at but the newest updated_at.
+	insert := func(title, slug string, created, updated int64) {
+		t.Helper()
+		if _, err := s.Q.CreateArticle(t.Context(), query.CreateArticleParams{
+			Title:                       sql.NullString{String: title, Valid: true},
+			Slug:                        sql.NullString{String: slug, Valid: true},
+			ContentHtml:                 sql.NullString{String: "<p>x</p>", Valid: true},
+			ContentType:                 string(domain.ContentTypeRichText),
+			Status:                      int64(domain.StatusPublish),
+			ScheduledCrosspostPlatforms: "[]",
+			CreatedAt:                   created,
+			UpdatedAt:                   updated,
+		}); err != nil {
+			t.Fatalf("insert article %q: %v", slug, err)
+		}
+	}
+	insert("Alpha", "alpha", base+1, base+30)
+	insert("Beta", "beta", base+2, base+10)
+	insert("Gamma", "gamma", base+3, base+20)
+
+	assertOrder := func(path string, want ...string) {
+		t.Helper()
+		rec := doRequest(t, h, http.MethodGet, path, nil, session)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d", path, rec.Code)
+		}
+		body := rec.Body.String()
+		prev := -1
+		for _, title := range want {
+			idx := strings.Index(body, title)
+			if idx < 0 {
+				t.Fatalf("%s: %q missing", path, title)
+			}
+			if idx < prev {
+				t.Errorf("%s: %q is out of order", path, title)
+			}
+			prev = idx
+		}
+	}
+
+	assertOrder("/admin/posts", "Gamma", "Beta", "Alpha") // default created_at DESC
+	assertOrder("/admin/posts?sort=created&dir=asc", "Alpha", "Beta", "Gamma")
+	assertOrder("/admin/posts?sort=created&dir=desc", "Gamma", "Beta", "Alpha")
+	assertOrder("/admin/posts?sort=updated&dir=desc", "Alpha", "Gamma", "Beta")
+	assertOrder("/admin/posts?sort=updated&dir=asc", "Beta", "Gamma", "Alpha")
+	// Unknown sort/dir values fall back to created_at DESC.
+	assertOrder("/admin/posts?sort=bogus&dir=sideways", "Gamma", "Beta", "Alpha")
+
+	// The sort links mark the active column; the toolbar tabs are gone.
+	rec := doRequest(t, h, http.MethodGet, "/admin/posts", nil, session)
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="th-sort active"`) {
+		t.Errorf("default page should mark Created as the active sort")
+	}
+	if n := strings.Count(body, `class="th-filter"`); n != 2 {
+		t.Errorf("index should offer Status and Tags filters, found %d", n)
+	}
+	if strings.Contains(body, `class="toolbar"`) {
+		t.Errorf("toolbar should be replaced by header filters")
+	}
+}
+
+// TestAdminArticlesIndexBogusStatus covers unknown status params: they filter
+// nothing, so the view must not present them as an active filter either.
+func TestAdminArticlesIndexBogusStatus(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	insertAdminArticle(t, s, "A Post", "a-post", domain.StatusPublish)
+
+	rec := doRequest(t, h, http.MethodGet, "/admin/posts?status=bogus", nil, session)
+	body := rec.Body.String()
+	if !strings.Contains(body, "A Post") {
+		t.Errorf("unknown status should list everything")
+	}
+	if strings.Contains(body, "status=bogus") {
+		t.Errorf("links and hidden inputs should drop the unknown status")
+	}
+	if strings.Contains(body, `<summary class="filtered">Status</summary>`) {
+		t.Errorf("unknown status should not mark the Status filter as active")
+	}
+}
+
 // TestAdminArticlesPagination covers the 100-per-page split.
 func TestAdminArticlesPagination(t *testing.T) {
 	s, h := newArticlesTestServer(t)
@@ -927,6 +1061,45 @@ func TestAdminArticlesPagination(t *testing.T) {
 	}
 }
 
+// TestAdminArticlesPaginationPreservesFilters covers pagination links keeping
+// the active tag filter and sort params; page 1 links stay bare (no page=1).
+func TestAdminArticlesPaginationPreservesFilters(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	ctx := t.Context()
+	now := time.Now().Unix()
+
+	tag, err := s.Q.CreateTag(ctx, query.CreateTagParams{Name: "go", Slug: "go", CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	for i := 1; i <= 101; i++ {
+		a := insertAdminArticle(t, s, fmt.Sprintf("Go %03d", i), fmt.Sprintf("go-%03d", i), domain.StatusPublish)
+		if err := s.Q.InsertArticleTag(ctx, query.InsertArticleTagParams{
+			ArticleID: a.ID, TagID: tag.ID, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("tag article: %v", err)
+		}
+	}
+
+	// Page 1: the page-2 link keeps tag/sort/dir (url.Values.Encode orders
+	// the keys alphabetically).
+	rec := doRequest(t, h, http.MethodGet, "/admin/posts?tag=go&sort=updated&dir=asc", nil, session)
+	if body := rec.Body.String(); !strings.Contains(body, `href="/admin/posts?dir=asc&amp;page=2&amp;sort=updated&amp;tag=go"`) {
+		t.Errorf("page 2 link should keep tag/sort/dir")
+	}
+
+	// Page 2: the link back to page 1 omits the default page param.
+	rec = doRequest(t, h, http.MethodGet, "/admin/posts?tag=go&page=2", nil, session)
+	body := rec.Body.String()
+	if !strings.Contains(body, `href="/admin/posts?tag=go"`) {
+		t.Errorf("page 1 link should keep only the tag filter")
+	}
+	if strings.Contains(body, "page=1") {
+		t.Errorf("no link should carry page=1")
+	}
+}
+
 // TestAdminArticlesDraftsScheduled covers the scoped collection pages.
 func TestAdminArticlesDraftsScheduled(t *testing.T) {
 	s, h := newArticlesTestServer(t)
@@ -938,6 +1111,10 @@ func TestAdminArticlesDraftsScheduled(t *testing.T) {
 	rec := doRequest(t, h, http.MethodGet, "/admin/posts/drafts", nil, session)
 	if body := rec.Body.String(); !strings.Contains(body, "A Draft") || strings.Contains(body, "A Scheduled") {
 		t.Errorf("drafts page wrong")
+	}
+	// Scoped pages hide the Status header filter (Tags remains).
+	if n := strings.Count(rec.Body.String(), `class="th-filter"`); n != 1 {
+		t.Errorf("drafts page should hide the Status filter, found %d th-filter", n)
 	}
 	rec = doRequest(t, h, http.MethodGet, "/admin/posts/scheduled", nil, session)
 	if body := rec.Body.String(); !strings.Contains(body, "A Scheduled") || strings.Contains(body, "A Draft") {

@@ -5,24 +5,12 @@
   <div class="page-head">
     <h1 class="page-title">Posts</h1>
     <div class="page-actions">
+      <form method="get" action="{{.Path}}" class="search-form">
+        <input type="text" name="q" value="{{.Q}}" placeholder="搜索标题、内容..." class="search-input">
+        {{range .SearchHiddenInputs}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+      </form>
       <a href="/admin/posts/new" class="btn btn-primary">New Post</a>
     </div>
-  </div>
-
-  <div class="toolbar">
-    <div class="tabs">
-      <a href="{{.Path}}{{if .Q}}?q={{.Q}}{{end}}" class="tab {{if eq .Status "all"}}active{{end}}">All</a>
-      <a href="{{.Path}}?status=publish{{if .Q}}&q={{.Q}}{{end}}" class="tab {{if eq .Status "publish"}}active{{end}}">Published</a>
-      <a href="{{.Path}}?status=draft{{if .Q}}&q={{.Q}}{{end}}" class="tab {{if eq .Status "draft"}}active{{end}}">Draft</a>
-      <a href="{{.Path}}?status=schedule{{if .Q}}&q={{.Q}}{{end}}" class="tab {{if eq .Status "schedule"}}active{{end}}">Scheduled</a>
-      <a href="{{.Path}}?status=shared{{if .Q}}&q={{.Q}}{{end}}" class="tab {{if eq .Status "shared"}}active{{end}}">Shared</a>
-      <a href="{{.Path}}?status=trash{{if .Q}}&q={{.Q}}{{end}}" class="tab {{if eq .Status "trash"}}active{{end}}">Trash</a>
-    </div>
-
-    <form method="get" action="{{.Path}}" class="search-form">
-      <input type="text" name="q" value="{{.Q}}" placeholder="搜索标题、内容..." class="search-input">
-      {{if ne .Status "all"}}<input type="hidden" name="status" value="{{.Status}}">{{end}}
-    </form>
   </div>
 
   <div class="batch-bar" data-batch-selection-target="actions" style="display: none;">
@@ -55,11 +43,41 @@
             <input type="checkbox" data-batch-selection-target="selectAll" data-action="change->batch-selection#toggleAll" aria-label="Select all">
           </th>
           <th>Title</th>
-          <th>Status</th>
-          <th>Tags</th>
+          <th>
+            {{if .Scoped}}
+              Status
+            {{else}}
+            <details class="th-filter">
+              <summary class="{{if ne .Status "all"}}filtered{{end}}">Status</summary>
+              <div class="th-filter-menu">
+                <a href="{{.StatusURL "all"}}" class="{{if eq .Status "all"}}active{{end}}">All</a>
+                <a href="{{.StatusURL "publish"}}" class="{{if eq .Status "publish"}}active{{end}}">Published</a>
+                <a href="{{.StatusURL "draft"}}" class="{{if eq .Status "draft"}}active{{end}}">Draft</a>
+                <a href="{{.StatusURL "schedule"}}" class="{{if eq .Status "schedule"}}active{{end}}">Scheduled</a>
+                <a href="{{.StatusURL "shared"}}" class="{{if eq .Status "shared"}}active{{end}}">Shared</a>
+                <a href="{{.StatusURL "trash"}}" class="{{if eq .Status "trash"}}active{{end}}">Trash</a>
+              </div>
+            </details>
+            {{end}}
+          </th>
+          <th>
+            <details class="th-filter">
+              <summary class="{{if .Tag}}filtered{{end}}">Tags</summary>
+              <div class="th-filter-menu">
+                <a href="{{.TagURL ""}}" class="{{if not .Tag}}active{{end}}">All</a>
+                {{range .Tags}}
+                  <a href="{{$.TagURL .}}" class="{{if eq $.Tag .}}active{{end}}">{{.}}</a>
+                {{end}}
+              </div>
+            </details>
+          </th>
           <th>Comments</th>
-          <th>Created</th>
-          <th>Updated</th>
+          <th>
+            <a href="{{.SortURL "created"}}" class="th-sort {{if eq .Sort "created"}}active{{end}}">Created{{if eq .Sort "created"}}{{if eq .Dir "asc"}} ↑{{else}} ↓{{end}}{{end}}</a>
+          </th>
+          <th>
+            <a href="{{.SortURL "updated"}}" class="th-sort {{if eq .Sort "updated"}}active{{end}}">Updated{{if eq .Sort "updated"}}{{if eq .Dir "asc"}} ↑{{else}} ↓{{end}}{{end}}</a>
+          </th>
           <th class="row-actions">Actions</th>
         </tr>
       </thead>
@@ -138,7 +156,7 @@
         {{else if eq .Page $.Page}}
           <span class="pagination-current">{{.Page}}</span>
         {{else}}
-          <a href="{{$.Path}}?page={{.Page}}{{if ne $.Status "all"}}&status={{$.Status}}{{end}}{{if $.Q}}&q={{$.Q}}{{end}}" class="pagination-link">{{.Page}}</a>
+          <a href="{{$.PageURL .Page}}" class="pagination-link">{{.Page}}</a>
         {{end}}
       {{end}}
     </div>

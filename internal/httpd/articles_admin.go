@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -70,12 +71,118 @@ func RegisterArticlesAdminRoutes(r chi.Router, s *Server) {
 type adminArticlesIndexData struct {
 	Flash    templates.Flash
 	Rows     []adminArticleRow
-	Q        string // current search term
-	Status   string // current status filter ("all" when unset)
-	Path     string // list base path (index / drafts / scheduled)
+	Q        string   // current search term
+	Status   string   // current status filter ("all" when unset)
+	Tag      string   // current tag filter ("" when unset)
+	Tags     []string // tag names offered by the Tags header filter
+	Sort     string   // current sort column: "created" or "updated"
+	Dir      string   // current sort direction: "asc" or "desc"
+	Path     string   // list base path (index / drafts / scheduled)
+	Scoped   bool     // drafts/scheduled pages: the Status header filter is hidden
 	Page     int
 	Pages    int
 	TimeZone string
+}
+
+// filterValues carries every active filter/sort param, omitting defaults so
+// URLs stay bare. It is the single source for list links and the search
+// form's hidden inputs.
+func (d adminArticlesIndexData) filterValues() url.Values {
+	v := url.Values{}
+	if d.Status != "" && d.Status != "all" {
+		v.Set("status", d.Status)
+	}
+	if d.Tag != "" {
+		v.Set("tag", d.Tag)
+	}
+	if d.Q != "" {
+		v.Set("q", d.Q)
+	}
+	if d.Sort != "created" {
+		v.Set("sort", d.Sort)
+	}
+	if d.Dir != "desc" {
+		v.Set("dir", d.Dir)
+	}
+	return v
+}
+
+// listURL renders a list link preserving every current filter/sort param;
+// mutate adjusts the query for the specific link (page jump, filter change,
+// sort toggle). Filters/sorts never carry the page over: changing them
+// restarts at page 1.
+func (d adminArticlesIndexData) listURL(mutate func(url.Values)) string {
+	v := d.filterValues()
+	if mutate != nil {
+		mutate(v)
+	}
+	if len(v) == 0 {
+		return d.Path
+	}
+	return d.Path + "?" + v.Encode()
+}
+
+// hiddenInput is one hidden <input> keeping a filter/sort param in the
+// search form.
+type hiddenInput struct{ Name, Value string }
+
+// SearchHiddenInputs renders the active filter/sort params (everything in
+// filterValues except the search term itself) as hidden inputs, so
+// submitting the search form keeps the current view.
+func (d adminArticlesIndexData) SearchHiddenInputs() []hiddenInput {
+	v := d.filterValues()
+	v.Del("q")
+	inputs := make([]hiddenInput, 0, len(v))
+	for _, name := range []string{"status", "tag", "sort", "dir"} {
+		if value := v.Get(name); value != "" {
+			inputs = append(inputs, hiddenInput{name, value})
+		}
+	}
+	return inputs
+}
+
+// PageURL is the pagination link for one page; page 1 stays the bare URL.
+func (d adminArticlesIndexData) PageURL(page int) string {
+	return d.listURL(func(v url.Values) {
+		if page > 1 {
+			v.Set("page", strconv.Itoa(page))
+		}
+	})
+}
+
+// SortURL toggles the direction when the column is already sorted on,
+// otherwise switches to the column sorted newest-first.
+func (d adminArticlesIndexData) SortURL(column string) string {
+	return d.listURL(func(v url.Values) {
+		dir := "desc"
+		if d.Sort == column && d.Dir == "desc" {
+			dir = "asc"
+		}
+		v.Set("sort", column)
+		v.Set("dir", dir)
+	})
+}
+
+// StatusURL filters by one status ("all" clears the filter).
+func (d adminArticlesIndexData) StatusURL(status string) string {
+	return d.listURL(func(v url.Values) {
+		if status == "all" {
+			v.Del("status")
+		} else {
+			v.Set("status", status)
+		}
+	})
+}
+
+// TagURL filters by one tag name ("" clears the filter).
+func (d adminArticlesIndexData) TagURL(tag string) string {
+	return d.listURL(func(v url.Values) {
+		if tag == "" {
+			v.Del("tag")
+		} else {
+			v.Set("tag", tag)
+		}
+	})
 }
 
 // adminArticleRow is one list row with its preloaded associations resolved.
@@ -115,9 +222,10 @@ func (s *Server) adminArticlesScheduled(w http.ResponseWriter, r *http.Request) 
 	s.adminArticlesList(w, r, int64(domain.StatusSchedule), true, "/admin/posts/scheduled")
 }
 
-// adminArticlesList is fetch_articles: optional status filter on top of the
-// scope, search_content, created_at DESC, 100 per page. Invalid page params
-// 404 like WillPaginate::InvalidPage.
+// adminArticlesList is fetch_articles: optional status/tag filters on top of
+// the scope, search_content, sortable created_at/updated_at headers
+// (created_at DESC by default), 100 per page. Invalid page params 404 like
+// WillPaginate::InvalidPage.
 func (s *Server) adminArticlesList(w http.ResponseWriter, r *http.Request, scopeStatus int64, hasScope bool, path string) {
 	ctx := r.Context()
 
@@ -148,47 +256,28 @@ func (s *Server) adminArticlesList(w http.ResponseWriter, r *http.Request, scope
 	offset := int64(page-1) * adminArticlesPerPage
 
 	term := r.URL.Query().Get("q")
-	like := likeTerm(term)
+	tag := r.URL.Query().Get("tag")
+	sort, dir := parseArticleSort(r.URL.Query().Get("sort"), r.URL.Query().Get("dir"))
+
+	statusValue := int64(-1) // -1: no status filter
+	if statusFiltered {
+		statusValue = effectiveStatus
+	}
+	filterParams := query.CountAdminArticlesFilteredParams{
+		StatusFilter: statusValue,
+		SearchLike:   likeTerm(term),
+		Tag:          tag,
+	}
 
 	var rows []query.Article
 	var total int64
 	var err error
-	switch {
-	case empty:
+	if empty {
 		rows, total = []query.Article{}, 0
-	case term != "" && statusFiltered:
-		total, err = s.Q.CountSearchAdminArticlesByStatus(ctx, query.CountSearchAdminArticlesByStatusParams{
-			Status: effectiveStatus, LIKE: like, LIKE_2: like, LIKE_3: like, LIKE_4: like,
-		})
+	} else {
+		total, err = s.Q.CountAdminArticlesFiltered(ctx, filterParams)
 		if err == nil {
-			rows, err = s.Q.SearchAdminArticlesByStatus(ctx, query.SearchAdminArticlesByStatusParams{
-				Status: effectiveStatus, LIKE: like, LIKE_2: like, LIKE_3: like, LIKE_4: like,
-				Limit: adminArticlesPerPage, Offset: offset,
-			})
-		}
-	case term != "":
-		total, err = s.Q.CountSearchAdminArticles(ctx, query.CountSearchAdminArticlesParams{
-			LIKE: like, LIKE_2: like, LIKE_3: like, LIKE_4: like,
-		})
-		if err == nil {
-			rows, err = s.Q.SearchAdminArticles(ctx, query.SearchAdminArticlesParams{
-				LIKE: like, LIKE_2: like, LIKE_3: like, LIKE_4: like,
-				Limit: adminArticlesPerPage, Offset: offset,
-			})
-		}
-	case statusFiltered:
-		total, err = s.Q.CountAdminArticlesByStatus(ctx, effectiveStatus)
-		if err == nil {
-			rows, err = s.Q.ListAdminArticlesByStatus(ctx, query.ListAdminArticlesByStatusParams{
-				Status: effectiveStatus, Limit: adminArticlesPerPage, Offset: offset,
-			})
-		}
-	default:
-		total, err = s.Q.CountAdminArticles(ctx)
-		if err == nil {
-			rows, err = s.Q.ListAdminArticles(ctx, query.ListAdminArticlesParams{
-				Limit: adminArticlesPerPage, Offset: offset,
-			})
+			rows, err = s.listAdminArticlesSorted(ctx, filterParams, sort, dir, offset)
 		}
 	}
 	if err != nil {
@@ -204,13 +293,22 @@ func (s *Server) adminArticlesList(w http.ResponseWriter, r *http.Request, scope
 		return
 	}
 
+	tagNames, err := s.listArticleTagNames(ctx)
+	if err != nil {
+		s.Log.Error("list articles: tags", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	st, err := s.Settings().Get(ctx)
 	if err != nil {
 		s.Log.Error("load settings", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if statusName == "" {
+	if _, known := parseStatusFilter(statusName); !known {
+		// Unknown statuses filter nothing (parseStatusFilter above), so the
+		// view must not present them as an active filter either.
 		statusName = "all"
 	}
 	s.render(w, http.StatusOK, "admin_articles_index", adminArticlesIndexData{
@@ -218,11 +316,71 @@ func (s *Server) adminArticlesList(w http.ResponseWriter, r *http.Request, scope
 		Rows:     listRows,
 		Q:        term,
 		Status:   statusName,
+		Tag:      tag,
+		Tags:     tagNames,
+		Sort:     sort,
+		Dir:      dir,
 		Path:     path,
+		Scoped:   hasScope,
 		Page:     page,
 		Pages:    int((total + adminArticlesPerPage - 1) / adminArticlesPerPage),
 		TimeZone: st.TimeZone,
 	})
+}
+
+// listAdminArticlesSorted dispatches to the fixed ORDER BY variant matching
+// the validated sort column and direction (sqlc cannot parameterize ORDER BY).
+func (s *Server) listAdminArticlesSorted(ctx context.Context, f query.CountAdminArticlesFilteredParams, sort, dir string, offset int64) ([]query.Article, error) {
+	switch {
+	case sort == "updated" && dir == "asc":
+		return s.Q.ListAdminArticlesFilteredUpdatedAsc(ctx, query.ListAdminArticlesFilteredUpdatedAscParams{
+			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag,
+			Limit: adminArticlesPerPage, Offset: offset,
+		})
+	case sort == "updated":
+		return s.Q.ListAdminArticlesFilteredUpdatedDesc(ctx, query.ListAdminArticlesFilteredUpdatedDescParams{
+			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag,
+			Limit: adminArticlesPerPage, Offset: offset,
+		})
+	case dir == "asc":
+		return s.Q.ListAdminArticlesFilteredCreatedAsc(ctx, query.ListAdminArticlesFilteredCreatedAscParams{
+			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag,
+			Limit: adminArticlesPerPage, Offset: offset,
+		})
+	default:
+		return s.Q.ListAdminArticlesFilteredCreatedDesc(ctx, query.ListAdminArticlesFilteredCreatedDescParams{
+			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag,
+			Limit: adminArticlesPerPage, Offset: offset,
+		})
+	}
+}
+
+// listArticleTagNames feeds the Tags header filter: every tag that at least
+// one article carries, alphabetically (Tag.alphabetical).
+func (s *Server) listArticleTagNames(ctx context.Context) ([]string, error) {
+	tagRows, err := s.Q.ListTagsWithArticleCount(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(tagRows))
+	for _, t := range tagRows {
+		if t.ArticlesTotal > 0 {
+			names = append(names, t.Name)
+		}
+	}
+	return names, nil
+}
+
+// parseArticleSort validates the header sort params; anything unknown falls
+// back to fetch_articles' created_at DESC order.
+func parseArticleSort(sort, dir string) (string, string) {
+	if sort != "created" && sort != "updated" {
+		sort = "created"
+	}
+	if dir != "asc" && dir != "desc" {
+		dir = "desc"
+	}
+	return sort, dir
 }
 
 // parseStatusFilter mirrors filter_by_status: only the five known statuses
