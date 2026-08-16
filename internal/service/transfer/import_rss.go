@@ -32,6 +32,7 @@ import (
 	"rables/internal/domain"
 	"rables/internal/jobs"
 	"rables/internal/service/activity"
+	"rables/internal/service/contentmigrate"
 	"rables/internal/service/media"
 	"rables/internal/ssrf"
 )
@@ -117,8 +118,8 @@ type RSSImporter struct {
 	Now func() time.Time
 
 	resolved map[string][]netip.Addr // per-host memo, like resolved_addresses_for
-	images   map[string]string      // image src → local /files/ URL memo; "" marks a failed download
-	seenSrcs map[string]struct{}    // distinct img srcs that reached the SSRF check, capped at MaxImportImages
+	images   map[string]string       // image src → local /files/ URL memo; "" marks a failed download
+	seenSrcs map[string]struct{}     // distinct img srcs that reached the SSRF check, capped at MaxImportImages
 }
 
 // RSSImportResult counts imported and failed entries.
@@ -219,9 +220,13 @@ func (r *RSSImporter) importEntry(ctx context.Context, item *gofeed.Item, import
 		content = r.rewriteImages(ctx, content, title)
 	}
 	// Feed content is untrusted: content_html is served verbatim
-	// (template.HTML) on the public pages, so it goes through the same
-	// sanitize/lazy-load write path as articles saved in the admin.
-	content = domain.AddLazyLoading(domain.SanitizeHTML(content))
+	// (template.HTML) on the public pages. It is stored as Markdown, whose
+	// write path (RenderMarkdown + SanitizeHTML + AddLazyLoading) applies the
+	// same sanitization as articles saved in the admin.
+	md, content, err := contentmigrate.ToMarkdown(content)
+	if err != nil {
+		return fmt.Errorf("convert feed content to markdown: %w", err)
+	}
 
 	q := query.New(r.DB)
 	exists := func(candidate string) bool {
@@ -256,7 +261,8 @@ func (r *RSSImporter) importEntry(ctx context.Context, item *gofeed.Item, import
 		Title:                       sql.NullString{String: title, Valid: title != ""},
 		Slug:                        sql.NullString{String: slug, Valid: true},
 		ContentHtml:                 sql.NullString{String: content, Valid: true},
-		ContentType:                 string(domain.ContentTypeRichText),
+		ContentType:                 string(domain.ContentTypeMarkdown),
+		ContentMarkdown:             sql.NullString{String: md, Valid: md != ""},
 		Description:                 sql.NullString{String: item.Description, Valid: item.Description != ""},
 		Status:                      int64(domain.StatusPublish),
 		Comment:                     0,
@@ -485,6 +491,18 @@ func (r *RSSImporter) fetchImage(ctx context.Context, rawurl string) (body []byt
 		return nil, "", errors.New("image exceeds the 20MB response limit")
 	}
 	return body, resp.Header.Get("Content-Type"), nil
+}
+
+// RegisterImportHandlers installs the import job handlers: kind "import_db"
+// (Rables sqlite bundle), kind "import_rss" and kind "import_markdown".
+// Failures are logged to activity_logs and swallowed, like the other import
+// jobs (no retry). invalidate is passed to the import_db handler, which calls
+// it after a committed import so the settings and rendered-content caches
+// drop the data the import rewrote; it may be nil.
+func RegisterImportHandlers(w *jobs.Worker, db *sql.DB, dataDir string, invalidate func()) {
+	RegisterImportDBHandler(w, db, dataDir, invalidate)
+	registerImportRSSHandler(w, db, dataDir)
+	registerImportMarkdownHandler(w, db, dataDir)
 }
 
 // registerImportRSSHandler installs the kind "import_rss" job handler

@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"database/sql"
@@ -102,7 +103,7 @@ func clearJobs(t *testing.T, s *Server) {
 
 func TestAdminMigratesImportAuth(t *testing.T) {
 	_, h := newMigratesImportTestServer(t)
-	for _, path := range []string{"/admin/migrates/import", "/admin/migrates/import_server", "/admin/migrates/import_rails", "/admin/migrates/import_rss", "/admin/migrates/import_rss_confirm"} {
+	for _, path := range []string{"/admin/migrates/import", "/admin/migrates/import_server", "/admin/migrates/import_markdown", "/admin/migrates/import_rss", "/admin/migrates/import_rss_confirm"} {
 		rec := doRequest(t, h, http.MethodPost, path, nil)
 		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/session/new" {
 			t.Errorf("POST %s unauthenticated: status = %d location = %q, want 302 /session/new",
@@ -118,7 +119,7 @@ func TestAdminMigratesImportFormActions(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	for _, want := range []string{`action="/admin/migrates/import"`, `action="/admin/migrates/import_rails"`, `action="/admin/migrates/import_rss"`} {
+	for _, want := range []string{`action="/admin/migrates/import"`, `action="/admin/migrates/import_markdown"`, `action="/admin/migrates/import_rss"`} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("import tab missing %q", want)
 		}
@@ -385,6 +386,132 @@ func TestAdminMigratesImportDB(t *testing.T) {
 	})
 }
 
+func TestAdminMigratesImportMarkdown(t *testing.T) {
+	s, h := newMigratesImportTestServer(t)
+	session := redirectsSessionCookie(t, s)
+	article := []byte("---\ntype: article\ntitle: x\nslug: x\n---\n\nbody\n")
+
+	// postMarkdownFiles uploads names under the shared markdown_files field.
+	postMarkdownFiles := func(t *testing.T, names []string) *httptest.ResponseRecorder {
+		t.Helper()
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		for _, name := range names {
+			hdr := textproto.MIMEHeader{}
+			hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="markdown_files"; filename="%s"`, name))
+			hdr.Set("Content-Type", "text/markdown")
+			part, err := mw.CreatePart(hdr)
+			if err != nil {
+				t.Fatalf("create part: %v", err)
+			}
+			if _, err := part.Write(article); err != nil {
+				t.Fatalf("write part: %v", err)
+			}
+		}
+		if err := mw.Close(); err != nil {
+			t.Fatalf("close multipart: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/admin/migrates/import_markdown", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.AddCookie(session)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	latestMarkdownPath := func(t *testing.T) string {
+		t.Helper()
+		kind, payload, err := latestJob(t, s)
+		if err != nil {
+			t.Fatalf("expected queued job: %v", err)
+		}
+		if kind != "import_markdown" {
+			t.Fatalf("kind = %q, want import_markdown", kind)
+		}
+		var p transfer.ImportMarkdownPayload
+		if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
+			t.Fatalf("payload not JSON: %v", err)
+		}
+		return p.Path
+	}
+
+	t.Run("multiple markdown files packed into one staged zip", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postMarkdownFiles(t, []string{"1.md", "2.md"})
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
+			t.Fatalf("status = %d location = %q, want 302 tab=import", rec.Code, rec.Header().Get("Location"))
+		}
+		path := latestMarkdownPath(t)
+		base := filepath.Base(path)
+		if filepath.Dir(path) != filepath.Join(s.Cfg.DataDir, "imports") ||
+			!strings.HasPrefix(base, "import_") || !strings.HasSuffix(base, ".zip") {
+			t.Errorf("stored path = %q, want data/imports/import_*.zip", path)
+		}
+		zr, err := zip.OpenReader(path)
+		if err != nil {
+			t.Fatalf("staged upload is not a zip: %v", err)
+		}
+		defer zr.Close()
+		if len(zr.File) != 2 {
+			t.Errorf("staged zip entries = %d, want 2", len(zr.File))
+		}
+	})
+
+	t.Run("single zip passes through", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postMarkdownFiles(t, []string{"export.zip"})
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		path := latestMarkdownPath(t)
+		stored, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("stored upload: %v", err)
+		}
+		if !bytes.Equal(stored, article) {
+			t.Errorf("stored content = %q, want the uploaded bytes", stored)
+		}
+	})
+
+	t.Run("zip among multiple files rejected", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postMarkdownFiles(t, []string{"export.zip", "1.md"})
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
+		}
+	})
+
+	t.Run("wrong type rejected", func(t *testing.T) {
+		clearJobs(t, s)
+		importsDir := filepath.Join(s.Cfg.DataDir, "imports")
+		before, _ := os.ReadDir(importsDir)
+		rec := postMarkdownFiles(t, []string{"notes.txt"})
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
+		}
+		after, _ := os.ReadDir(importsDir)
+		if len(after) != len(before) {
+			t.Errorf("rejected upload left a file behind: before %d, after %d", len(before), len(after))
+		}
+	})
+
+	t.Run("missing files", func(t *testing.T) {
+		clearJobs(t, s)
+		rec := postUpload(t, h, "/admin/migrates/import_markdown", map[string]importUpload{}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
+		}
+	})
+}
+
 func TestAdminMigratesImportServerFile(t *testing.T) {
 	s, h := newMigratesImportTestServer(t)
 	session := redirectsSessionCookie(t, s)
@@ -550,118 +677,6 @@ func TestAdminMigratesImportServerFile(t *testing.T) {
 		// The file exists but belongs to an enqueued job (a web upload);
 		// importing it again would race the owner.
 		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {"import_1700000000_a1b2c3d4.zip"}}, session)
-		if rec.Code != http.StatusFound {
-			t.Fatalf("status = %d, want 302", rec.Code)
-		}
-		if kind, _, err := latestJob(t, s); err == nil {
-			t.Errorf("no job expected, got kind %q", kind)
-		}
-	})
-}
-
-func TestAdminMigratesImportRails(t *testing.T) {
-	s, h := newMigratesImportTestServer(t)
-	session := redirectsSessionCookie(t, s)
-	dbBytes := []byte("fake-sqlite")
-	zipBytes := []byte("PK\x03\x04fake-zip")
-
-	t.Run("database only enqueued", func(t *testing.T) {
-		clearJobs(t, s)
-		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
-			"db_file": {"production.sqlite3", "application/octet-stream", dbBytes},
-		}, session)
-		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/migrates?tab=import" {
-			t.Fatalf("status = %d location = %q, want 302 tab=import", rec.Code, rec.Header().Get("Location"))
-		}
-		kind, payload, err := latestJob(t, s)
-		if err != nil {
-			t.Fatalf("expected queued job: %v", err)
-		}
-		if kind != "import_rails" {
-			t.Errorf("kind = %q, want import_rails", kind)
-		}
-		var p transfer.ImportRailsPayload
-		if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
-			t.Fatalf("payload not JSON: %v", err)
-		}
-		if !strings.HasSuffix(p.DBPath, ".sqlite3") || p.StoragePath != "" {
-			t.Errorf("payload = %+v, want DBPath *.sqlite3 and empty StoragePath", p)
-		}
-		stored, err := os.ReadFile(p.DBPath)
-		if err != nil {
-			t.Fatalf("stored upload: %v", err)
-		}
-		if !bytes.Equal(stored, dbBytes) {
-			t.Errorf("stored content = %q, want the uploaded bytes", stored)
-		}
-	})
-
-	t.Run("database and storage enqueued", func(t *testing.T) {
-		clearJobs(t, s)
-		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
-			"db_file":      {"production.sqlite3", "application/octet-stream", dbBytes},
-			"storage_file": {"storage.zip", "application/zip", zipBytes},
-		}, session)
-		if rec.Code != http.StatusFound {
-			t.Fatalf("status = %d, want 302", rec.Code)
-		}
-		kind, payload, err := latestJob(t, s)
-		if err != nil {
-			t.Fatalf("expected queued job: %v", err)
-		}
-		if kind != "import_rails" {
-			t.Errorf("kind = %q, want import_rails", kind)
-		}
-		var p transfer.ImportRailsPayload
-		if err := json.Unmarshal([]byte(payload.String), &p); err != nil {
-			t.Fatalf("payload not JSON: %v", err)
-		}
-		if !strings.HasSuffix(p.StoragePath, ".zip") {
-			t.Errorf("StoragePath = %q, want data/imports/import_*.zip", p.StoragePath)
-		}
-		if _, err := os.Stat(p.StoragePath); err != nil {
-			t.Errorf("stored storage upload: %v", err)
-		}
-	})
-
-	t.Run("wrong database type rejected", func(t *testing.T) {
-		clearJobs(t, s)
-		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
-			"db_file": {"dump.sql", "text/plain", []byte("sql")},
-		}, session)
-		if rec.Code != http.StatusFound {
-			t.Fatalf("status = %d, want 302", rec.Code)
-		}
-		if kind, _, err := latestJob(t, s); err == nil {
-			t.Errorf("no job expected, got kind %q", kind)
-		}
-	})
-
-	t.Run("wrong storage type rejected and db file cleaned up", func(t *testing.T) {
-		clearJobs(t, s)
-		importsDir := filepath.Join(s.Cfg.DataDir, "imports")
-		before, _ := os.ReadDir(importsDir)
-		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
-			"db_file":      {"production.sqlite3", "application/octet-stream", dbBytes},
-			"storage_file": {"storage.tar", "application/x-tar", []byte("tar")},
-		}, session)
-		if rec.Code != http.StatusFound {
-			t.Fatalf("status = %d, want 302", rec.Code)
-		}
-		if kind, _, err := latestJob(t, s); err == nil {
-			t.Errorf("no job expected, got kind %q", kind)
-		}
-		after, _ := os.ReadDir(importsDir)
-		if len(after) != len(before) {
-			t.Errorf("rejected upload left files behind: before %d, after %d", len(before), len(after))
-		}
-	})
-
-	t.Run("missing database field", func(t *testing.T) {
-		clearJobs(t, s)
-		rec := postUpload(t, h, "/admin/migrates/import_rails", map[string]importUpload{
-			"storage_file": {"storage.zip", "application/zip", zipBytes},
-		}, session)
 		if rec.Code != http.StatusFound {
 			t.Fatalf("status = %d, want 302", rec.Code)
 		}

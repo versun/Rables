@@ -70,7 +70,7 @@ func run() int {
 	crosspost.RegisterCrosspostHandlers(worker, database, cfg.DataDir)
 	newslettersvc.RegisterSendHandlers(worker, database, cfg.DataDir)
 	transfer.RegisterExportHandlers(worker, database, cfg.DataDir)
-	transfer.RegisterImportHandlers(worker, database, cfg.DataDir, server.Settings().Invalidate)
+	transfer.RegisterImportHandlers(worker, database, cfg.DataDir, server.InvalidateCaches)
 	crosspost.RegisterFetchCommentsHandlers(worker, database, cfg.DataDir)
 
 	// One syncer instance backs the twitter_sync job handler, so every run

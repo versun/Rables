@@ -101,21 +101,16 @@
 </div>
 
 <div class="card">
-  <h2 class="card-title">Import from Rails Database</h2>
-  <p class="card-desc">Upload the SQLite database of a Rails rables site (e.g. production.sqlite3). Rows that already exist are skipped. Optionally attach a ZIP of the Rails storage/ directory to restore the media files.</p>
-  <form method="post" action="/admin/migrates/import_rails" enctype="multipart/form-data">
+  <h2 class="card-title">Import from Markdown</h2>
+  <p class="card-desc">Import articles and pages from Markdown files with YAML front matter (a Rables Markdown export: one <code>.md</code> file per record with type/title/slug/status/created_at/tags fields). Upload a single ZIP of files, or pick multiple <code>.md</code> files at once. Documents whose slug already exists are skipped, and one bad document does not abort the batch — check the logs for the result.</p>
+  <form method="post" action="/admin/migrates/import_markdown" enctype="multipart/form-data">
     <div class="field">
-      <label for="db_file">Rails Database</label>
-      <input type="file" name="db_file" id="db_file" accept=".sqlite3,.db,.sqlite">
-      <small>The Rails rables SQLite database (production.sqlite3)</small>
-    </div>
-    <div class="field">
-      <label for="storage_file">Storage ZIP (optional)</label>
-      <input type="file" name="storage_file" id="storage_file" accept=".zip">
-      <small>A ZIP of the Rails storage/ directory with the uploaded files</small>
+      <label for="markdown_files">Markdown Files</label>
+      <input type="file" name="markdown_files" id="markdown_files" accept=".md,.markdown,.zip" multiple>
+      <small>A ZIP of .md files, or a selection of .md files</small>
     </div>
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Import From Rails</button>
+      <button type="submit" class="btn btn-primary">Import Markdown</button>
     </div>
   </form>
 </div>

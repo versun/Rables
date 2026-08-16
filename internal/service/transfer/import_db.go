@@ -28,6 +28,7 @@ import (
 
 	"rables/internal/jobs"
 	"rables/internal/service/activity"
+	"rables/internal/service/contentmigrate"
 	"rables/internal/service/media"
 )
 
@@ -165,7 +166,7 @@ func findBundleDB(stage string) (string, error) {
 // restoreBlobs copies the staged files/ tree into <DataDir>/files, never
 // overwriting a blob that already exists on disk. Entries that do not match
 // the blob layout (xx/yy/<key>) are skipped, so litter like .DS_Store in a
-// hand-made bundle cannot abort the import (same rule as restoreStorageZip).
+// hand-made bundle cannot abort the import.
 func (z *DBImporter) restoreBlobs(tree string, res *DBImportResult) error {
 	if info, err := os.Stat(tree); err != nil || !info.IsDir() {
 		return nil // bundles without media are fine
@@ -245,14 +246,72 @@ func (z *DBImporter) copyTables(ctx context.Context, srcPath string, res *DBImpo
 	if _, err := tx.ExecContext(ctx, `DELETE FROM main.attachments WHERE record_type = 'TwitterArchiveTweet'`); err != nil {
 		return fmt.Errorf("import db: attachments: %w", err)
 	}
+	// A pre-markdown backup carries rich_text article/page rows; convert them
+	// to markdown like migrate-content does, so no rich_text rows exist
+	// after any restore.
+	if err := convertRichTextRows(ctx, tx); err != nil {
+		return fmt.Errorf("import db: convert rich_text rows: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("import db: commit: %w", err)
 	}
 	return nil
 }
 
+// convertRichTextRows rewrites every rich_text article/page row in the live
+// database to markdown storage (source in content_markdown, content_html
+// re-rendered through the standard write path).
+func convertRichTextRows(ctx context.Context, tx *sql.Tx) error {
+	for _, table := range []string{"articles", "pages"} {
+		rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT id, content_html FROM main.%s WHERE content_type = 'rich_text'`, table))
+		if err != nil {
+			return err
+		}
+		type richRow struct {
+			id   int64
+			body sql.NullString
+		}
+		var list []richRow
+		for rows.Next() {
+			var r richRow
+			if err := rows.Scan(&r.id, &r.body); err != nil {
+				rows.Close()
+				return err
+			}
+			list = append(list, r)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		for _, r := range list {
+			if !r.body.Valid || r.body.String == "" {
+				if _, err := tx.ExecContext(ctx, fmt.Sprintf(`UPDATE main.%s SET content_type = 'markdown' WHERE id = ?`, table), r.id); err != nil {
+					return err
+				}
+				continue
+			}
+			md, rendered, err := contentmigrate.ToMarkdown(r.body.String)
+			if err != nil {
+				return fmt.Errorf("%s:%d: %w", table, r.id, err)
+			}
+			// A body that converts to nothing (e.g. only a dead attachment)
+			// stores NULL, like every other write path.
+			var mdVal any
+			if md != "" {
+				mdVal = md
+			}
+			if _, err := tx.ExecContext(ctx, fmt.Sprintf(`UPDATE main.%s SET content_type = 'markdown', content_markdown = ?, content_html = ? WHERE id = ?`, table), mdVal, rendered, r.id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // checkSourceSchema verifies the attached source looks like a Go rables
-// database and not a Rails one (which must go through the Rails import).
+// database and not a Rails one.
 // Every table the import copies must be a real table: a VIEW passes PRAGMA
 // table_info too, and a hostile bundle could define one reading excluded
 // runtime tables (main.sessions tokens, users.password_digest) into public
@@ -276,7 +335,7 @@ func checkSourceSchema(ctx context.Context, conn *sql.Conn) error {
 		return err
 	}
 	if objects["action_text_rich_texts"] == "table" || objects["active_storage_blobs"] == "table" {
-		return errors.New("import db: the uploaded database is a Rails rables database; use the Rails import instead")
+		return errors.New("import db: the uploaded database is a Rails rables database; not a Rables backup")
 	}
 	var missing []string
 	for _, req := range []string{"articles", "pages", "settings", "files"} {
@@ -629,10 +688,10 @@ func formatDBImportResult(res *DBImportResult) string {
 // RegisterImportDBHandler installs the kind "import_db" job handler. Import
 // failures are logged to activity_logs and swallowed (no job retry), like the
 // other import jobs. invalidate is called whenever the import committed rows:
-// the row copy upserts the settings table (dbImportTables) behind the
-// settings.Cache's back, and settings.Cache's contract requires writers that
-// bypass Update to invalidate, or public pages keep serving the old site
-// title/URL/CSS until the TTL expires. It may be nil.
+// the row copy upserts the settings table behind the settings.Cache's back,
+// and convertRichTextRows rewrites content_html while preserving updated_at,
+// so both the settings cache and the rendered-content cache (keyed on
+// id+updated_at) would otherwise keep serving pre-import data. It may be nil.
 func RegisterImportDBHandler(w *jobs.Worker, db *sql.DB, dataDir string, invalidate func()) {
 	w.Register(jobs.KindImportDB, func(ctx context.Context, payload json.RawMessage) error {
 		var p ImportDBPayload

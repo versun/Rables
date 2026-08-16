@@ -8,7 +8,7 @@ The Rails app in the parent directory remains the behavioral source of truth. Th
 
 ## Status
 
-All implementation tasks (T01–T29) are complete: core blog, admin, comments, subscriptions, newsletters, crossposting, Twitter sync, import/export, Rails migration tool, vanilla JS frontend, and deployment artifacts. Remaining: T30 (production cutover), which must be executed against the live environment.
+All implementation tasks (T01–T29) are complete: core blog, admin, comments, subscriptions, newsletters, crossposting, Twitter sync, import/export, vanilla JS frontend, and deployment artifacts. Remaining: T30 (production cutover), which must be executed against the live environment.
 
 ## Features
 
@@ -17,7 +17,7 @@ All implementation tasks (T01–T29) are complete: core blog, admin, comments, s
 - **Newsletter**: native SMTP or listmonk, tag-scoped subscriptions, double opt-in confirm/unsubscribe
 - **Crossposting**: Mastodon, Bluesky (hand-written XRPC + facets), X (OAuth1.0a, chunked media upload, quote-tweet/GIF rules); Xiaohongshu is log-only
 - **Twitter**: account sync (tweets archived as articles)
-- **Transfer**: full-site export (SQLite database + media files in one ZIP), import from a Rables export or bare database (upsert by id — a restore mechanism for fresh installs or the originating site, not a merge of two populated sites; users, including your own account, are overwritten), import from a Rails rables SQLite database (+ optional storage ZIP), RSS import (SSRF-hardened)
+- **Transfer**: full-site export (SQLite database + media files in one ZIP), import from a Rables export or bare database (upsert by id — a restore mechanism for fresh installs or the originating site, not a merge of two populated sites; users, including your own account, are overwritten), batch Markdown import (.md files with YAML front matter, one ZIP or a multi-file selection), RSS import (SSRF-hardened)
 - **Ops**: background jobs (`job_runs` table + in-process worker), cron scheduler, activity log, regex redirects, static file hosting
 
 ## Quick start
@@ -71,29 +71,18 @@ docker run -e HMAC_SECRET=change-me -v rables-data:/data -p 8080:8080 rables
 - `deploy/rables.service` — hardened systemd unit
 - `deploy/backup.sh` — online SQLite backup (`.backup`) + files tarball with retention
 
-## Migrating from the Rails app
-
-```bash
-go build -o migrate-rails ./cmd/migrate-rails
-./migrate-rails -old /path/to/rails/db/production.sqlite3 -data ./data --verify-files
-```
-
-The tool is idempotent (safe to re-run to catch up before cutover), migrates all content and rewrites ActionText attachments to `/files/<key>` URLs, and prints a per-table report (old/inserted/skipped counts). It exits non-zero if row counts mismatch. Disk files are **not** copied — mount the Rails `storage/` directory as `DATA_DIR/files/` (the `xx/yy/<key>` layout is identical). Sessions are not migrated; everyone logs in again after cutover.
-
-The same migration also runs from the admin UI (/admin/migrates, Import tab): upload the Rails SQLite database plus an optional ZIP of the `storage/` directory.
-
 ## Layout
 
 ```
 cmd/server/         the one long-running process (HTTP + job worker + cron)
-cmd/migrate-rails/  one-shot Rails → Go migration tool
+cmd/migrate-content/  one-shot rich_text → markdown content migration tool
 internal/config/    env config + logger
 internal/db/        goose-embedded migrations, connection, sqlc-generated queries
 internal/domain/    pure functions (state machine, slug, excerpt, sanitize, contentbuilder)
 internal/httpd/     chi router, middleware, all HTTP handlers
 internal/jobs/      job_runs worker + cron scheduler
 internal/service/   articles, comments, crosspost, media, newsletter, transfer,
-                    twittersync, railsmigrate, ...
+                    twittersync, ...
 internal/templates/ embedded html/template pages (+ `_`-prefixed partials)
 internal/assets/    embedded app.js (vanilla, no build) / app.css / EasyMDE editor
                     (+ a 22-glyph Font Awesome subset for its toolbar icons)

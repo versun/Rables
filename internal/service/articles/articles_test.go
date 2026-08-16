@@ -127,13 +127,20 @@ func TestSaveContentTypeSanitize(t *testing.T) {
 		}
 	})
 
-	t.Run("rich text sanitized", func(t *testing.T) {
-		stored := save(t, SaveParams{
+	t.Run("legacy rich_text sanitized, stored as html", func(t *testing.T) {
+		article, errs, err := Save(ctx, database, nil, SaveParams{
 			Title:       "Rich Post",
 			ContentType: string(domain.ContentTypeRichText),
 			ContentHTML: `<p>Hi</p><script>alert(1)</script><p><img src="/x.png"></p>`,
 			Status:      domain.StatusDraft,
 		})
+		if err != nil || len(errs) > 0 {
+			t.Fatalf("Save: errs = %v, err = %v", errs, err)
+		}
+		stored := article.ContentHtml.String
+		if article.ContentType != string(domain.ContentTypeHTML) {
+			t.Errorf("content_type = %q, want html (rich_text coerced)", article.ContentType)
+		}
 		if strings.Contains(stored, "script") {
 			t.Errorf("content_html still contains script: %q", stored)
 		}

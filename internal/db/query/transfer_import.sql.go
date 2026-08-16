@@ -26,11 +26,11 @@ func (q *Queries) ImportArticleIDBySlug(ctx context.Context, slug sql.NullString
 }
 
 const importInsertArticle = `-- name: ImportInsertArticle :one
-INSERT INTO articles (title, slug, content_html, content_type, description, excerpt,
+INSERT INTO articles (title, slug, content_html, content_type, content_markdown, description, excerpt,
   meta_description, meta_title, meta_image, source_author, source_url, source_content,
   status, comment, scheduled_at, scheduled_crosspost_platforms, scheduled_send_newsletter,
   created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
 `
 
 type ImportInsertArticleParams struct {
@@ -38,6 +38,7 @@ type ImportInsertArticleParams struct {
 	Slug                        sql.NullString
 	ContentHtml                 sql.NullString
 	ContentType                 string
+	ContentMarkdown             sql.NullString
 	Description                 sql.NullString
 	Excerpt                     sql.NullString
 	MetaDescription             sql.NullString
@@ -61,6 +62,7 @@ func (q *Queries) ImportInsertArticle(ctx context.Context, arg ImportInsertArtic
 		arg.Slug,
 		arg.ContentHtml,
 		arg.ContentType,
+		arg.ContentMarkdown,
 		arg.Description,
 		arg.Excerpt,
 		arg.MetaDescription,

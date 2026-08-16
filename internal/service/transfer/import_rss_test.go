@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -177,17 +178,21 @@ func TestRSSImportEntries(t *testing.T) {
 
 	var status, comment int64
 	var slug, content, description, contentType string
+	var contentMarkdown sql.NullString
 	var createdAt int64
-	err = database.QueryRow(`SELECT slug, status, comment, content_html, description, content_type, created_at FROM articles WHERE slug = 'first-post'`).
-		Scan(&slug, &status, &comment, &content, &description, &contentType, &createdAt)
+	err = database.QueryRow(`SELECT slug, status, comment, content_html, description, content_type, content_markdown, created_at FROM articles WHERE slug = 'first-post'`).
+		Scan(&slug, &status, &comment, &content, &description, &contentType, &contentMarkdown, &createdAt)
 	if err != nil {
 		t.Fatalf("query first-post: %v", err)
 	}
-	if status != 1 || comment != 0 || contentType != "rich_text" {
-		t.Errorf("status/comment/content_type = %d/%d/%q, want 1/0/rich_text", status, comment, contentType)
+	if status != 1 || comment != 0 || contentType != "markdown" {
+		t.Errorf("status/comment/content_type = %d/%d/%q, want 1/0/markdown", status, comment, contentType)
 	}
-	if content != "<p>hello</p>" {
+	if content != "<p>hello</p>\n" {
 		t.Errorf("content = %q, want <p>hello</p>", content)
+	}
+	if !contentMarkdown.Valid || !strings.Contains(contentMarkdown.String, "hello") {
+		t.Errorf("content_markdown = %+v, want the markdown source", contentMarkdown)
 	}
 	if description != "summary one" {
 		t.Errorf("description = %q, want summary one", description)

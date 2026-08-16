@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -21,36 +22,36 @@ import (
 	"rables/internal/templates"
 )
 
-// Upload limits for the migrate imports. The database import covers a full
-// export bundle (database + media); the Rails import additionally allows a
-// storage zip, which can be large.
-const (
-	maxImportDBUploadSize    = 2 << 30 // 2 GB
-	maxImportRailsUploadSize = 4 << 30 // 4 GB
-)
+// Upload limit for the migrate imports. The database import covers a full
+// export bundle (database + media).
+const maxImportDBUploadSize = 2 << 30 // 2 GB
+
+// The markdown import covers text documents only: one ZIP of .md files or a
+// multi-file .md selection, packed into a single staged ZIP by the handler.
+const maxImportMarkdownUploadSize = 256 << 20 // 256 MB
 
 // Flash texts of the import submissions.
 const (
 	migratesImportDBNotice       = "Database Import in progress, please check the logs for details"
-	migratesImportRailsNotice    = "Rails Import in progress, please check the logs for details"
 	migratesImportRSSNotice      = "RSS Import in progress, please check the logs for details"
+	migratesImportMarkdownNotice = "Markdown Import in progress, please check the logs for details"
 	migratesImportMissingAlert   = "Please provide a file for import"
 	migratesImportNameAlert      = "Import failed: invalid file name"
 	migratesImportDBTypeAlert    = "Import failed: only Rables export ZIPs or SQLite database files (.zip, .db, .sqlite, .sqlite3) are allowed"
-	migratesImportRailsTypeAlert = "Import failed: the Rails database must be a SQLite file (.sqlite3, .db, .sqlite) and the storage upload a ZIP"
+	migratesImportMarkdownAlert  = "Import failed: only Markdown files (.md, .markdown) or a single ZIP of Markdown files are allowed"
 	migratesImportTooBigAlert    = "Import failed: file exceeds the upload size limit"
 	migratesImportQueuedAlert    = "Import failed: a queued file for this name already exists; resolve or remove the .queued file first"
 )
 
 // RegisterMigratesImportRoutes mounts the import endpoints: the Rables
-// database upload goes to /admin/migrates/import, the Rails database upload
-// to /admin/migrates/import_rails, the RSS feed fetch (preview) to
+// database upload goes to /admin/migrates/import, the markdown batch upload
+// to /admin/migrates/import_markdown, the RSS feed fetch (preview) to
 // /admin/migrates/import_rss and the RSS selection submit to
 // /admin/migrates/import_rss_confirm.
 func RegisterMigratesImportRoutes(r chi.Router, s *Server) {
 	r.With(s.RequireAuth).Post("/admin/migrates/import", s.adminMigratesImportDB)
 	r.With(s.RequireAuth).Post("/admin/migrates/import_server", s.adminMigratesImportServerFile)
-	r.With(s.RequireAuth).Post("/admin/migrates/import_rails", s.adminMigratesImportRails)
+	r.With(s.RequireAuth).Post("/admin/migrates/import_markdown", s.adminMigratesImportMarkdown)
 	r.With(s.RequireAuth).Post("/admin/migrates/import_rss", s.adminMigratesImportRSS)
 	r.With(s.RequireAuth).Post("/admin/migrates/import_rss_confirm", s.adminMigratesImportRSSConfirm)
 }
@@ -122,78 +123,6 @@ func (s *Server) adminMigratesImportDB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.SetFlash(w, templates.Flash{Notice: migratesImportDBNotice})
-	http.Redirect(w, r, "/admin/migrates?tab=import", http.StatusFound)
-}
-
-// adminMigratesImportRails handles POST /admin/migrates/import_rails: the
-// uploaded Rails sqlite database (plus an optional zip of the Rails storage/
-// directory) is stored under data/imports and the import_rails job is
-// enqueued; the job deletes the files.
-func (s *Server) adminMigratesImportRails(w http.ResponseWriter, r *http.Request) {
-	fail := func(alert string) { s.migratesImportFail(w, r, alert) }
-	// Multi-GB uploads cannot fit the server-wide 30s ReadTimeout / 60s
-	// WriteTimeout.
-	s.clearRequestDeadlines(w)
-	r.Body = http.MaxBytesReader(w, r.Body, maxImportRailsUploadSize)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			fail(migratesImportTooBigAlert)
-		} else {
-			fail(migratesImportMissingAlert)
-		}
-		return
-	}
-	// Same TempDir staging cleanup as adminMigratesImportDB; both uploads
-	// are copied into data/imports synchronously before enqueueing.
-	defer r.MultipartForm.RemoveAll()
-
-	dbSrc, dbHeader, err := r.FormFile("db_file")
-	if err != nil {
-		fail(migratesImportMissingAlert)
-		return
-	}
-	defer dbSrc.Close()
-	dbExt := strings.ToLower(filepath.Ext(dbHeader.Filename))
-	switch dbExt {
-	case ".db", ".sqlite", ".sqlite3":
-	default:
-		fail(migratesImportRailsTypeAlert)
-		return
-	}
-	dbPath, err := s.saveImportUpload(dbSrc, dbExt)
-	if err != nil {
-		s.Log.Error("store rails db upload", "error", err)
-		fail("Rails import failed: " + err.Error())
-		return
-	}
-
-	payload := transfer.ImportRailsPayload{DBPath: dbPath}
-	if storageSrc, storageHeader, err := r.FormFile("storage_file"); err == nil {
-		defer storageSrc.Close()
-		if strings.ToLower(filepath.Ext(storageHeader.Filename)) != ".zip" {
-			os.Remove(dbPath)
-			fail(migratesImportRailsTypeAlert)
-			return
-		}
-		storagePath, err := s.saveImportUpload(storageSrc, ".zip")
-		if err != nil {
-			os.Remove(dbPath)
-			s.Log.Error("store rails storage upload", "error", err)
-			fail("Rails import failed: " + err.Error())
-			return
-		}
-		payload.StoragePath = storagePath
-	}
-
-	if _, err := s.Enqueuer().Enqueue(r.Context(), jobs.KindImportRails, payload, time.Now()); err != nil {
-		os.Remove(dbPath)
-		os.Remove(payload.StoragePath)
-		s.Log.Error("enqueue rails import", "error", err)
-		fail("Rails import failed: " + err.Error())
-		return
-	}
-	s.SetFlash(w, templates.Flash{Notice: migratesImportRailsNotice})
 	http.Redirect(w, r, "/admin/migrates?tab=import", http.StatusFound)
 }
 
@@ -289,6 +218,145 @@ func (s *Server) saveImportUpload(src multipart.File, ext string) (string, error
 		err = closeErr
 	}
 	if err != nil {
+		os.Remove(tempPath)
+		return "", err
+	}
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		os.Remove(tempPath)
+		return "", err
+	}
+	return finalPath, nil
+}
+
+// adminMigratesImportMarkdown handles POST /admin/migrates/import_markdown:
+// the markdown batch upload (one ZIP of .md files, or a multi-file .md
+// selection) is staged under data/imports as a single import_* ZIP and the
+// import_markdown job is enqueued; the job deletes the file. A picked set of
+// .md files is packed into the ZIP here, so the job only ever sees one
+// archive (and cleanupImportUpload / the orphan sweep treat it exactly like a
+// database upload).
+func (s *Server) adminMigratesImportMarkdown(w http.ResponseWriter, r *http.Request) {
+	fail := func(alert string) { s.migratesImportFail(w, r, alert) }
+	s.clearRequestDeadlines(w)
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportMarkdownUploadSize)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			fail(migratesImportTooBigAlert)
+		} else {
+			fail(migratesImportMissingAlert)
+		}
+		return
+	}
+	// See adminMigratesImportDB: staged temp files must outlive RemoveAll.
+	defer r.MultipartForm.RemoveAll()
+	files := r.MultipartForm.File["markdown_files"]
+	if len(files) == 0 {
+		fail(migratesImportMissingAlert)
+		return
+	}
+
+	var tempPath string
+	if len(files) == 1 && strings.EqualFold(filepath.Ext(files[0].Filename), ".zip") {
+		src, err := files[0].Open()
+		if err != nil {
+			// The staged multipart temp file is unreadable — a server-side
+			// failure, not a missing upload.
+			s.Log.Error("open markdown import upload", "error", err)
+			fail("Import failed: " + err.Error())
+			return
+		}
+		defer src.Close()
+		tempPath, err = s.saveImportUpload(src, ".zip")
+		if err != nil {
+			s.Log.Error("store markdown import upload", "error", err)
+			fail("Import failed: " + err.Error())
+			return
+		}
+	} else {
+		for _, f := range files {
+			if !markdownUploadExt(f.Filename) {
+				fail(migratesImportMarkdownAlert)
+				return
+			}
+		}
+		var err error
+		tempPath, err = s.saveImportMarkdownZip(files)
+		if err != nil {
+			s.Log.Error("store markdown import upload", "error", err)
+			fail("Import failed: " + err.Error())
+			return
+		}
+	}
+
+	payload := transfer.ImportMarkdownPayload{Path: tempPath}
+	if _, err := s.Enqueuer().Enqueue(r.Context(), jobs.KindImportMarkdown, payload, time.Now()); err != nil {
+		// The job never took ownership of the file: remove it.
+		os.Remove(tempPath)
+		s.Log.Error("enqueue markdown import", "error", err)
+		fail("Import failed: " + err.Error())
+		return
+	}
+	s.SetFlash(w, templates.Flash{Notice: migratesImportMarkdownNotice})
+	http.Redirect(w, r, "/admin/migrates?tab=import", http.StatusFound)
+}
+
+// markdownUploadExt reports whether name is an importable markdown document.
+func markdownUploadExt(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".md", ".markdown":
+		return true
+	}
+	return false
+}
+
+// saveImportMarkdownZip packs the picked markdown files into one ZIP staged
+// under data/imports with a generated import_* name, using the same
+// write-.part-then-rename pattern as saveImportUpload. Entry names are the
+// uploaded base names; the front matter inside each document decides what
+// gets imported, so the names carry no meaning beyond the activity log.
+func (s *Server) saveImportMarkdownZip(files []*multipart.FileHeader) (string, error) {
+	var rnd [8]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		return "", err
+	}
+	importsDir := filepath.Join(s.Cfg.DataDir, "imports")
+	if err := os.MkdirAll(importsDir, 0o755); err != nil {
+		return "", err
+	}
+	finalPath := filepath.Join(importsDir, fmt.Sprintf("import_%d_%s.zip", time.Now().Unix(), hex.EncodeToString(rnd[:])))
+	tempPath := finalPath + ".part"
+	out, err := os.Create(tempPath)
+	if err != nil {
+		return "", err
+	}
+	zw := zip.NewWriter(out)
+	for _, f := range files {
+		src, err := f.Open()
+		if err != nil {
+			zw.Close()
+			out.Close()
+			os.Remove(tempPath)
+			return "", err
+		}
+		entry, err := zw.Create(filepath.Base(f.Filename))
+		if err == nil {
+			_, err = io.Copy(entry, src)
+		}
+		src.Close()
+		if err != nil {
+			zw.Close()
+			out.Close()
+			os.Remove(tempPath)
+			return "", err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		out.Close()
+		os.Remove(tempPath)
+		return "", err
+	}
+	if err := out.Close(); err != nil {
 		os.Remove(tempPath)
 		return "", err
 	}

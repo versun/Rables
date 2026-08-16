@@ -68,7 +68,7 @@ type (
 type SaveParams struct {
 	Title           string
 	Slug            string
-	ContentType     string // domain.ContentTypeRichText | domain.ContentTypeHTML | domain.ContentTypeMarkdown
+	ContentType     string // domain.ContentTypeHTML | domain.ContentTypeMarkdown (a legacy rich_text submission stores as html)
 	ContentHTML     string // raw rich-text body, raw html_content, or markdown source
 	Description     string
 	MetaTitle       string
@@ -719,14 +719,15 @@ func nullString(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: !domain.IsBlank(s)}
 }
 
+// contentTypeOrDefault normalizes the stored content_type: only markdown and
+// html are written anymore. A legacy rich_text submission stores as html —
+// its body is sanitized HTML, which is exactly what the html editor edits.
 func contentTypeOrDefault(ct string) string {
 	switch ct {
-	case string(domain.ContentTypeHTML):
-		return string(domain.ContentTypeHTML)
 	case string(domain.ContentTypeMarkdown):
 		return string(domain.ContentTypeMarkdown)
 	}
-	return string(domain.ContentTypeRichText)
+	return string(domain.ContentTypeHTML)
 }
 
 // isUniqueViolation reports a SQLite UNIQUE constraint failure.

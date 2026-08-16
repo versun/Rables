@@ -184,7 +184,15 @@ func TestRunFirstRunLimit(t *testing.T) {
 		if article.Status != 1 || article.Comment != 1 {
 			t.Errorf("%s status=%d comment=%d, want publish/1 comment/1", slug, article.Status, article.Comment)
 		}
-		if want := fmt.Sprintf("<p>tweet %d</p>", i); article.ContentHtml.String != want {
+		// Tweets are archived as markdown: source in content_markdown, the
+		// sanitized re-render in content_html.
+		if article.ContentType != "markdown" {
+			t.Errorf("%s content_type = %q, want markdown", slug, article.ContentType)
+		}
+		if want := fmt.Sprintf("tweet %d", i); !article.ContentMarkdown.Valid || !strings.Contains(article.ContentMarkdown.String, want) {
+			t.Errorf("%s content_markdown = %+v, want containing %q", slug, article.ContentMarkdown, want)
+		}
+		if want := fmt.Sprintf("<p>tweet %d</p>\n", i); article.ContentHtml.String != want {
 			t.Errorf("%s content = %q, want %q", slug, article.ContentHtml.String, want)
 		}
 		if article.CreatedAt != time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC).Unix() {
@@ -476,14 +484,15 @@ func TestRunTcoResolution(t *testing.T) {
 		t.Errorf("tweet-301 content = %q, want entity-expanded URL", got)
 	}
 	// The host rewrite is test-only: /bbb 301s to /final, which resolves
-	// (URI.join semantics) against the t.co base, then returns 200.
-	if got := articleBySlug(t, database, "tweet-302").ContentHtml.String; got != "<p>follow me https://t.co/final</p>" {
+	// (URI.join semantics) against the t.co base, then returns 200. The bare
+	// URL is autolinked by the markdown render (GFM), like any markdown post.
+	if got := articleBySlug(t, database, "tweet-302").ContentHtml.String; got != `<p>follow me <a href="https://t.co/final">https://t.co/final</a></p>`+"\n" {
 		t.Errorf("tweet-302 content = %q, want HEAD-followed relative redirect", got)
 	}
 	if got := articleBySlug(t, database, "tweet-303").ContentHtml.String; strings.Contains(got, "t.co/ccc") || strings.Contains(got, "photo/1") {
 		t.Errorf("tweet-303 content = %q, want own-media link removed", got)
 	}
-	if got := articleBySlug(t, database, "tweet-303").ContentHtml.String; got != "<p>look at this</p>" {
+	if got := articleBySlug(t, database, "tweet-303").ContentHtml.String; got != "<p>look at this</p>\n" {
 		t.Errorf("tweet-303 content = %q, want trailing whitespace trimmed", got)
 	}
 	// Only the entity-less link (t2) hit HEAD: /bbb then /final.

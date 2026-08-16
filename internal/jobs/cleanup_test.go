@@ -91,10 +91,9 @@ func TestCleanupOrphanImportFiles(t *testing.T) {
 		if _, err := enq.Enqueue(ctx, KindImportDB, map[string]any{"path": dbUpload}, time.Now()); err != nil {
 			t.Fatalf("enqueue import_db: %v", err)
 		}
-		railsDB := writeImportFile(t, dataDir, "import_201_bbbbbbbb.db", old)
-		railsStorage := writeImportFile(t, dataDir, "import_202_cccccccc.zip", old)
-		if _, err := enq.Enqueue(ctx, KindImportRails, map[string]any{"db_path": railsDB, "storage_path": railsStorage}, time.Now()); err != nil {
-			t.Fatalf("enqueue import_rails: %v", err)
+		mdUpload := writeImportFile(t, dataDir, "import_201_bbbbbbbb.zip", old)
+		if _, err := enq.Enqueue(ctx, KindImportMarkdown, map[string]any{"path": mdUpload}, time.Now()); err != nil {
+			t.Fatalf("enqueue import_markdown: %v", err)
 		}
 
 		n, err := CleanupOrphanImportFiles(ctx, query.New(d), dataDir, startedAt)
@@ -104,7 +103,7 @@ func TestCleanupOrphanImportFiles(t *testing.T) {
 		if n != 0 {
 			t.Errorf("removed = %d, want 0", n)
 		}
-		for _, path := range []string{dbUpload, railsDB, railsStorage} {
+		for _, path := range []string{dbUpload, mdUpload} {
 			if !fileExists(path) {
 				t.Errorf("%s was removed, want kept", filepath.Base(path))
 			}

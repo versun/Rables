@@ -65,6 +65,17 @@ func (s *Server) renderCache() *renderCache {
 	return v.(*renderCache)
 }
 
+// InvalidateCaches drops the settings cache and the rendered-content cache.
+// The database import writes rows behind their backs: it upserts the
+// settings table, and it rewrites content_html while preserving updated_at
+// (the rich_text → markdown conversion on restore), so the versioned
+// render-cache keys would keep serving the pre-import HTML. It is the
+// invalidate callback wired into the import job handlers.
+func (s *Server) InvalidateCaches() {
+	s.Settings().Invalidate()
+	s.Ext.Store(renderCacheExtKey, newRenderCache())
+}
+
 // fetch returns the cached rendered HTML for the row version, or stores and
 // returns rawHTML on a miss. content_html is sanitized and lazy-loaded at
 // write time (plan section 4.4), so rendering is only the template.HTML wrap.

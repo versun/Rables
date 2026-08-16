@@ -202,7 +202,7 @@ func (q *Queries) GetTwitterSync(ctx context.Context) (TwitterSync, error) {
 const listActiveImportJobPayloads = `-- name: ListActiveImportJobPayloads :many
 SELECT kind, payload FROM job_runs
 WHERE status IN ('queued', 'running')
-  AND kind IN ('import_db', 'import_rails')
+  AND kind IN ('import_db', 'import_markdown')
 `
 
 type ListActiveImportJobPayloadsRow struct {

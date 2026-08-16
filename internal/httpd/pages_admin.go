@@ -623,10 +623,11 @@ func (in pageFormInput) formData(isNew bool) adminPageFormData {
 // parsePageForm parses and validates the page form, mirroring page.rb:
 // title/slug presence, slug uniqueness (excludeID excepts the updated row,
 // 0 on create), redirect_url must be an http(s) URL when present, html mode
-// requires html_content, rich_text mode requires non-blank text content,
+// requires html_content, markdown mode requires non-blank markdown source,
 // schedule requires scheduled_at. The slug is cleaned of URL-unsafe and
 // control characters (CleanSlug) before validation, like article slugs.
-// Unknown enum values are validation errors
+// A legacy rich_text submission reads the old content param but stores as
+// html; other unknown enum values are validation errors
 // (Rails raises ArgumentError instead; the form never sends them).
 func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput, []string) {
 	var in pageFormInput
@@ -716,7 +717,8 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 	// HTML in content_html, like articles (0002). Raw html pages are stored
 	// verbatim — content_type keeps only the "skip sanitize" semantic (0001);
 	// the other types are sanitized once at write time (decision log
-	// 2026-08-03, spec 4.4).
+	// 2026-08-03, spec 4.4). A legacy rich_text submission takes that same
+	// sanitized path and then stores as html.
 	body := in.RawContent
 	if in.ContentType == string(domain.ContentTypeMarkdown) {
 		body = domain.RenderMarkdown(body)
@@ -724,6 +726,9 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 	}
 	if in.ContentType != string(domain.ContentTypeHTML) {
 		body = domain.AddLazyLoading(domain.SanitizeHTML(body))
+	}
+	if in.ContentType == string(domain.ContentTypeRichText) {
+		in.ContentType = string(domain.ContentTypeHTML)
 	}
 	in.StoredContent = sql.NullString{
 		String: body,

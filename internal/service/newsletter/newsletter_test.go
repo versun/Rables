@@ -592,7 +592,7 @@ func TestListmonkDefaultClientKeepAlive(t *testing.T) {
 }
 
 // TestRenderSourceReferenceUnsafeURL: a source_url persisted from an
-// attacker-controlled import (twittersync/railsmigrate) must not become an
+// attacker-controlled import (twittersync) must not become an
 // href unless it is an absolute http(s) URL with a host — html.EscapeString
 // does not defang schemes. Mirrors TestBuildSourceReferenceUnsafeURL of the
 // public page path.

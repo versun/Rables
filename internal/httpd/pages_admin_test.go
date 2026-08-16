@@ -60,19 +60,19 @@ func pagesSessionCookie(t *testing.T, s *Server) *http.Cookie {
 	return &http.Cookie{Name: sessionCookieName, Value: "pages-test-token"}
 }
 
-// validPageForm is a passing rich_text draft submission; tests override keys.
+// validPageForm is a passing markdown draft submission; tests override keys.
 func validPageForm() url.Values {
 	return url.Values{
-		"title":        {"About"},
-		"slug":         {"about"},
-		"content_type": {"rich_text"},
-		"content":      {"<p>Hello</p>"},
-		"html_content": {""},
-		"page_order":   {"0"},
-		"redirect_url": {""},
-		"status":       {"draft"},
-		"comment":      {"1"},
-		"scheduled_at": {""},
+		"title":            {"About"},
+		"slug":             {"about"},
+		"content_type":     {"markdown"},
+		"markdown_content": {"Hello **world**"},
+		"html_content":     {""},
+		"page_order":       {"0"},
+		"redirect_url":     {""},
+		"status":           {"draft"},
+		"comment":          {"1"},
+		"scheduled_at":     {""},
 	}
 }
 
@@ -137,14 +137,18 @@ func TestAdminPagesCRUD(t *testing.T) {
 		t.Fatalf("new form: status = %d", rec.Code)
 	}
 
-	// Create a rich_text page; content is sanitized and images lazy-loaded at
-	// write time (spec 4.4).
+	// Create a legacy rich_text page; content is sanitized and images
+	// lazy-loaded at write time (spec 4.4), and the row stores as html.
 	form := validPageForm()
+	form.Set("content_type", "rich_text")
 	form.Set("content", `<p>Hi</p><script>alert(1)</script><p><img src="https://x.test/a.png"></p>`)
 	form.Set("redirect_url", "https://example.com/elsewhere")
 	form.Set("page_order", "7")
 	page := createPageViaForm(t, h, s, session, form)
 	stored := page.ContentHtml.String
+	if page.ContentType != string(domain.ContentTypeHTML) {
+		t.Errorf("content_type = %q, want html (rich_text coerced)", page.ContentType)
+	}
 	if strings.Contains(stored, "script") {
 		t.Errorf("stored content still has script: %s", stored)
 	}
@@ -285,7 +289,10 @@ func TestAdminPagesValidation(t *testing.T) {
 			f.Set("content_type", "html")
 			f.Set("html_content", "  ")
 		}, "Html content can&#39;t be blank"},
-		{"rich text without content", func(f url.Values) { f.Set("content", "<p>  </p>") }, "Content can&#39;t be blank"},
+		{"rich text without content", func(f url.Values) {
+			f.Set("content_type", "rich_text")
+			f.Set("content", "<p>  </p>")
+		}, "Content can&#39;t be blank"},
 		{"markdown without content", func(f url.Values) {
 			f.Set("content_type", "markdown")
 			f.Set("markdown_content", "  ")
@@ -745,23 +752,24 @@ func TestAdminPagesMarkdown(t *testing.T) {
 		t.Errorf("edit form does not show the markdown source")
 	}
 
-	// Switching back to rich_text clears the stored markdown source.
+	// Switching back to html clears the stored markdown source.
 	form = validPageForm()
 	form.Set("slug", "about-md")
-	form.Set("content", "<p>Back to rich</p>")
+	form.Set("content_type", "html")
+	form.Set("html_content", "<p>Back to html</p>")
 	rec = doRequest(t, h, http.MethodPost, "/admin/pages/about-md", form, session)
 	if rec.Code != http.StatusFound {
-		t.Fatalf("switch to rich_text: status = %d", rec.Code)
+		t.Fatalf("switch to html: status = %d", rec.Code)
 	}
 	page, err := s.Q.GetAdminPageBySlug(ctx, sql.NullString{String: "about-md", Valid: true})
 	if err != nil {
 		t.Fatalf("page after switch: %v", err)
 	}
-	if page.ContentType != string(domain.ContentTypeRichText) || page.ContentMarkdown.Valid {
-		t.Errorf("after switch: content_type = %q content_markdown = %+v, want rich_text/NULL",
+	if page.ContentType != string(domain.ContentTypeHTML) || page.ContentMarkdown.Valid {
+		t.Errorf("after switch: content_type = %q content_markdown = %+v, want html/NULL",
 			page.ContentType, page.ContentMarkdown)
 	}
-	if !strings.Contains(page.ContentHtml.String, "Back to rich") {
+	if !strings.Contains(page.ContentHtml.String, "Back to html") {
 		t.Errorf("content_html after switch = %q", page.ContentHtml.String)
 	}
 }

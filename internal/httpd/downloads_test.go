@@ -178,10 +178,10 @@ func TestLargeUploadsClearRequestDeadlines(t *testing.T) {
 		checkDeadlines(t, rec)
 	})
 
-	t.Run("migrates rails import", func(t *testing.T) {
+	t.Run("migrates markdown import", func(t *testing.T) {
 		s, h := newMigratesImportTestServer(t)
 		session := redirectsSessionCookie(t, s)
-		rec := postFileDeadline(t, h, "/admin/migrates/import_rails", "db_file", "production.sqlite3", "application/octet-stream", []byte("sqlite"), session)
+		rec := postFileDeadline(t, h, "/admin/migrates/import_markdown", "markdown_files", "post.md", "text/markdown", []byte("---\ntitle: x\n---\n\nbody\n"), session)
 		if rec.Code != http.StatusFound {
 			t.Fatalf("status = %d, want 302", rec.Code)
 		}

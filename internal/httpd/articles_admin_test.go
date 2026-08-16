@@ -404,7 +404,8 @@ func TestAdminArticlesMarkdownFlow(t *testing.T) {
 		t.Errorf("blank markdown: status = %d", rec.Code)
 	}
 
-	// Switching back to rich_text clears the stored markdown source.
+	// Switching back from markdown (to a legacy rich_text submission, stored
+	// as html) clears the stored markdown source.
 	form = validArticleForm()
 	form.Set("title", "Markdown Post")
 	form.Set("content", "<p>Back to rich</p>")
@@ -413,8 +414,8 @@ func TestAdminArticlesMarkdownFlow(t *testing.T) {
 		t.Fatalf("switch to rich_text: status = %d", rec.Code)
 	}
 	article, _ = s.Q.GetAdminArticleBySlug(ctx, nullSlug("markdown-post"))
-	if article.ContentType != string(domain.ContentTypeRichText) {
-		t.Errorf("content_type after switch = %q", article.ContentType)
+	if article.ContentType != string(domain.ContentTypeHTML) {
+		t.Errorf("content_type after switch = %q, want html (rich_text coerced)", article.ContentType)
 	}
 	if article.ContentMarkdown.Valid {
 		t.Errorf("content_markdown after switch = %q, want NULL", article.ContentMarkdown.String)

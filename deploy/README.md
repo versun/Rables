@@ -68,52 +68,22 @@ curl -fsS localhost:8080/up        # -> ok
   10 s + job worker 15 s + cron scheduler 15 s), which exceeds the default
   10 s `docker stop` grace period and would end in a SIGKILL. Use
   `docker stop -t 60`, or pass `--stop-timeout 60` to `docker run`.
-- Migrating from the Rails app: point the volume at a copy of the old
-  `storage/` tree as `/data/files/` (key layout `xx/yy/<key>` matches) and run
-  `migrate-rails` against the old DB (see `cmd/migrate-rails`).
 
-## Migrating from the Rails app (with S3 storage)
+## Upgrading: rich_text → markdown content
 
-`deploy/migrate-from-rails.sh` runs the whole cutover: snapshot the Rails DB
-(`sqlite3 .backup`, no downtime), `aws s3 sync` the blob bucket, lay the blobs
-out under `DATA_DIR/files/xx/yy/<key>`, then run `migrate-rails
---verify-files`. It prints the required environment up front, shows the plan
-before touching anything, and ends with a summary report. Idempotent — re-run
-with `EXISTING_DB=keep` to catch up right before cutover.
+Installs that predate the markdown editor may still carry `rich_text`
+article/page rows. Restores through the admin import convert them
+automatically; for an in-place upgrade run `migrate-content` against the
+database (dry-run first, `-yes` applies and takes a timestamped
+`VACUUM INTO` backup next to the database):
 
 ```sh
-# S3_BUCKET comes from config/storage.yml; add S3_PREFIX if set
-RAILS_DB=/srv/rails/db/production.sqlite3 \
-S3_BUCKET=my-rables-uploads \
-DATA_DIR=/var/lib/rables \
-  ./deploy/migrate-from-rails.sh
+go build -o migrate-content ./cmd/migrate-content
+./migrate-content -db /var/lib/rables/rables.db        # dry-run report
+./migrate-content -db /var/lib/rables/rables.db -yes   # apply
 ```
 
-When `DATA_DIR/rables.db` already exists (e.g. the Go server was booted once
-and auto-created its settings row), the script asks — or set
-`EXISTING_DB=delete` to back it up and migrate into a fresh DB. Note the Go
-server creates its own `settings` row on first request, which blocks the Rails
-settings from being carried over; migrate into a fresh DB if you want them.
-
-### Docker hosts
-
-Run the script on the Docker **host**, not inside a container — the Go image
-is distroless (no shell, ships only `rables-server`), and the Rails container
-is not needed for the migration beyond its database file:
-
-- `RAILS_DB`: the Rails DB's host path — the bind-mount directory, or
-  `/var/lib/docker/volumes/<rails-volume>/_data/production.sqlite3` for a
-  named volume. The script snapshots it WAL-safe while Rails keeps running.
-- `DATA_DIR`: the Go volume's host path — bind-mount dir, or
-  `/var/lib/docker/volumes/rables-data/_data` for a named volume.
-- `CHOWN_USER=65532`: the container runs as uid/gid 65532 (nonroot), and
-  `rables.db` must be writable by it.
-- `EXISTING_DB=delete` requires the Go container stopped first
-  (`docker stop <container>`); the script refuses while it is running.
-- The host needs `sqlite3`, the `aws` CLI (with credentials — e.g. the
-  `AWS_*` vars from the Rails container's environment), and a `migrate-rails`
-  binary. No Go toolchain on the host? Cross-compile on any machine:
-  `GOOS=linux GOARCH=amd64 go build -o migrate-rails ./cmd/migrate-rails`.
+Restart the service afterwards to drop the in-memory render cache.
 
 ## Backups
 

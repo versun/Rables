@@ -32,7 +32,7 @@ import (
 //     name and atomically rename it to the final import_* name once fully
 //     written, so only a crash mid-write leaves one. A .part file is never
 //     referenced by a job, so no reference check is needed.
-//   - extract_* staging directories of the import_db/import_rails jobs
+//   - extract_* staging directories of the import_db job
 //     (transfer.importStagingDir): the job defers RemoveAll, but a
 //     SIGKILL/OOM leaves the directory (up to 10 GB of extracted bundle)
 //     behind with no other way to reclaim it.
@@ -45,7 +45,7 @@ import (
 //   - no queued/running import job payload references the path.
 //
 // An extract_* directory is removed only when its mtime predates this
-// process start AND no import_db/import_rails job is queued or running
+// process start AND no import_db job is queued or running
 // anywhere: during a rolling deploy the other process may be mid-extraction,
 // and its active job row is what keeps the staging directory safe.
 //
@@ -137,7 +137,7 @@ func CleanupOrphanImportFiles(ctx context.Context, q *query.Queries, dataDir str
 
 // activeImportPaths collects the data/imports paths still referenced by an
 // active import: queued/running import job payloads. It also reports whether
-// any import_db/import_rails job is queued or running: those are the jobs
+// any import_db job is queued or running: that is the job
 // extracting into extract_* staging dirs, so the sweep may only remove such
 // a dir when none of them is active.
 func activeImportPaths(ctx context.Context, q *query.Queries) (map[string]bool, bool, error) {
@@ -148,28 +148,24 @@ func activeImportPaths(ctx context.Context, q *query.Queries) (map[string]bool, 
 	if err != nil {
 		return nil, false, err
 	}
-	// The field names mirror transfer.ImportDBPayload /
-	// transfer.ImportRailsPayload; jobs cannot import transfer (transfer
-	// registers its handlers here), so the payloads are decoded structurally.
+	// The field name mirrors transfer.ImportDBPayload and
+	// transfer.ImportMarkdownPayload; jobs cannot import transfer (transfer
+	// registers its handlers here), so the payload is decoded structurally.
 	for _, row := range rows {
-		if row.Kind == KindImportDB || row.Kind == KindImportRails {
+		if row.Kind == KindImportDB {
 			importJobActive = true
 		}
 		if !row.Payload.Valid {
 			continue
 		}
 		var p struct {
-			Path        string `json:"path"`
-			DBPath      string `json:"db_path"`
-			StoragePath string `json:"storage_path"`
+			Path string `json:"path"`
 		}
 		if err := json.Unmarshal([]byte(row.Payload.String), &p); err != nil {
 			continue
 		}
-		for _, path := range []string{p.Path, p.DBPath, p.StoragePath} {
-			if path != "" {
-				protected[path] = true
-			}
+		if p.Path != "" {
+			protected[p.Path] = true
 		}
 	}
 	return protected, importJobActive, nil

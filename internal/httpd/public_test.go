@@ -746,6 +746,18 @@ func TestRenderCache(t *testing.T) {
 		t.Error("updated_at bump must invalidate the cached render")
 	}
 
+	// The import path's cache reset drops the cached render even without an
+	// updated_at bump (the rich_text conversion rewrites content_html while
+	// preserving updated_at).
+	if _, err := s.DB.Exec(`UPDATE articles SET content_html = '<p>third version</p>' WHERE slug = 'cached'`); err != nil {
+		t.Fatal(err)
+	}
+	s.InvalidateCaches()
+	body = get(t, h, "/cached").Body.String()
+	if !strings.Contains(body, "third version") {
+		t.Error("InvalidateCaches must drop the cached render")
+	}
+
 	t.Run("entries expire after the 7-day TTL", func(t *testing.T) {
 		now := time.Now()
 		cache := newRenderCache()
@@ -903,7 +915,7 @@ func TestPublicChromeSocialLinksOrder(t *testing.T) {
 }
 
 // TestBuildSourceReferenceUnsafeURL: a source_url persisted from an
-// attacker-controlled import (railsmigrate/transfer) must not become an href
+// attacker-controlled import (transfer) must not become an href
 // unless it is an absolute http(s) URL with a host.
 func TestBuildSourceReferenceUnsafeURL(t *testing.T) {
 	out := string(buildSourceReference("quoted", "javascript:alert(1)"))

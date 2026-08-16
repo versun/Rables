@@ -1196,7 +1196,8 @@ func (s *Server) parseArticleForm(r *http.Request, existing *query.Article) (art
 
 	// The form offers markdown and html only; an explicit rich_text value is a
 	// legacy submission (the Lexxy editor is gone) and still reads the old
-	// content param, while anything unknown falls back to markdown.
+	// content param — Save sanitizes it like before and the service stores it
+	// as html. Anything unknown falls back to markdown.
 	contentType := r.PostFormValue("content_type")
 	raw := r.PostFormValue("markdown_content")
 	switch contentType {

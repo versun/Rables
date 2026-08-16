@@ -160,6 +160,61 @@ func TestDBImporterRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDBImporterConvertsRichText: a bundle exported before the markdown
+// content migration carries rich_text article/page rows. The import converts
+// them to markdown storage (source in content_markdown, content_html
+// re-rendered), so no rich_text rows exist after a restore.
+func TestDBImporterConvertsRichText(t *testing.T) {
+	ctx := context.Background()
+	srcDB, srcDir := newTestDB(t)
+	if _, err := srcDB.Exec(`INSERT INTO articles (id, title, slug, content_html, content_type, status, created_at, updated_at) VALUES
+		(1, 'rich', 'rich', '<p>Hello <strong>bold</strong></p>', 'rich_text', 1, 1700000000, 1700000000),
+		(2, 'dead', 'dead', '<action-text-attachment url="/rails/active_storage/blobs/redirect/eyJ--x" content-type="image/png" filename="a.png"></action-text-attachment>', 'rich_text', 1, 1700000000, 1700000000)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srcDB.Exec(`INSERT INTO pages (id, title, slug, content_html, content_type, status, created_at, updated_at) VALUES
+		(1, 'prich', 'prich', '<p>Page body</p>', 'rich_text', 1, 1700000000, 1700000000)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srcDB.Exec(`INSERT INTO settings (id, title, created_at, updated_at) VALUES (1, 'Src', 1700000000, 1700000000)`); err != nil {
+		t.Fatal(err)
+	}
+	zipPath := exportZip(t, srcDB, srcDir)
+
+	dstDB, dstDir := newTestDB(t)
+	if _, err := (&DBImporter{DB: dstDB, DataDir: dstDir}).Import(ctx, zipPath); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	for table, want := range map[string]string{"articles": "<strong>bold</strong>", "pages": "Page body"} {
+		var ctype, md, body string
+		if err := dstDB.QueryRow(`SELECT content_type, content_markdown, content_html FROM `+table+` WHERE id = 1`).Scan(&ctype, &md, &body); err != nil {
+			t.Fatal(err)
+		}
+		if ctype != "markdown" {
+			t.Errorf("%s: content_type = %q, want markdown", table, ctype)
+		}
+		if md == "" || !strings.Contains(body, want) {
+			t.Errorf("%s: unexpected conversion: md=%q html=%q", table, md, body)
+		}
+	}
+	// A body that converts to nothing (only a dead attachment) stores NULL
+	// content_markdown, like every other write path.
+	var md sql.NullString
+	if err := dstDB.QueryRow(`SELECT content_markdown FROM articles WHERE id = 2`).Scan(&md); err != nil {
+		t.Fatal(err)
+	}
+	if md.Valid {
+		t.Errorf("dead-attachment article content_markdown = %q, want NULL", md.String)
+	}
+	var n int
+	if err := dstDB.QueryRow(`SELECT COUNT(*) FROM articles WHERE content_type = 'rich_text'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("rich_text articles left = %d, want 0", n)
+	}
+}
+
 // TestDBImporterDropsTwitterArchiveAttachments: a bundle exported before the
 // twitter archive feature's removal (migration 0006) carries attachments
 // rows with record_type TwitterArchiveTweet. Upserted as-is they would pin

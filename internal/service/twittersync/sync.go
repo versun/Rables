@@ -35,6 +35,7 @@ import (
 
 	"rables/internal/db/query"
 	"rables/internal/service/activity"
+	"rables/internal/service/contentmigrate"
 	"rables/internal/service/media"
 	"rables/internal/service/tags"
 	"rables/internal/ssrf"
@@ -632,6 +633,14 @@ func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tw
 
 	now := s.clock().Unix()
 
+	// Tweet content is stored as Markdown: buildTweetContent's HTML goes
+	// through the same ToMarkdown write path as migrated rich_text content
+	// (media embeds stay raw HTML inside the Markdown source).
+	contentMarkdown, contentHTML, err := contentmigrate.ToMarkdown(buildTweetContent(fullText, stored))
+	if err != nil {
+		return fmt.Errorf("convert tweet content to markdown: %w", err)
+	}
+
 	// The Article, its tag join row, its media attachments and the
 	// social_media_posts row land in one transaction: a mid-way failure must
 	// not leave a committed article without its social post row (since_id
@@ -647,8 +656,9 @@ func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tw
 		qtx := s.q.WithTx(tx)
 		article, err := qtx.CreateArticle(ctx, query.CreateArticleParams{
 			Slug:                        sql.NullString{String: slug, Valid: true},
-			ContentHtml:                 sql.NullString{String: buildTweetContent(fullText, stored), Valid: true},
-			ContentType:                 "rich_text",
+			ContentHtml:                 sql.NullString{String: contentHTML, Valid: true},
+			ContentType:                 "markdown",
+			ContentMarkdown:             sql.NullString{String: contentMarkdown, Valid: contentMarkdown != ""},
 			SourceAuthor:                sql.NullString{String: sourceAuthor, Valid: sourceAuthor != ""},
 			SourceUrl:                   sql.NullString{String: sourceURL, Valid: sourceURL != ""},
 			SourceContent:               sql.NullString{String: sourceContent, Valid: sourceContent != ""},

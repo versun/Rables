@@ -60,7 +60,7 @@ WHERE status IN ('done', 'failed') AND updated_at < ?;
 -- deleted.
 SELECT kind, payload FROM job_runs
 WHERE status IN ('queued', 'running')
-  AND kind IN ('import_db', 'import_rails');
+  AND kind IN ('import_db', 'import_markdown');
 
 -- name: DeleteOldActivityLogs :execrows
 DELETE FROM activity_logs WHERE created_at < ?;
