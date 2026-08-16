@@ -14,8 +14,8 @@ import (
 	"rables/migrations"
 )
 
-// wantTables lists every table from plan §3 (26 tables; the §7 DoD says 25,
-// §3 is authoritative).
+// wantTables lists every table from plan §3 minus the twitter archive tables
+// dropped by migration 0006.
 var wantTables = []string{
 	"users",
 	"sessions",
@@ -33,10 +33,6 @@ var wantTables = []string{
 	"crossposts",
 	"listmonks",
 	"twitter_syncs",
-	"twitter_archive_tweets",
-	"twitter_archive_connections",
-	"twitter_archive_likes",
-	"twitter_archive_imports",
 	"activity_logs",
 	"files",
 	"attachments",
@@ -103,7 +99,6 @@ func TestOpenCreatesIndexes(t *testing.T) {
 		"idx_comments_commentable",
 		"idx_comments_ext_article",
 		"idx_comments_ext_commentable",
-		"idx_tai_active_slot",
 		"idx_job_runs_due",
 		"idx_files_filename",
 	} {
@@ -111,7 +106,7 @@ func TestOpenCreatesIndexes(t *testing.T) {
 			t.Errorf("missing index %q", idx)
 		}
 	}
-	for _, idx := range []string{"idx_comments_ext_article", "idx_comments_ext_commentable", "idx_tai_active_slot"} {
+	for _, idx := range []string{"idx_comments_ext_article", "idx_comments_ext_commentable"} {
 		if sql := indexes[idx]; !strings.Contains(sql, "UNIQUE") || !strings.Contains(sql, "WHERE") {
 			t.Errorf("index %q should be a partial UNIQUE index, got: %s", idx, sql)
 		}
@@ -196,8 +191,8 @@ func TestMigrationsValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectMigrations: %v", err)
 	}
-	if got := len(migs); got != 5 {
-		t.Fatalf("collected %d migrations, want 5", got)
+	if got := len(migs); got != 6 {
+		t.Fatalf("collected %d migrations, want 6", got)
 	}
 
 	db := open(t)

@@ -466,6 +466,19 @@ func simpleFormat(text string) template.HTML {
 	return template.HTML(strings.Join(paras, "\n\n")) //nolint:gosec // escaped above
 }
 
+// safeArchiveURL mirrors safe_archive_url: only absolute http(s) URLs with a
+// host survive; anything else (javascript:, data:, relative) is dropped.
+func safeArchiveURL(value string) string {
+	u, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	if (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		return u.String()
+	}
+	return ""
+}
+
 // buildSourceReference renders articles/_source_reference.html.erb semantics:
 // present only when source_url is set (Article#has_source?). The header is a
 // fixed 引用 link (with a jump icon) pointing at the source URL.

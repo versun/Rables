@@ -400,10 +400,6 @@ func TestAdminMigratesImportServerFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(importsDir, "import_1700000000_a1b2c3d4.zip"), zipBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A twitter archive upload is likewise owned by an enqueued job.
-	if err := os.WriteFile(filepath.Join(importsDir, "twitter_archive_1700000000_a1b2c3d4.zip"), zipBytes, 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	t.Run("listed on the import tab", func(t *testing.T) {
 		rec := doRequest(t, h, http.MethodGet, "/admin/migrates?tab=import", nil, session)
@@ -417,9 +413,6 @@ func TestAdminMigratesImportServerFile(t *testing.T) {
 		}
 		if strings.Contains(rec.Body.String(), "import_1700000000_a1b2c3d4.zip") {
 			t.Error("import tab listed a pending upload owned by a job")
-		}
-		if strings.Contains(rec.Body.String(), "twitter_archive_1700000000_a1b2c3d4.zip") {
-			t.Error("import tab listed a twitter archive upload owned by a job")
 		}
 	})
 
@@ -554,16 +547,14 @@ func TestAdminMigratesImportServerFile(t *testing.T) {
 
 	t.Run("job-owned upload rejected", func(t *testing.T) {
 		clearJobs(t, s)
-		// The files exist but belong to enqueued jobs (a web upload and a
-		// twitter archive upload); importing either again would race the owner.
-		for _, name := range []string{"import_1700000000_a1b2c3d4.zip", "twitter_archive_1700000000_a1b2c3d4.zip"} {
-			rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {name}}, session)
-			if rec.Code != http.StatusFound {
-				t.Fatalf("%s: status = %d, want 302", name, rec.Code)
-			}
-			if kind, _, err := latestJob(t, s); err == nil {
-				t.Errorf("%s: no job expected, got kind %q", name, kind)
-			}
+		// The file exists but belongs to an enqueued job (a web upload);
+		// importing it again would race the owner.
+		rec := doRequest(t, h, http.MethodPost, "/admin/migrates/import_server", url.Values{"filename": {"import_1700000000_a1b2c3d4.zip"}}, session)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rec.Code)
+		}
+		if kind, _, err := latestJob(t, s); err == nil {
+			t.Errorf("no job expected, got kind %q", kind)
 		}
 	})
 }

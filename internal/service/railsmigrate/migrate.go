@@ -130,8 +130,7 @@ var oldTables = []string{
 	"users", "tags", "articles", "pages", "comments", "article_tags",
 	"subscribers", "subscriber_tags", "social_media_posts", "redirects",
 	"static_files", "settings", "newsletter_settings", "crossposts", "listmonks",
-	"twitter_syncs", "twitter_archive_tweets", "twitter_archive_connections",
-	"twitter_archive_likes", "twitter_archive_imports",
+	"twitter_syncs",
 	"action_text_rich_texts", "active_storage_blobs", "active_storage_attachments",
 	"active_storage_variant_records",
 }
@@ -198,10 +197,6 @@ func Run(ctx context.Context, oldDB, newDB *sql.DB, opts Options) (*Report, erro
 		{"crossposts", m.crossposts},
 		{"listmonks", m.listmonks},
 		{"twitter_syncs", m.twitterSyncs},
-		{"twitter_archive_tweets", m.twitterArchiveTweets},
-		{"twitter_archive_connections", m.twitterArchiveConnections},
-		{"twitter_archive_likes", m.twitterArchiveLikes},
-		{"twitter_archive_imports", m.twitterArchiveImports},
 	}
 	for _, s := range steps {
 		if err := s.fn(ctx); err != nil {
@@ -998,16 +993,23 @@ func (m *migrator) files(ctx context.Context) error {
 
 // attachments remaps ActionText::RichText rows onto their owner record
 // (Article/Page), folds ActiveStorage::VariantRecord rows into
-// files.variant_of and StaticFile rows into static_files.file_id (both
-// counted as transformed), and carries everything else over unchanged.
+// files.variant_of and StaticFile rows into static_files.file_id (all
+// counted as transformed), drops TwitterArchiveTweet rows (the archive
+// feature is gone; migration 0006 deletes these rows so the tweet media
+// blobs can be reclaimed as orphans), and carries everything else over
+// unchanged.
 func (m *migrator) attachments(ctx context.Context) error {
-	var variantCount, staticFileCount int64
+	var variantCount, staticFileCount, archiveTweetCount int64
 	if err := m.old.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM active_storage_attachments WHERE record_type = 'ActiveStorage::VariantRecord'").Scan(&variantCount); err != nil {
 		return err
 	}
 	if err := m.old.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM active_storage_attachments WHERE record_type = 'StaticFile'").Scan(&staticFileCount); err != nil {
+		return err
+	}
+	if err := m.old.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM active_storage_attachments WHERE record_type = 'TwitterArchiveTweet'").Scan(&archiveTweetCount); err != nil {
 		return err
 	}
 	if err := m.loadRichTexts(ctx); err != nil {
@@ -1020,7 +1022,7 @@ func (m *migrator) attachments(ctx context.Context) error {
 		WHERE a.record_type = 'ActionText::RichText' AND rt.id IS NULL`).Scan(&unmapped); err != nil {
 		return err
 	}
-	t, err := m.table(ctx, "attachments", "active_storage_attachments", variantCount+staticFileCount+unmapped)
+	t, err := m.table(ctx, "attachments", "active_storage_attachments", variantCount+staticFileCount+archiveTweetCount+unmapped)
 	if err != nil {
 		return err
 	}
@@ -1048,6 +1050,8 @@ func (m *migrator) attachments(ctx context.Context) error {
 		switch recordType.String {
 		case "ActiveStorage::VariantRecord", "StaticFile":
 			continue // folded into files.variant_of / static_files.file_id
+		case "TwitterArchiveTweet":
+			continue // archive feature removed: dropped like migration 0006 does
 		case "ActionText::RichText":
 			owner, ok := m.richTexts[recordID]
 			if !ok {
@@ -1360,226 +1364,4 @@ func (m *migrator) twitterSyncs(ctx context.Context) error {
 		 created_at, updated_at)
 		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullInt(enabled, 0), username, userID, sinceID, startDate, syncSchedule, lastSynced, lastError, c, u)
-}
-
-func (m *migrator) twitterArchiveTweets(ctx context.Context) error {
-	t, err := m.table(ctx, "twitter_archive_tweets", "twitter_archive_tweets", 0)
-	if err != nil {
-		return err
-	}
-	rows, err := m.old.QueryContext(ctx, `SELECT id, tweet_id, screen_name, full_text, entry_type,
-		CAST(tweeted_at AS TEXT), CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
-		FROM twitter_archive_tweets ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var tweetID, screenName, fullText, entryType, tweetedAt, created, updated sql.NullString
-		if err := rows.Scan(&id, &tweetID, &screenName, &fullText, &entryType, &tweetedAt, &created, &updated); err != nil {
-			return err
-		}
-		tw, err := mustUnix(tweetedAt)
-		if err != nil {
-			return fmt.Errorf("archive tweet %d tweeted_at: %w", id, err)
-		}
-		c, err := mustUnix(created)
-		if err != nil {
-			return err
-		}
-		u, err := mustUnix(updated)
-		if err != nil {
-			return err
-		}
-		if err := m.insert(ctx, t, `INSERT OR IGNORE INTO twitter_archive_tweets
-			(id, tweet_id, screen_name, full_text, entry_type, tweeted_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, tweetID.String, screenName.String, fullText.String, entryType.String, tw, c, u); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
-}
-
-func (m *migrator) twitterArchiveConnections(ctx context.Context) error {
-	t, err := m.table(ctx, "twitter_archive_connections", "twitter_archive_connections", 0)
-	if err != nil {
-		return err
-	}
-	rows, err := m.old.QueryContext(ctx, `SELECT id, account_id, screen_name, user_link, relationship_type,
-		CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
-		FROM twitter_archive_connections ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var accountID, screenName, userLink, relType, created, updated sql.NullString
-		if err := rows.Scan(&id, &accountID, &screenName, &userLink, &relType, &created, &updated); err != nil {
-			return err
-		}
-		c, err := mustUnix(created)
-		if err != nil {
-			return err
-		}
-		u, err := mustUnix(updated)
-		if err != nil {
-			return err
-		}
-		if err := m.insert(ctx, t, `INSERT OR IGNORE INTO twitter_archive_connections
-			(id, account_id, screen_name, user_link, relationship_type, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			id, accountID.String, screenName, userLink, relType.String, c, u); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
-}
-
-func (m *migrator) twitterArchiveLikes(ctx context.Context) error {
-	t, err := m.table(ctx, "twitter_archive_likes", "twitter_archive_likes", 0)
-	if err != nil {
-		return err
-	}
-	rows, err := m.old.QueryContext(ctx, `SELECT id, tweet_id, full_text, expanded_url,
-		CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
-		FROM twitter_archive_likes ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var tweetID, fullText, expandedURL, created, updated sql.NullString
-		if err := rows.Scan(&id, &tweetID, &fullText, &expandedURL, &created, &updated); err != nil {
-			return err
-		}
-		c, err := mustUnix(created)
-		if err != nil {
-			return err
-		}
-		u, err := mustUnix(updated)
-		if err != nil {
-			return err
-		}
-		if err := m.insert(ctx, t, `INSERT OR IGNORE INTO twitter_archive_likes
-			(id, tweet_id, full_text, expanded_url, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			id, tweetID.String, fullText, expandedURL, c, u); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
-}
-
-func (m *migrator) twitterArchiveImports(ctx context.Context) error {
-	t, err := m.table(ctx, "twitter_archive_imports", "twitter_archive_imports", 0)
-	if err != nil {
-		return err
-	}
-	rows, err := m.old.QueryContext(ctx, `SELECT id, status, progress, total_items_count,
-		tweets_count, followers_count, following_count, likes_count,
-		source_filename, source_path, status_message, error_message,
-		CAST(queued_at AS TEXT), CAST(started_at AS TEXT), CAST(finished_at AS TEXT), active_slot,
-		CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
-		FROM twitter_archive_imports ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var activeInserted []int64
-	for rows.Next() {
-		var id, progress, totalItems, tweets, followers, following, likes int64
-		var status, sourceFilename, sourcePath, statusMessage, errorMessage sql.NullString
-		var queuedAt, startedAt, finishedAt sql.NullString
-		var activeSlot sql.NullInt64
-		var created, updated sql.NullString
-		if err := rows.Scan(&id, &status, &progress, &totalItems, &tweets, &followers, &following, &likes,
-			&sourceFilename, &sourcePath, &statusMessage, &errorMessage,
-			&queuedAt, &startedAt, &finishedAt, &activeSlot, &created, &updated); err != nil {
-			return err
-		}
-		queued, err := mustUnix(queuedAt)
-		if err != nil {
-			return fmt.Errorf("archive import %d queued_at: %w", id, err)
-		}
-		started, err := unix(startedAt)
-		if err != nil {
-			return err
-		}
-		finished, err := unix(finishedAt)
-		if err != nil {
-			return err
-		}
-		c, err := mustUnix(created)
-		if err != nil {
-			return err
-		}
-		u, err := mustUnix(updated)
-		if err != nil {
-			return err
-		}
-		// A backup taken while an archive import was queued/running carries
-		// that row with active_slot=1. Inserted as-is it would block new
-		// archive uploads (HasActiveTwitterArchiveImport) until startup
-		// recovery fails it, and its slot would collide with a live active
-		// row in idx_tai_active_slot — which INSERT OR IGNORE would silently
-		// swallow, dropping the row and reporting a MISMATCH. The slot is
-		// neutralized here (terminal rows always have a NULL slot) and the
-		// row is marked failed after the loop, like transfer's
-		// normalizeTwitterArchiveImports.
-		active := status.String == "queued" || status.String == "running"
-		slot := activeSlot
-		if active {
-			slot = sql.NullInt64{}
-		}
-		res, err := m.tx.ExecContext(ctx, `INSERT OR IGNORE INTO twitter_archive_imports
-			(id, status, progress, total_items_count, tweets_count, followers_count, following_count,
-			 likes_count, source_filename, source_path, status_message, error_message,
-			 queued_at, started_at, finished_at, active_slot, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, status.String, progress, totalItems, tweets, followers, following, likes,
-			sourceFilename.String, sourcePath, statusMessage, errorMessage,
-			queued, started, finished, slot, c, u)
-		if err != nil {
-			return err
-		}
-		aff, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if aff == 0 {
-			t.Skipped++
-		} else {
-			t.Inserted += aff
-			if active {
-				activeInserted = append(activeInserted, id)
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	// Fail the just-inserted active rows (see above), scoped to the ids this
-	// run wrote so a pre-existing row is never touched.
-	if len(activeInserted) > 0 {
-		now := time.Now().Unix()
-		marks := make([]string, len(activeInserted))
-		args := make([]any, 0, len(activeInserted)+2)
-		args = append(args, now, now)
-		for i, id := range activeInserted {
-			marks[i] = "?"
-			args = append(args, id)
-		}
-		if _, err := m.tx.ExecContext(ctx, `UPDATE twitter_archive_imports
-			SET status = 'failed', status_message = 'Import failed',
-			    error_message = 'The backup was taken while this import was still active',
-			    finished_at = ?, updated_at = ?
-			WHERE id IN (`+strings.Join(marks, ", ")+`)`, args...); err != nil {
-			return err
-		}
-	}
-	return nil
 }

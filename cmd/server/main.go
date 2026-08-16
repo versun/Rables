@@ -18,7 +18,6 @@ import (
 	"rables/internal/service/crosspost"
 	newslettersvc "rables/internal/service/newsletter"
 	"rables/internal/service/transfer"
-	"rables/internal/service/twitterarchive"
 	"rables/internal/service/twittersync"
 	"rables/internal/templates"
 )
@@ -68,7 +67,6 @@ func run() int {
 
 	worker := jobs.NewWorker(database)
 	jobs.RegisterPublishHandlers(worker, database)
-	twitterarchive.RegisterImportHandler(worker, database, cfg.DataDir)
 	crosspost.RegisterCrosspostHandlers(worker, database, cfg.DataDir)
 	newslettersvc.RegisterSendHandlers(worker, database, cfg.DataDir)
 	transfer.RegisterExportHandlers(worker, database, cfg.DataDir)
@@ -86,9 +84,8 @@ func run() int {
 	server.Enqueuer().SetWake(worker.Wake)
 
 	// Startup recovery, before the worker starts polling: requeue jobs a dead
-	// process left running, and fail twitter archive imports stuck active so
-	// they stop blocking new imports. The 5 minute cutoff protects rows
-	// freshly claimed by another process during a rolling deploy.
+	// process left running. The 5 minute cutoff protects rows freshly claimed
+	// by another process during a rolling deploy.
 	staleBefore := time.Now().Add(-5 * time.Minute)
 	q := query.New(database)
 	if n, err := jobs.RecoverStaleJobs(ctx, q, staleBefore); err != nil {
@@ -96,14 +93,9 @@ func run() int {
 	} else if n > 0 {
 		logger.Info("requeued stale running jobs", "count", n)
 	}
-	if n, err := twitterarchive.RecoverStaleImports(ctx, q, staleBefore); err != nil {
-		logger.Error("recover stale twitter archive imports", "error", err)
-	} else if n > 0 {
-		logger.Info("failed stale twitter archive imports", "count", n)
-	}
 	// Last, sweep orphaned import leftovers (uploads whose process crashed
 	// between writing the file and enqueueing its job, mid-write .part temp
-	// files, extract_* staging dirs): rows/jobs the recovery steps just
+	// files, extract_* staging dirs): rows/jobs the recovery step just
 	// terminalized stop protecting their files in the same sweep.
 	if n, err := jobs.CleanupOrphanImportFiles(ctx, q, cfg.DataDir, startedAt); err != nil {
 		logger.Error("clean up orphan import uploads", "error", err)

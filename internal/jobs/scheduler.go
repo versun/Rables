@@ -135,13 +135,14 @@ func (s *Scheduler) deleteExpiredSessions(ctx context.Context) error {
 // directory — that cannot be inspected or removed is reported but does not
 // stop the sweep, and the activity-log prune always runs.
 //
-// An import upload still referenced by a queued/running import job (or an
-// active twitter_archive_imports row) is kept no matter its age, the same
-// protection CleanupOrphanImportFiles applies at startup: a queued job
-// re-reads its source file when a worker picks it up (the twitter archive
-// import even opens the zip twice), so unlinking it would fail the import.
-// When the reference lookup itself fails, no import_* / twitter_archive_*
-// file is removed in that run.
+// An import upload still referenced by a queued/running import job is kept
+// no matter its age, the same protection CleanupOrphanImportFiles applies at
+// startup: a queued job re-reads its source file when a worker picks it up,
+// so unlinking it would fail the import. When the reference lookup itself
+// fails, no import_* / twitter_archive_* file is removed in that run.
+// twitter_archive_* uploads are leftovers of the removed archive feature
+// (migration 0006): nothing references them anymore, so the 7-day rule
+// always reclaims them.
 func (s *Scheduler) cleanOldExports(ctx context.Context) error {
 	cutoff := s.now().UTC().Add(-7 * 24 * time.Hour)
 	exportsDir := filepath.Join(s.dataDir, "exports")
@@ -180,8 +181,8 @@ func (s *Scheduler) cleanOldExports(ctx context.Context) error {
 					continue
 				}
 				// In imports/ only job-owned uploads (import_* web uploads,
-				// twitter_archive_* archive uploads) are reaped; any other
-				// zip is a server-side file the admin copied there for
+				// twitter_archive_* archive-upload leftovers) are reaped; any
+				// other zip is a server-side file the admin copied there for
 				// import_server, which nothing else ever cleans up.
 				if dir == importsDir &&
 					!strings.HasPrefix(name, "import_") && !strings.HasPrefix(name, "twitter_archive_") {

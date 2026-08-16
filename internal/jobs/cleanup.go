@@ -18,16 +18,20 @@ import (
 // CleanupOrphanImportFiles removes leftovers in <dataDir>/imports whose
 // owning process died before finishing its work. Three kinds exist:
 //   - import_* / twitter_archive_* uploads: the import handlers
-//     (saveImportUpload / storeTwitterArchiveUpload in httpd) stream the
-//     upload to disk first and hand ownership to the job row (or the
-//     twitter_archive_imports row) second, so a crash in between leaves a
-//     file nothing points at. The admin file list hides those prefixes, so
-//     without this sweep there is no way to reclaim them (a single upload
-//     can be 4 GB).
+//     (saveImportUpload in httpd; the removed archive feature had its own)
+//     stream the upload to disk first and hand ownership to the job row
+//     second, so a crash in between leaves a file nothing points at. The
+//     admin file list hides the import_ prefix, so without this sweep
+//     there is no way to reclaim those (a single upload can be 4 GB).
+//     twitter_archive_* names are pure leftovers — the feature and its
+//     tables are gone (migration 0006), so nothing creates or references
+//     that prefix anymore. The one exception: an admin reusing the prefix
+//     for a manual server-side import, whose enqueued job then keeps the
+//     file via the reference check below, as any import file deserves.
 //   - *.part temp files: the handlers write the upload under a .part temp
-//     name and atomically rename it to the final import_* / twitter_archive_*
-//     name once fully written, so only a crash mid-write leaves one. A .part
-//     file is never referenced by a job, so no reference check is needed.
+//     name and atomically rename it to the final import_* name once fully
+//     written, so only a crash mid-write leaves one. A .part file is never
+//     referenced by a job, so no reference check is needed.
 //   - extract_* staging directories of the import_db/import_rails jobs
 //     (transfer.importStagingDir): the job defers RemoveAll, but a
 //     SIGKILL/OOM leaves the directory (up to 10 GB of extracted bundle)
@@ -38,20 +42,17 @@ import (
 //     .queued does not matter: the prefix alone marks an owned upload);
 //   - its mtime predates this process start, so an upload another process is
 //     still streaming during a rolling deploy is not swept from under it;
-//   - no queued/running import job payload references the path, and no
-//     queued/running twitter_archive_imports row holds it as source_path. A
-//     failed import row whose job is still queued also keeps its file: the
-//     job re-marks the row running and re-reads the file (self-heal).
+//   - no queued/running import job payload references the path.
 //
 // An extract_* directory is removed only when its mtime predates this
 // process start AND no import_db/import_rails job is queued or running
 // anywhere: during a rolling deploy the other process may be mid-extraction,
 // and its active job row is what keeps the staging directory safe.
 //
-// It runs at startup after RecoverStaleJobs/RecoverStaleImports, so rows and
-// jobs recovery just terminalized stop protecting their files in the same
-// sweep. It returns the number of entries removed; one that cannot be
-// removed is reported but does not stop the sweep.
+// It runs at startup after RecoverStaleJobs, so jobs recovery just
+// terminalized stop protecting their files in the same sweep. It returns the
+// number of entries removed; one that cannot be removed is reported but does
+// not stop the sweep.
 func CleanupOrphanImportFiles(ctx context.Context, q *query.Queries, dataDir string, processStarted time.Time) (int, error) {
 	dir := filepath.Join(dataDir, "imports")
 	entries, err := os.ReadDir(dir)
@@ -135,12 +136,10 @@ func CleanupOrphanImportFiles(ctx context.Context, q *query.Queries, dataDir str
 }
 
 // activeImportPaths collects the data/imports paths still referenced by an
-// active import: queued/running import job payloads, the source_path of
-// queued/running twitter_archive_imports rows, and the source_path of failed
-// rows whose twitter_archive_import job is still queued/running. It also
-// reports whether any import_db/import_rails job is queued or running: those
-// are the jobs extracting into extract_* staging dirs, so the sweep may only
-// remove such a dir when none of them is active.
+// active import: queued/running import job payloads. It also reports whether
+// any import_db/import_rails job is queued or running: those are the jobs
+// extracting into extract_* staging dirs, so the sweep may only remove such
+// a dir when none of them is active.
 func activeImportPaths(ctx context.Context, q *query.Queries) (map[string]bool, bool, error) {
 	protected := map[string]bool{}
 	importJobActive := false
@@ -150,9 +149,8 @@ func activeImportPaths(ctx context.Context, q *query.Queries) (map[string]bool, 
 		return nil, false, err
 	}
 	// The field names mirror transfer.ImportDBPayload /
-	// transfer.ImportRailsPayload and the twitter_archive_import handler's
-	// payload; jobs cannot import transfer (transfer registers its handlers
-	// here), so the payloads are decoded structurally.
+	// transfer.ImportRailsPayload; jobs cannot import transfer (transfer
+	// registers its handlers here), so the payloads are decoded structurally.
 	for _, row := range rows {
 		if row.Kind == KindImportDB || row.Kind == KindImportRails {
 			importJobActive = true
@@ -164,7 +162,6 @@ func activeImportPaths(ctx context.Context, q *query.Queries) (map[string]bool, 
 			Path        string `json:"path"`
 			DBPath      string `json:"db_path"`
 			StoragePath string `json:"storage_path"`
-			ImportID    int64  `json:"import_id"`
 		}
 		if err := json.Unmarshal([]byte(row.Payload.String), &p); err != nil {
 			continue
@@ -174,36 +171,17 @@ func activeImportPaths(ctx context.Context, q *query.Queries) (map[string]bool, 
 				protected[path] = true
 			}
 		}
-		if row.Kind == KindTwitterArchiveImport && p.ImportID != 0 {
-			imp, err := q.GetTwitterArchiveImport(ctx, p.ImportID)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return nil, false, err
-			}
-			if err == nil && imp.SourcePath.Valid {
-				protected[imp.SourcePath.String] = true
-			}
-		}
-	}
-
-	sourcePaths, err := q.ListActiveTwitterArchiveImportPaths(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	for _, sp := range sourcePaths {
-		if sp.Valid {
-			protected[sp.String] = true
-		}
 	}
 	return protected, importJobActive, nil
 }
 
 // ReapOrphanFiles deletes files rows and disk blobs a dead process left
-// behind. The media write paths (twitterarchive storeMediaEntry, twittersync
-// downloadMedia, media.Service.Store) insert the files row and write the
-// blob before — and outside — whatever transaction later references them, so
-// a SIGKILL/OOM in between leaves a row nothing points at. The failure paths
-// (discardNewMedia, discardStoredMedia, media.Purge) never run on that
-// crash, and nothing else reclaims the row.
+// behind. The media write paths (twittersync downloadMedia,
+// media.Service.Store) insert the files row and write the blob before — and
+// outside — whatever transaction later references them, so a SIGKILL/OOM in
+// between leaves a row nothing points at. The failure paths
+// (discardStoredMedia, media.Purge) never run on that crash, and nothing
+// else reclaims the row.
 //
 // A files row is reaped only when all of the following hold:
 //   - its created_at predates this process start by 24 hours. The machine-
@@ -223,7 +201,7 @@ func activeImportPaths(ctx context.Context, q *query.Queries) (map[string]bool, 
 //     only and never get an attachment row, and content merged by a
 //     database import can carry a variant URL.
 //
-// It runs at startup after RecoverStaleJobs/RecoverStaleImports, like
+// It runs at startup after RecoverStaleJobs, like
 // CleanupOrphanImportFiles. It returns the number of files rows deleted; a
 // row or blob that cannot be removed is reported but does not stop the
 // sweep.
@@ -272,8 +250,7 @@ func ReapOrphanFiles(ctx context.Context, q *query.Queries, dataDir string, proc
 			continue
 		}
 		// Each variant gets the same content check as the family root, like
-		// articles.Destroy and twitterarchive clearStoredArchive: a hit
-		// keeps the whole family.
+		// articles.Destroy: a hit keeps the whole family.
 		keep := false
 		for _, v := range variants {
 			vRefs, err := q.CountFileKeyContentReferences(ctx, sql.NullString{String: v.Key, Valid: true})

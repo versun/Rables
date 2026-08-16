@@ -48,29 +48,6 @@ func makeImportStagingDir(t *testing.T, dataDir, name string, mtime time.Time) s
 	return dir
 }
 
-// insertTwitterArchiveImport inserts a twitter_archive_imports row with the
-// given status and source_path and returns its id.
-func insertTwitterArchiveImport(t *testing.T, d *sql.DB, status, sourcePath string) int64 {
-	t.Helper()
-	var sp sql.NullString
-	if sourcePath != "" {
-		sp = sql.NullString{String: sourcePath, Valid: true}
-	}
-	res, err := d.Exec(
-		`INSERT INTO twitter_archive_imports (status, source_filename, source_path, queued_at, created_at, updated_at)
-		 VALUES (?, 'archive.zip', ?, 0, 0, 0)`,
-		status, sp,
-	)
-	if err != nil {
-		t.Fatalf("insert twitter archive import: %v", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("import id: %v", err)
-	}
-	return id
-}
-
 func TestCleanupOrphanImportFiles(t *testing.T) {
 	startedAt := time.Now()
 	old := startedAt.Add(-time.Hour)
@@ -81,7 +58,7 @@ func TestCleanupOrphanImportFiles(t *testing.T) {
 		orphanDB := writeImportFile(t, dataDir, "import_100_deadbeef.zip", old)
 		orphanTwitter := writeImportFile(t, dataDir, "twitter_archive_100_deadbeef.zip", old)
 		orphanQueued := writeImportFile(t, dataDir, "import_101_deadbeef.zip.queued", old)
-		// Files without the owned-upload prefixes are never candidates.
+		// Files without an owned-upload prefix are never candidates.
 		serverFile := writeImportFile(t, dataDir, "backup.zip", old)
 		serverQueued := writeImportFile(t, dataDir, "other.zip.queued", old)
 
@@ -159,35 +136,29 @@ func TestCleanupOrphanImportFiles(t *testing.T) {
 		}
 	})
 
-	t.Run("twitter archive sources of active imports are kept", func(t *testing.T) {
+	t.Run("leftover archive uploads are not protected by legacy job rows", func(t *testing.T) {
 		d := openDB(t)
 		dataDir := t.TempDir()
 		ctx := t.Context()
 
-		// Queued import row without a job (crash between the INSERT and the
-		// enqueue): the row still owns the file until startup recovery fails it.
-		queued := writeImportFile(t, dataDir, "twitter_archive_400_eeeeeeee.zip", old)
-		insertTwitterArchiveImport(t, d, "queued", queued)
-
-		// Failed row whose job is still queued: the job re-marks the row
-		// running and re-reads the file (self-heal), so the file stays.
-		selfHeal := writeImportFile(t, dataDir, "twitter_archive_401_ffffffff.zip", old)
-		importID := insertTwitterArchiveImport(t, d, "failed", selfHeal)
-		if _, err := NewEnqueuer(d).Enqueue(ctx, KindTwitterArchiveImport, map[string]any{"import_id": importID}, time.Now()); err != nil {
-			t.Fatalf("enqueue twitter_archive_import: %v", err)
+		// Migration 0006 deletes queued twitter_archive_import rows before
+		// this sweep ever runs, so such a row should never exist — but a
+		// rolling-deploy race or a hot-swapped pre-0006 backup could still
+		// produce one. Its payload referenced the source zip only through
+		// the dropped twitter_archive_imports table, so with nothing left
+		// that can read the file, it is unreclaimable garbage unless the
+		// sweep takes it despite the legacy job row.
+		leftover := writeImportFile(t, dataDir, "twitter_archive_700_aaaabbbb.zip", old)
+		if _, err := NewEnqueuer(d).Enqueue(ctx, "twitter_archive_import", map[string]any{"import_id": 1}, time.Now()); err != nil {
+			t.Fatalf("enqueue legacy archive import: %v", err)
 		}
 
 		n, err := CleanupOrphanImportFiles(ctx, query.New(d), dataDir, startedAt)
 		if err != nil {
 			t.Fatalf("CleanupOrphanImportFiles: %v", err)
 		}
-		if n != 0 {
-			t.Errorf("removed = %d, want 0", n)
-		}
-		for _, path := range []string{queued, selfHeal} {
-			if !fileExists(path) {
-				t.Errorf("%s was removed, want kept", filepath.Base(path))
-			}
+		if n != 1 || fileExists(leftover) {
+			t.Errorf("removed = %d, exists = %v; want 1, false", n, fileExists(leftover))
 		}
 	})
 
@@ -368,9 +339,8 @@ func TestReapOrphanFiles(t *testing.T) {
 	t.Run("orphan rows and blobs are removed", func(t *testing.T) {
 		d := openDB(t)
 		dataDir := t.TempDir()
-		// Crash leftovers of twitterarchive storeMediaEntry / twittersync
-		// downloadMedia: the files row and blob committed, the referencing
-		// attachment never did.
+		// Crash leftovers of twittersync downloadMedia: the files row and
+		// blob committed, the referencing attachment never did.
 		orphanA := insertReapFile(t, d, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", old, 0)
 		orphanB := insertReapFile(t, d, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", old, 0)
 		blobA := writeReapBlob(t, dataDir, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

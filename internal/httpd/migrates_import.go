@@ -214,12 +214,11 @@ func (s *Server) adminMigratesImportServerFile(w http.ResponseWriter, r *http.Re
 		return
 	}
 	// Only plain file names directly inside data/imports are importable.
-	// import_* (saveImportUpload) and twitter_archive_* (twitter archive
-	// uploads) files are already owned by an enqueued job; importing one
-	// again would race the owner. name.queued files were already enqueued
-	// here and are likewise off-limits.
+	// import_* files (saveImportUpload) are already owned by an enqueued
+	// job; importing one again would race the owner. name.queued files were
+	// already enqueued here and are likewise off-limits.
 	if name != filepath.Base(name) ||
-		strings.HasPrefix(name, "import_") || strings.HasPrefix(name, "twitter_archive_") ||
+		strings.HasPrefix(name, "import_") ||
 		strings.HasSuffix(name, ".queued") {
 		fail(migratesImportNameAlert)
 		return

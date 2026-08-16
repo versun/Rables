@@ -2,8 +2,7 @@
 // directory lies about the uncompressed sizes of its entries: payloads stay
 // tiny while the declared sizes are forged, for testing zip-bomb guards.
 // It is a package (not an unexported test helper) because the guards under
-// test live in two packages: transfer (database bundles) and twitterarchive
-// (media archives).
+// test live in their own package: transfer (database bundles).
 package zipfake
 
 import (

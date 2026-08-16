@@ -1023,10 +1023,9 @@ func (s *Syncer) downloadMedia(ctx context.Context, rawURL, contentType, tweetID
 // discardStoredMedia reclaims the files rows and disk blobs stored for a
 // tweet whose archive transaction failed. It must run after the transaction
 // has rolled back (its attachment rows would otherwise still reference the
-// files and block the deletes). Best effort: failures are logged, not fatal,
-// mirroring the twitter archive importer's discardNewMedia. The failure may
-// come with an already-canceled ctx, so the cleanup runs on a context that
-// cannot be canceled.
+// files and block the deletes). Best effort: failures are logged, not fatal.
+// The failure may come with an already-canceled ctx, so the cleanup runs on
+// a context that cannot be canceled.
 func (s *Syncer) discardStoredMedia(ctx context.Context, stored []storedMedia) {
 	ctx = context.WithoutCancel(ctx)
 	mediaSvc := media.New(s.db, s.dataDir)

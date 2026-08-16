@@ -8,7 +8,7 @@ The Rails app in the parent directory remains the behavioral source of truth. Th
 
 ## Status
 
-All implementation tasks (T01–T29) are complete: core blog, admin, comments, subscriptions, newsletters, crossposting, Twitter sync/archive, import/export, Rails migration tool, vanilla JS frontend, and deployment artifacts. Remaining: T30 (production cutover), which must be executed against the live environment.
+All implementation tasks (T01–T29) are complete: core blog, admin, comments, subscriptions, newsletters, crossposting, Twitter sync, import/export, Rails migration tool, vanilla JS frontend, and deployment artifacts. Remaining: T30 (production cutover), which must be executed against the live environment.
 
 ## Features
 
@@ -16,7 +16,7 @@ All implementation tasks (T01–T29) are complete: core blog, admin, comments, s
 - **Comments**: threaded comments with math captcha + per-IP rate limiting, admin moderation/reply, social comment import (Mastodon/Bluesky/X)
 - **Newsletter**: native SMTP or listmonk, tag-scoped subscriptions, double opt-in confirm/unsubscribe
 - **Crossposting**: Mastodon, Bluesky (hand-written XRPC + facets), X (OAuth1.0a, chunked media upload, quote-tweet/GIF rules); Xiaohongshu is log-only
-- **Twitter**: account sync (tweets archived as articles) + official archive ZIP import (streaming, memory-flat) with a public timeline page
+- **Twitter**: account sync (tweets archived as articles)
 - **Transfer**: full-site export (SQLite database + media files in one ZIP), import from a Rables export or bare database (upsert by id — a restore mechanism for fresh installs or the originating site, not a merge of two populated sites; users, including your own account, are overwritten), import from a Rails rables SQLite database (+ optional storage ZIP), RSS import (SSRF-hardened)
 - **Ops**: background jobs (`job_runs` table + in-process worker), cron scheduler, activity log, regex redirects, static file hosting
 
@@ -93,7 +93,7 @@ internal/domain/    pure functions (state machine, slug, excerpt, sanitize, cont
 internal/httpd/     chi router, middleware, all HTTP handlers
 internal/jobs/      job_runs worker + cron scheduler
 internal/service/   articles, comments, crosspost, media, newsletter, transfer,
-                    twitterarchive, twittersync, railsmigrate, ...
+                    twittersync, railsmigrate, ...
 internal/templates/ embedded html/template pages (+ `_`-prefixed partials)
 internal/assets/    embedded app.js (vanilla, no build) / app.css / Lexxy editor
 migrations/         full DDL (goose)

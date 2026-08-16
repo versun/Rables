@@ -1090,7 +1090,7 @@ body.admin-body {
     display: inline;
 }
 
-/* Stats line (twitter archive counts etc.) */
+/* Stats line (twitter sync status etc.) */
 .stat-line {
     font-size: 14px;
     margin-bottom: 8px;

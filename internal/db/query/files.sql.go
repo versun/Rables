@@ -10,6 +10,17 @@ import (
 	"database/sql"
 )
 
+const countAttachmentsForFile = `-- name: CountAttachmentsForFile :one
+SELECT COUNT(*) FROM attachments WHERE file_id = ?
+`
+
+func (q *Queries) CountAttachmentsForFile(ctx context.Context, fileID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAttachmentsForFile, fileID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countFileKeyContentReferences = `-- name: CountFileKeyContentReferences :one
 SELECT
   (SELECT COUNT(*) FROM articles
@@ -118,6 +129,15 @@ func (q *Queries) DeleteAttachmentsForRecord(ctx context.Context, arg DeleteAtta
 	return err
 }
 
+const deleteFile = `-- name: DeleteFile :exec
+DELETE FROM files WHERE id = ?
+`
+
+func (q *Queries) DeleteFile(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteFile, id)
+	return err
+}
+
 const getFileByID = `-- name: GetFileByID :one
 SELECT id, "key", filename, content_type, byte_size, checksum, variant_of, created_at FROM files WHERE id = ?
 `
@@ -174,8 +194,8 @@ type ListAttachmentFilesForRecordRow struct {
 	Key string
 }
 
-// Media cleanup for record destroy (mirrors the ListTwitterArchiveTweetMediaFiles
-// pair in twitter_archive.sql): the files behind one record's attachments.
+// Media cleanup for record destroy: the files behind one record's
+// attachments.
 func (q *Queries) ListAttachmentFilesForRecord(ctx context.Context, arg ListAttachmentFilesForRecordParams) ([]ListAttachmentFilesForRecordRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAttachmentFilesForRecord, arg.RecordType, arg.RecordID)
 	if err != nil {

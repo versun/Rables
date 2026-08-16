@@ -202,7 +202,7 @@ func (q *Queries) GetTwitterSync(ctx context.Context) (TwitterSync, error) {
 const listActiveImportJobPayloads = `-- name: ListActiveImportJobPayloads :many
 SELECT kind, payload FROM job_runs
 WHERE status IN ('queued', 'running')
-  AND kind IN ('import_db', 'import_rails', 'twitter_archive_import')
+  AND kind IN ('import_db', 'import_rails')
 `
 
 type ListActiveImportJobPayloadsRow struct {
@@ -212,8 +212,7 @@ type ListActiveImportJobPayloadsRow struct {
 
 // Startup orphan-upload cleanup (jobs.CleanupOrphanImportFiles): payloads of
 // still-active import jobs reference the data/imports files that must not be
-// deleted. The twitter_archive_import payload carries only an import_id; its
-// path lives in twitter_archive_imports.source_path.
+// deleted.
 func (q *Queries) ListActiveImportJobPayloads(ctx context.Context) ([]ListActiveImportJobPayloadsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listActiveImportJobPayloads)
 	if err != nil {
@@ -227,38 +226,6 @@ func (q *Queries) ListActiveImportJobPayloads(ctx context.Context) ([]ListActive
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listActiveTwitterArchiveImportPaths = `-- name: ListActiveTwitterArchiveImportPaths :many
-SELECT source_path FROM twitter_archive_imports
-WHERE source_path IS NOT NULL AND status IN ('queued', 'running')
-`
-
-// Source uploads of still-active imports; the startup orphan cleanup keeps
-// them even while their job row is missing (crash between the INSERT and the
-// enqueue). Startup recovery fails such rows once they fall behind the
-// cutoff, which unprotects the file on the next sweep.
-func (q *Queries) ListActiveTwitterArchiveImportPaths(ctx context.Context) ([]sql.NullString, error) {
-	rows, err := q.db.QueryContext(ctx, listActiveTwitterArchiveImportPaths)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []sql.NullString
-	for rows.Next() {
-		var source_path sql.NullString
-		if err := rows.Scan(&source_path); err != nil {
-			return nil, err
-		}
-		items = append(items, source_path)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

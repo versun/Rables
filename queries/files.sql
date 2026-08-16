@@ -19,8 +19,8 @@ VALUES (?, ?, ?, ?, ?);
 -- name: ListAttachmentsForFile :many
 SELECT * FROM attachments WHERE file_id = ? ORDER BY id;
 
--- Media cleanup for record destroy (mirrors the ListTwitterArchiveTweetMediaFiles
--- pair in twitter_archive.sql): the files behind one record's attachments.
+-- Media cleanup for record destroy: the files behind one record's
+-- attachments.
 -- name: ListAttachmentFilesForRecord :many
 SELECT f.id, f.key FROM attachments a
 JOIN files f ON f.id = a.file_id
@@ -28,6 +28,12 @@ WHERE a.record_type = ? AND a.record_id = ?;
 
 -- name: DeleteAttachmentsForRecord :exec
 DELETE FROM attachments WHERE record_type = ? AND record_id = ?;
+
+-- name: CountAttachmentsForFile :one
+SELECT COUNT(*) FROM attachments WHERE file_id = ?;
+
+-- name: DeleteFile :exec
+DELETE FROM files WHERE id = ?;
 
 -- Startup orphan sweep (jobs.ReapOrphanFiles): family roots (variants are
 -- reachable only through their original, so they share the original's fate)

@@ -261,57 +261,6 @@ type Tag struct {
 	UpdatedAt int64
 }
 
-type TwitterArchiveConnection struct {
-	ID               int64
-	AccountID        string
-	ScreenName       sql.NullString
-	UserLink         sql.NullString
-	RelationshipType string
-	CreatedAt        int64
-	UpdatedAt        int64
-}
-
-type TwitterArchiveImport struct {
-	ID              int64
-	Status          string
-	Progress        int64
-	TotalItemsCount int64
-	TweetsCount     int64
-	FollowersCount  int64
-	FollowingCount  int64
-	LikesCount      int64
-	SourceFilename  string
-	SourcePath      sql.NullString
-	StatusMessage   sql.NullString
-	ErrorMessage    sql.NullString
-	QueuedAt        int64
-	StartedAt       sql.NullInt64
-	FinishedAt      sql.NullInt64
-	ActiveSlot      sql.NullInt64
-	CreatedAt       int64
-	UpdatedAt       int64
-}
-
-type TwitterArchiveLike struct {
-	ID          int64
-	TweetID     string
-	FullText    sql.NullString
-	ExpandedUrl sql.NullString
-	CreatedAt   int64
-	UpdatedAt   int64
-}
-
-type TwitterArchiveTweet struct {
-	ID         int64
-	TweetID    string
-	ScreenName string
-	FullText   string
-	EntryType  string
-	TweetedAt  int64
-	CreatedAt  int64
-	UpdatedAt  int64
-}
-
 type TwitterSync struct {
 	ID           int64
 	Enabled      int64

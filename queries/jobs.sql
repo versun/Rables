@@ -57,19 +57,10 @@ WHERE status IN ('done', 'failed') AND updated_at < ?;
 -- name: ListActiveImportJobPayloads :many
 -- Startup orphan-upload cleanup (jobs.CleanupOrphanImportFiles): payloads of
 -- still-active import jobs reference the data/imports files that must not be
--- deleted. The twitter_archive_import payload carries only an import_id; its
--- path lives in twitter_archive_imports.source_path.
+-- deleted.
 SELECT kind, payload FROM job_runs
 WHERE status IN ('queued', 'running')
-  AND kind IN ('import_db', 'import_rails', 'twitter_archive_import');
-
--- name: ListActiveTwitterArchiveImportPaths :many
--- Source uploads of still-active imports; the startup orphan cleanup keeps
--- them even while their job row is missing (crash between the INSERT and the
--- enqueue). Startup recovery fails such rows once they fall behind the
--- cutoff, which unprotects the file on the next sweep.
-SELECT source_path FROM twitter_archive_imports
-WHERE source_path IS NOT NULL AND status IN ('queued', 'running');
+  AND kind IN ('import_db', 'import_rails');
 
 -- name: DeleteOldActivityLogs :execrows
 DELETE FROM activity_logs WHERE created_at < ?;

@@ -71,7 +71,6 @@ func NewRouter(s *Server) http.Handler {
 	RegisterActivitiesRoutes(r, s)
 	RegisterNewsletterRoutes(r, s)
 	RegisterSubscriberAdminRoutes(r, s)
-	RegisterTwitterArchiveAdminRoutes(r, s)
 	RegisterCrosspostRoutes(r, s)
 	RegisterMigratesAdminRoutes(r, s)
 	RegisterMigratesImportRoutes(r, s)
@@ -82,7 +81,6 @@ func NewRouter(s *Server) http.Handler {
 	RegisterSourcesRoutes(r, s)
 	RegisterPublicRoutes(r, s)
 	RegisterSubscriptionRoutes(r, s)
-	RegisterTwitterArchivePublicRoutes(r, s)
 	// Article catch-all /{slug} must be registered last.
 	RegisterArticleRoutes(r, s)
 

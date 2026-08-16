@@ -178,9 +178,8 @@ func TestCleanOldExports(t *testing.T) {
 
 // A stale import_* upload still referenced by a queued import job must
 // survive the cron sweep: the startup cleanup (CleanupOrphanImportFiles)
-// protects it, and the worker re-reads the file when the job is picked up
-// (the twitter archive import even opens the zip twice), so unlinking it
-// would fail the import with "no such file".
+// protects it, and the worker re-reads the file when the job is picked up,
+// so unlinking it would fail the import with "no such file".
 func TestCleanOldExportsKeepsReferencedImportUpload(t *testing.T) {
 	d := openDB(t)
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)

@@ -540,8 +540,7 @@ func Destroy(ctx context.Context, db *sql.DB, id int64, dataDir string) error {
 	}
 
 	// Disk blobs are removed only after the transaction commits; failures are
-	// logged, never fatal (the purge_later semantics of the twitter archive
-	// importer). Only well-formed keys ever reach a disk path.
+	// logged, never fatal. Only well-formed keys ever reach a disk path.
 	for _, ref := range doomed {
 		if !media.ValidKey(ref.key) {
 			slog.Warn("articles: skip blob removal, unsafe key", "key", ref.key)

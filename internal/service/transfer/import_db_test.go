@@ -160,6 +160,43 @@ func TestDBImporterRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDBImporterDropsTwitterArchiveAttachments: a bundle exported before the
+// twitter archive feature's removal (migration 0006) carries attachments
+// rows with record_type TwitterArchiveTweet. Upserted as-is they would pin
+// the tweet-media files rows and blobs against jobs.ReapOrphanFiles forever
+// (any attachment row counts as a reference), resurrecting exactly the dead
+// data 0006 deleted — so the import drops them the same way 0006 does.
+func TestDBImporterDropsTwitterArchiveAttachments(t *testing.T) {
+	ctx := context.Background()
+	srcDB, srcDir := newTestDB(t)
+	seedSource(t, srcDB, srcDir) // files row id 1 plus its blob
+	if _, err := srcDB.Exec(`INSERT INTO attachments (id, file_id, record_type, record_id, name, created_at) VALUES
+		(1, 1, 'TwitterArchiveTweet', 1, 'media', 1700000000),
+		(2, 1, 'Article', 1, 'cover', 1700000000)`); err != nil {
+		t.Fatal(err)
+	}
+	zipPath := exportZip(t, srcDB, srcDir)
+
+	dstDB, dstDir := newTestDB(t)
+	if _, err := (&DBImporter{DB: dstDB, DataDir: dstDir}).Import(ctx, zipPath); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	var archived int
+	if err := dstDB.QueryRow(`SELECT COUNT(*) FROM attachments WHERE record_type = 'TwitterArchiveTweet'`).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
+	if archived != 0 {
+		t.Errorf("TwitterArchiveTweet attachments = %d, want 0 (they pin media blobs against ReapOrphanFiles)", archived)
+	}
+	var kept int
+	if err := dstDB.QueryRow(`SELECT COUNT(*) FROM attachments WHERE record_type = 'Article'`).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 1 {
+		t.Errorf("Article attachments = %d, want 1 (ordinary attachments still import)", kept)
+	}
+}
+
 func TestDBImporterBareDatabase(t *testing.T) {
 	ctx := context.Background()
 	srcDB, srcDir := newTestDB(t)
@@ -185,174 +222,6 @@ func TestDBImporterBareDatabase(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("articles = %d, want 2", n)
-	}
-}
-
-// TestDBImporterNormalizesActiveTwitterArchiveImport: a backup taken while an
-// archive import was queued/running carries that row with active_slot=1.
-// Imported as-is it would block every new archive upload
-// (HasActiveTwitterArchiveImport) until the next restart's recovery; the
-// import must fail the row and release the slot while keeping the history
-// rows' display value.
-func TestDBImporterNormalizesActiveTwitterArchiveImport(t *testing.T) {
-	ctx := context.Background()
-	srcDB, srcDir := newTestDB(t)
-	stmts := []string{
-		`INSERT INTO twitter_archive_imports (id, status, progress, source_filename, source_path, status_message, queued_at, active_slot, created_at, updated_at)
-		 VALUES (1, 'running', 40, 'twitter.zip', '/old/server/imports/twitter.zip', 'Importing likes', 1700000000, 1, 1700000000, 1700000001)`,
-		`INSERT INTO twitter_archive_imports (id, status, progress, source_filename, status_message, queued_at, created_at, updated_at)
-		 VALUES (2, 'completed', 100, 'older.zip', 'Import completed', 1690000000, 1690000000, 1690000100)`,
-	}
-	for _, s := range stmts {
-		if _, err := srcDB.Exec(s); err != nil {
-			t.Fatalf("seed: %v\n%s", err, s)
-		}
-	}
-	zipPath := exportZip(t, srcDB, srcDir)
-
-	dstDB, dstDir := newTestDB(t)
-	if _, err := (&DBImporter{DB: dstDB, DataDir: dstDir}).Import(ctx, zipPath); err != nil {
-		t.Fatalf("import: %v", err)
-	}
-
-	// No active import left, so a new archive upload is accepted (the
-	// active_slot unique index admits the re-claim too).
-	var active int
-	if err := dstDB.QueryRow(`SELECT COUNT(*) FROM twitter_archive_imports WHERE status IN ('queued', 'running')`).Scan(&active); err != nil {
-		t.Fatal(err)
-	}
-	if active != 0 {
-		t.Errorf("active imports = %d, want 0", active)
-	}
-	if _, err := dstDB.Exec(`INSERT INTO twitter_archive_imports (status, source_filename, queued_at, active_slot, created_at, updated_at)
-		VALUES ('queued', 'new.zip', 1700001000, 1, 1700001000, 1700001000)`); err != nil {
-		t.Fatalf("new archive import blocked: %v", err)
-	}
-
-	// The imported active row was failed and its slot released (the upsert
-	// neutralizes active_slot on the SELECT side), but it keeps the history
-	// display value (filename, progress) and its source_path: on a
-	// same-server restore the file is still on disk and a still-queued job
-	// self-heals from it.
-	var status, filename, statusMessage string
-	var progress int
-	var activeSlot, finishedAt sql.NullInt64
-	var sourcePath, errorMessage sql.NullString
-	if err := dstDB.QueryRow(`SELECT status, progress, source_filename, status_message, active_slot, source_path, error_message, finished_at
-		FROM twitter_archive_imports WHERE id = 1`).Scan(&status, &progress, &filename, &statusMessage, &activeSlot, &sourcePath, &errorMessage, &finishedAt); err != nil {
-		t.Fatal(err)
-	}
-	if status != "failed" {
-		t.Errorf("import 1 status = %q, want failed", status)
-	}
-	if activeSlot.Valid {
-		t.Errorf("import 1 active_slot = %v, want NULL (slot released)", activeSlot.Int64)
-	}
-	if !sourcePath.Valid || sourcePath.String != "/old/server/imports/twitter.zip" {
-		t.Errorf("import 1 source_path = %v, want kept (a same-server restore self-heals from it)", sourcePath)
-	}
-	if !errorMessage.Valid || errorMessage.String == "" {
-		t.Errorf("import 1 error_message = %v, want an explanation", errorMessage)
-	}
-	if !finishedAt.Valid {
-		t.Error("import 1 finished_at = NULL, want set")
-	}
-	if filename != "twitter.zip" || progress != 40 || statusMessage != "Import failed" {
-		t.Errorf("import 1 keeps history: filename=%q progress=%d status_message=%q", filename, progress, statusMessage)
-	}
-
-	// The completed history row is untouched.
-	var status2, filename2 string
-	if err := dstDB.QueryRow(`SELECT status, source_filename FROM twitter_archive_imports WHERE id = 2`).Scan(&status2, &filename2); err != nil {
-		t.Fatal(err)
-	}
-	if status2 != "completed" || filename2 != "older.zip" {
-		t.Errorf("import 2 = %q %q, want completed older.zip", status2, filename2)
-	}
-}
-
-// TestDBImporterKeepsLiveQueuedTwitterArchiveImport: an archive import queued
-// in the live database is not part of the bundle, so the normalization must
-// leave it alone — its row and its still-queued job belong to this server,
-// not to the backup.
-func TestDBImporterKeepsLiveQueuedTwitterArchiveImport(t *testing.T) {
-	ctx := context.Background()
-	srcDB, srcDir := newTestDB(t)
-	// The bundle carries only an inactive history row.
-	if _, err := srcDB.Exec(`INSERT INTO twitter_archive_imports (id, status, progress, source_filename, status_message, queued_at, created_at, updated_at)
-		VALUES (2, 'completed', 100, 'older.zip', 'Import completed', 1690000000, 1690000000, 1690000100)`); err != nil {
-		t.Fatal(err)
-	}
-	zipPath := exportZip(t, srcDB, srcDir)
-
-	dstDB, dstDir := newTestDB(t)
-	if _, err := dstDB.Exec(`INSERT INTO twitter_archive_imports (id, status, source_filename, source_path, queued_at, active_slot, created_at, updated_at)
-		VALUES (9, 'queued', 'live.zip', '/data/imports/live.zip', 1700000002, 1, 1700000002, 1700000002)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := (&DBImporter{DB: dstDB, DataDir: dstDir}).Import(ctx, zipPath); err != nil {
-		t.Fatalf("import: %v", err)
-	}
-
-	var status, sourcePath string
-	var activeSlot int
-	if err := dstDB.QueryRow(`SELECT status, source_path, active_slot FROM twitter_archive_imports WHERE id = 9`).Scan(&status, &sourcePath, &activeSlot); err != nil {
-		t.Fatal(err)
-	}
-	if status != "queued" || sourcePath != "/data/imports/live.zip" || activeSlot != 1 {
-		t.Errorf("live import 9 = %q %q slot %d, want queued with its path and slot", status, sourcePath, activeSlot)
-	}
-	var imported int
-	if err := dstDB.QueryRow(`SELECT COUNT(*) FROM twitter_archive_imports WHERE id = 2`).Scan(&imported); err != nil {
-		t.Fatal(err)
-	}
-	if imported != 1 {
-		t.Errorf("bundle history row imported = %d, want 1", imported)
-	}
-}
-
-// TestDBImporterNeutralizesImportedActiveSlot: the live database has its own
-// queued archive import holding active_slot=1 and the bundle carries a
-// different active row with the same slot value. The upsert must neutralize
-// the imported slot on the SELECT side — otherwise idx_tai_active_slot
-// aborts the upsert before the normalization can run and rolls the whole
-// import back. The live row is not part of the bundle and stays queued.
-func TestDBImporterNeutralizesImportedActiveSlot(t *testing.T) {
-	ctx := context.Background()
-	srcDB, srcDir := newTestDB(t)
-	if _, err := srcDB.Exec(`INSERT INTO twitter_archive_imports (id, status, progress, source_filename, source_path, queued_at, active_slot, created_at, updated_at)
-		VALUES (1, 'running', 40, 'twitter.zip', '/old/server/imports/twitter.zip', 1700000000, 1, 1700000000, 1700000001)`); err != nil {
-		t.Fatal(err)
-	}
-	zipPath := exportZip(t, srcDB, srcDir)
-
-	dstDB, dstDir := newTestDB(t)
-	if _, err := dstDB.Exec(`INSERT INTO twitter_archive_imports (id, status, source_filename, source_path, queued_at, active_slot, created_at, updated_at)
-		VALUES (9, 'queued', 'live.zip', '/data/imports/twitter_archive_live.zip', 1700000002, 1, 1700000002, 1700000002)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := (&DBImporter{DB: dstDB, DataDir: dstDir}).Import(ctx, zipPath); err != nil {
-		t.Fatalf("import: %v", err)
-	}
-
-	// The imported row was failed with its slot released.
-	var status string
-	var activeSlot sql.NullInt64
-	if err := dstDB.QueryRow(`SELECT status, active_slot FROM twitter_archive_imports WHERE id = 1`).Scan(&status, &activeSlot); err != nil {
-		t.Fatal(err)
-	}
-	if status != "failed" || activeSlot.Valid {
-		t.Errorf("imported import 1 = %q slot %v, want failed with a NULL slot", status, activeSlot)
-	}
-
-	// The live active row kept its status, path and slot.
-	var liveStatus, livePath string
-	var liveSlot int
-	if err := dstDB.QueryRow(`SELECT status, source_path, active_slot FROM twitter_archive_imports WHERE id = 9`).Scan(&liveStatus, &livePath, &liveSlot); err != nil {
-		t.Fatal(err)
-	}
-	if liveStatus != "queued" || livePath != "/data/imports/twitter_archive_live.zip" || liveSlot != 1 {
-		t.Errorf("live import 9 = %q %q slot %d, want queued with its path and slot", liveStatus, livePath, liveSlot)
 	}
 }
 

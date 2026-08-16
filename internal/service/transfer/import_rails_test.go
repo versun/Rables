@@ -137,16 +137,6 @@ CREATE TABLE listmonks (id INTEGER PRIMARY KEY, url TEXT, username TEXT, api_key
   template_id INTEGER, enabled INTEGER, created_at TEXT, updated_at TEXT);
 CREATE TABLE twitter_syncs (id INTEGER PRIMARY KEY, enabled INTEGER, username TEXT, user_id TEXT, since_id TEXT,
   start_date TEXT, sync_schedule TEXT, last_synced_at TEXT, last_error TEXT, created_at TEXT, updated_at TEXT);
-CREATE TABLE twitter_archive_tweets (id INTEGER PRIMARY KEY, tweet_id TEXT, screen_name TEXT, full_text TEXT,
-  entry_type TEXT, tweeted_at TEXT, created_at TEXT, updated_at TEXT);
-CREATE TABLE twitter_archive_connections (id INTEGER PRIMARY KEY, account_id TEXT, screen_name TEXT,
-  user_link TEXT, relationship_type TEXT, created_at TEXT, updated_at TEXT);
-CREATE TABLE twitter_archive_likes (id INTEGER PRIMARY KEY, tweet_id TEXT, full_text TEXT, expanded_url TEXT,
-  created_at TEXT, updated_at TEXT);
-CREATE TABLE twitter_archive_imports (id INTEGER PRIMARY KEY, status TEXT, progress INTEGER, total_items_count INTEGER,
-  tweets_count INTEGER, followers_count INTEGER, following_count INTEGER, likes_count INTEGER,
-  source_filename TEXT, source_path TEXT, status_message TEXT, error_message TEXT,
-  queued_at TEXT, started_at TEXT, finished_at TEXT, active_slot INTEGER, created_at TEXT, updated_at TEXT);
 `
 
 // buildRailsFixture creates a minimal Rails rables database with one user,

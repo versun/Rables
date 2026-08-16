@@ -101,9 +101,9 @@ func migrateTab(value string) string {
 
 // listImportFiles returns the importable files in data/imports (Rables
 // backups copied onto the server, e.g. via scp), newest first. Staging
-// directories created by running imports, import_* / twitter_archive_*
-// uploads owned by an already-enqueued job, and *.queued files already
-// enqueued as server imports are skipped.
+// directories created by running imports, import_* uploads owned by an
+// already-enqueued job, and *.queued files already enqueued as server
+// imports are skipped.
 func (s *Server) listImportFiles() []migratesExportFile {
 	entries, err := os.ReadDir(filepath.Join(s.Cfg.DataDir, "imports"))
 	if err != nil {
@@ -114,13 +114,12 @@ func (s *Server) listImportFiles() []migratesExportFile {
 		if entry.IsDir() {
 			continue
 		}
-		// import_* files are web uploads and twitter_archive_* files are
-		// twitter archive uploads, both already owned by an enqueued job;
+		// import_* files are web uploads already owned by an enqueued job;
 		// listing them would invite a duplicate import. The .part temp names
-		// of in-progress uploads carry the same prefixes, so they are skipped
+		// of in-progress uploads carry the same prefix, so they are skipped
 		// here as well. name.queued files are server imports already enqueued
 		// (adminMigratesImportServerFile).
-		if strings.HasPrefix(entry.Name(), "import_") || strings.HasPrefix(entry.Name(), "twitter_archive_") {
+		if strings.HasPrefix(entry.Name(), "import_") {
 			continue
 		}
 		if strings.HasSuffix(entry.Name(), ".queued") {

@@ -23,7 +23,6 @@ const (
 	KindImportDB                 = "import_db"
 	KindImportRails              = "import_rails"
 	KindImportRSS                = "import_rss"
-	KindTwitterArchiveImport     = "twitter_archive_import"
 	KindCommentReplyNotification = "comment_reply_notification"
 	KindNewsletterConfirmation   = "newsletter_confirmation"
 	KindPasswordReset            = "password_reset"

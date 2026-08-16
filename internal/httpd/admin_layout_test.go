@@ -39,7 +39,6 @@ func TestAdminLayoutSidebar(t *testing.T) {
 		`href="/admin/crossposts"`,
 		`href="/admin/newsletter"`,
 		`href="/admin/jobs"`,
-		`href="/admin/twitter_archives"`,
 		`href="/admin/twitter_sync"`,
 		`href="/users/current/edit"`,
 		`href="/admin/activities"`,

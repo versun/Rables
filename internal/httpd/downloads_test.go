@@ -188,16 +188,6 @@ func TestLargeUploadsClearRequestDeadlines(t *testing.T) {
 		checkDeadlines(t, rec)
 	})
 
-	t.Run("twitter archive import", func(t *testing.T) {
-		s, h := newTwitterArchiveTestServer(t, "")
-		session := redirectsSessionCookie(t, s)
-		rec := postFileDeadline(t, h, "/admin/twitter_archives", "twitter_archive[file]", "archive.zip", "application/zip", zipBytes, session)
-		if rec.Code != http.StatusFound {
-			t.Fatalf("status = %d, want 302", rec.Code)
-		}
-		checkDeadlines(t, rec)
-	})
-
 	t.Run("media upload", func(t *testing.T) {
 		s, h, _ := newMediaServer(t)
 		session := mediaSession(t, s)

@@ -29,9 +29,9 @@ WHERE id = ? AND file_id = sqlc.arg(expected_file_id);
 -- name: DeleteStaticFile :one
 DELETE FROM static_files WHERE id = ? RETURNING file_id;
 
--- Record cleanup (articles.Destroy, twitter archive replace) deletes files
--- rows left without references; static_files.file_id references files(id)
--- under foreign_keys enforcement, so these references count too.
+-- Record cleanup (articles.Destroy) deletes files rows left without
+-- references; static_files.file_id references files(id) under foreign_keys
+-- enforcement, so these references count too.
 -- name: CountStaticFilesForFile :one
 SELECT COUNT(*) FROM static_files WHERE file_id = ?;
 

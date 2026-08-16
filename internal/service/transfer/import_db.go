@@ -63,8 +63,7 @@ var dbImportTables = []string{
 	"subscribers", "subscriber_tags", "social_media_posts", "redirects",
 	"files", "attachments", "static_files",
 	"settings", "newsletter_settings", "crossposts", "listmonks",
-	"twitter_syncs", "twitter_archive_tweets", "twitter_archive_connections",
-	"twitter_archive_likes", "twitter_archive_imports",
+	"twitter_syncs",
 }
 
 // Import runs the import and returns the tallies. A failure before or during
@@ -237,11 +236,14 @@ func (z *DBImporter) copyTables(ctx context.Context, srcPath string, res *DBImpo
 			return fmt.Errorf("import db: %s: %w", table, err)
 		}
 		res.Rows[table] = n
-		if table == "twitter_archive_imports" && n > 0 {
-			if err := normalizeTwitterArchiveImports(ctx, tx); err != nil {
-				return fmt.Errorf("import db: %s: %w", table, err)
-			}
-		}
+	}
+	// A pre-removal backup carries TwitterArchiveTweet attachment rows;
+	// upserted as-is they would pin the tweet-media files rows and blobs
+	// against jobs.ReapOrphanFiles forever (any attachment row counts as a
+	// reference). Migration 0006 already deletes these rows from the live
+	// database; drop the resurrected copies the same way.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM main.attachments WHERE record_type = 'TwitterArchiveTweet'`); err != nil {
+		return fmt.Errorf("import db: attachments: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("import db: commit: %w", err)
@@ -348,26 +350,9 @@ func upsertTable(ctx context.Context, tx *sql.Tx, table string) (int64, error) {
 
 	quoted := make([]string, len(cols))
 	selected := make([]string, len(cols))
-	hasStatus := false
 	for i, c := range cols {
 		quoted[i] = quoteIdent(c)
 		selected[i] = quoted[i]
-		if c == "status" {
-			hasStatus = true
-		}
-	}
-	// A backup taken while an archive import was queued/running carries that
-	// row with active_slot=1; upserted as-is it would collide with the live
-	// active row in idx_tai_active_slot before normalizeTwitterArchiveImports
-	// gets to run, rolling the whole import back. Terminal rows always have a
-	// NULL slot (Complete/FailTwitterArchiveImport release it), so only active
-	// rows are neutralized here; the normalization then fails them.
-	if table == "twitter_archive_imports" && hasStatus {
-		for i, c := range cols {
-			if c == "active_slot" {
-				selected[i] = `CASE WHEN "status" IN ('queued', 'running') THEN NULL ELSE "active_slot" END`
-			}
-		}
 	}
 	stmt := fmt.Sprintf(`INSERT INTO main.%s (%s) SELECT %s FROM src.%s WHERE true`,
 		quoteIdent(table), strings.Join(quoted, ", "), strings.Join(selected, ", "), quoteIdent(table))
@@ -392,30 +377,6 @@ func upsertTable(ctx context.Context, tx *sql.Tx, table string) (int64, error) {
 		return 0, err
 	}
 	return n, nil
-}
-
-// normalizeTwitterArchiveImports strips the runtime status from imported
-// twitter_archive_imports rows. A backup taken while an archive import was
-// queued/running carries that row; imported as-is it would block new archive
-// uploads (HasActiveTwitterArchiveImport) until startup recovery fails it.
-// The imported active rows are marked failed instead, while the rest of the
-// row is kept for the history list. active_slot was already neutralized on
-// the upsert's SELECT side (upsertTable), and source_path is kept on
-// purpose: on a same-server restore the source zip is still on disk and the
-// still-queued job (job_runs is never imported, so the live one survives)
-// self-heals by re-running it, while a row restored elsewhere points at a
-// missing file and the import handler treats it as terminal
-// (sourceFilePresent). Rows absent from the source are left alone, so an
-// archive import queued in this database survives a bundle restore.
-func normalizeTwitterArchiveImports(ctx context.Context, tx *sql.Tx) error {
-	now := time.Now().Unix()
-	_, err := tx.ExecContext(ctx, `UPDATE main.twitter_archive_imports
-		SET status = 'failed', status_message = 'Import failed',
-		    error_message = 'The server was restored from a backup taken while this import was still active',
-		    finished_at = ?, updated_at = ?
-		WHERE status IN ('queued', 'running')
-		  AND id IN (SELECT id FROM src.twitter_archive_imports)`, now, now)
-	return err
 }
 
 // queryer is satisfied by *sql.Conn (checkSourceSchema) and *sql.Tx
@@ -637,12 +598,13 @@ func cleanupImportUpload(dataDir, path string) {
 // keepImportUploadForRetry renames a kept import_* upload to the same name
 // without the prefix, turning it into an ordinary server-side file: listed
 // by the import tab, accepted by import_server, and ignored by
-// jobs.CleanupOrphanImportFiles, which only reaps import_* /
-// twitter_archive_* names owned by an enqueued job. Under the import_* name
-// the kept file would be hidden from every retry channel and swept at the
-// next startup. When the rename fails the original path is returned:
-// keeping the file under its old name still beats dropping the only retry
-// copy (the sweep simply reaps it next startup, as before).
+// jobs.CleanupOrphanImportFiles, which reaps only prefixed leftovers
+// (import_* and the removed archive feature's twitter_archive_*) that no
+// queued/running import job references. Under the import_* name the kept
+// file would be hidden from every retry channel and swept at the next
+// startup. When the rename fails the original path is returned: keeping the
+// file under its old name still beats dropping the only retry copy (the
+// sweep simply reaps it next startup, as before).
 func keepImportUploadForRetry(path string) string {
 	base := filepath.Base(path)
 	if !strings.HasPrefix(base, "import_") {

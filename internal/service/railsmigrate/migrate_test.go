@@ -59,16 +59,6 @@ CREATE TABLE listmonks (id INTEGER PRIMARY KEY, url TEXT, username TEXT, api_key
   template_id INTEGER, enabled INTEGER, created_at TEXT, updated_at TEXT);
 CREATE TABLE twitter_syncs (id INTEGER PRIMARY KEY, enabled INTEGER, username TEXT, user_id TEXT, since_id TEXT,
   start_date date, sync_schedule TEXT, last_synced_at TEXT, last_error TEXT, created_at TEXT, updated_at TEXT);
-CREATE TABLE twitter_archive_tweets (id INTEGER PRIMARY KEY, tweet_id TEXT, screen_name TEXT, full_text TEXT,
-  entry_type TEXT, tweeted_at TEXT, created_at TEXT, updated_at TEXT);
-CREATE TABLE twitter_archive_connections (id INTEGER PRIMARY KEY, account_id TEXT, screen_name TEXT,
-  user_link TEXT, relationship_type TEXT, created_at TEXT, updated_at TEXT);
-CREATE TABLE twitter_archive_likes (id INTEGER PRIMARY KEY, tweet_id TEXT, full_text TEXT, expanded_url TEXT,
-  created_at TEXT, updated_at TEXT);
-CREATE TABLE twitter_archive_imports (id INTEGER PRIMARY KEY, status TEXT, progress INTEGER, total_items_count INTEGER,
-  tweets_count INTEGER, followers_count INTEGER, following_count INTEGER, likes_count INTEGER,
-  source_filename TEXT, source_path TEXT, status_message TEXT, error_message TEXT,
-  queued_at TEXT, started_at TEXT, finished_at TEXT, active_slot INTEGER, created_at TEXT, updated_at TEXT);
 `
 
 const (
@@ -149,13 +139,6 @@ func buildFixture(t *testing.T) string {
 		`INSERT INTO listmonks VALUES (1, 'https://lm.test', 'api', 'key', 3, 2, 1, '` + ts1 + `', '` + ts1 + `')`,
 		`INSERT INTO twitter_syncs VALUES (1, 1, 'me', '123', '456', '2025-01-01', 'hourly', '` + ts2 + `',
 		  NULL, '` + ts1 + `', '` + ts1 + `')`,
-		`INSERT INTO twitter_archive_tweets VALUES (1, 't100', 'me', 'hello', 'tweet', '` + ts1 + `', '` + ts1 + `', '` + ts1 + `')`,
-		`INSERT INTO twitter_archive_connections VALUES
-		  (1, 'acc1', 'foo', NULL, 'follower', '` + ts1 + `', '` + ts1 + `'),
-		  (2, 'acc2', 'bar', 'https://x.test/bar', 'following', '` + ts1 + `', '` + ts1 + `')`,
-		`INSERT INTO twitter_archive_likes VALUES (1, 't200', 'liked', 'https://x.test/t200', '` + ts1 + `', '` + ts1 + `')`,
-		`INSERT INTO twitter_archive_imports VALUES (1, 'completed', 100, 5, 1, 1, 1, 1, 'archive.zip', '/tmp/a.zip',
-		  'done', NULL, '` + ts1 + `', '` + ts1 + `', '` + ts2 + `', NULL, '` + ts1 + `', '` + ts1 + `')`,
 	}
 	for _, s := range stmts {
 		if _, err := old.Exec(s); err != nil {
@@ -209,11 +192,9 @@ func TestRunMigration(t *testing.T) {
 		"pages": {2, 2, 0, 0}, "comments": {3, 3, 0, 0}, "article_tags": {2, 2, 0, 0},
 		"subscribers": {2, 2, 0, 0}, "subscriber_tags": {1, 1, 0, 0},
 		"social_media_posts": {1, 1, 0, 0}, "redirects": {1, 1, 0, 0},
-		"files": {3, 3, 0, 0}, "attachments": {5, 3, 0, 2}, "static_files": {1, 1, 0, 0},
+		"files": {3, 3, 0, 0}, "attachments": {5, 2, 0, 3}, "static_files": {1, 1, 0, 0},
 		"settings": {1, 1, 0, 0}, "newsletter_settings": {1, 1, 0, 0},
 		"crossposts": {1, 1, 0, 0}, "listmonks": {1, 1, 0, 0}, "twitter_syncs": {1, 1, 0, 0},
-		"twitter_archive_tweets": {1, 1, 0, 0}, "twitter_archive_connections": {2, 2, 0, 0},
-		"twitter_archive_likes": {1, 1, 0, 0}, "twitter_archive_imports": {1, 1, 0, 0},
 	}
 	for name, w := range want {
 		tr := tableReport(rep, name)
@@ -296,7 +277,9 @@ func TestRunMigration(t *testing.T) {
 		t.Errorf("file 3 variant_of = %v", nn)
 	}
 
-	// attachments: richtext rows remapped to Article/1, twitter archive carried
+	// attachments: richtext rows remapped to Article/1, archive tweet media
+	// dropped (migration 0006 deletes these rows; carrying them would pin the
+	// tweet media blobs against ReapOrphanFiles forever)
 	var rt string
 	var rid int64
 	if err := q("SELECT record_type, record_id FROM attachments WHERE id = 1").Scan(&rt, &rid); err != nil {
@@ -305,11 +288,11 @@ func TestRunMigration(t *testing.T) {
 	if rt != "Article" || rid != 1 {
 		t.Errorf("attachment 1 = %s/%d", rt, rid)
 	}
-	if err := q("SELECT record_type FROM attachments WHERE id = 5").Scan(&rt); err != nil {
+	if err := q("SELECT COUNT(*) FROM attachments WHERE record_type = 'TwitterArchiveTweet'").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if rt != "TwitterArchiveTweet" {
-		t.Errorf("attachment 5 record_type = %s", rt)
+	if n != 0 {
+		t.Errorf("TwitterArchiveTweet attachments carried: %d, want 0 (dropped)", n)
 	}
 
 	// static_files via attachment join
@@ -602,92 +585,6 @@ func TestRunSingletonDuplicatesInOld(t *testing.T) {
 			t.Errorf("%s: old=%d inserted=%d transformed=%d total=%d expected=%d, want 2/1/1/1/1",
 				name, tr.Old, tr.Inserted, tr.Transformed, tr.NewTotal, tr.Expected)
 		}
-	}
-}
-
-// A Rails backup taken while an archive import was queued/running must not
-// carry the stale active row into the new database as-is: it would block new
-// archive uploads (HasActiveTwitterArchiveImport) until the next restart's
-// recovery, and its active_slot would collide with a live active row, which
-// INSERT OR IGNORE would silently swallow (the dropped row then reports a
-// MISMATCH). The migration neutralizes the slot on insert and fails the row,
-// scoped to the ids inserted this run so a pre-existing row is never touched.
-func TestRunNormalizesActiveTwitterArchiveImport(t *testing.T) {
-	oldPath := buildFixture(t)
-	old, err := sql.Open("sqlite", oldPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// id 2: active in the backup; id 99: active in the backup too, but the
-	// new database already has that row (an earlier catch-up run carried it
-	// while it was still queued) — the normalization must not touch it.
-	stmts := []string{
-		`INSERT INTO twitter_archive_imports VALUES (2, 'running', 40, 0, 0, 0, 0, 0, 'big.zip', '/rails/imports/big.zip',
-		  'Importing tweets', NULL, '` + ts1 + `', '` + ts1 + `', NULL, 1, '` + ts1 + `', '` + ts1 + `')`,
-		`INSERT INTO twitter_archive_imports VALUES (99, 'running', 5, 0, 0, 0, 0, 0, 'live.zip', '/rails/imports/live.zip',
-		  'Reading archive', NULL, '` + ts1 + `', '` + ts1 + `', NULL, 1, '` + ts1 + `', '` + ts1 + `')`,
-	}
-	for _, s := range stmts {
-		if _, err := old.Exec(s); err != nil {
-			old.Close()
-			t.Fatalf("fixture: %v\n%s", err, s)
-		}
-	}
-	old.Close()
-	oldDB := openRO(t, oldPath)
-	newDB, err := db.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer newDB.Close()
-	if _, err := newDB.Exec(`INSERT INTO twitter_archive_imports (id, status, source_filename, source_path, queued_at, active_slot, created_at, updated_at)
-		VALUES (99, 'queued', 'live.zip', '/data/imports/twitter_archive_live.zip', 1700000002, 1, 1700000002, 1700000002)`); err != nil {
-		t.Fatal(err)
-	}
-
-	rep, err := Run(context.Background(), oldDB, newDB, Options{Out: io.Discard})
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if rep.Mismatch() {
-		t.Fatalf("unexpected mismatch: %+v", rep.Tables)
-	}
-	tr := tableReport(rep, "twitter_archive_imports")
-	if tr.Inserted != 2 || tr.Skipped != 1 {
-		t.Errorf("twitter_archive_imports inserted=%d skipped=%d, want 2/1", tr.Inserted, tr.Skipped)
-	}
-
-	// The row active only in the backup was inserted, then failed with its
-	// slot released; the history values and source_path are kept.
-	var status, errMsg, srcPath string
-	var slot sql.NullInt64
-	if err := newDB.QueryRow(`SELECT status, error_message, source_path, active_slot FROM twitter_archive_imports WHERE id = 2`).
-		Scan(&status, &errMsg, &srcPath, &slot); err != nil {
-		t.Fatal(err)
-	}
-	if status != "failed" || errMsg == "" || srcPath != "/rails/imports/big.zip" || slot.Valid {
-		t.Errorf("import 2 = %q %q %q slot %v, want failed with an explanation, its path and a NULL slot",
-			status, errMsg, srcPath, slot)
-	}
-
-	// The pre-existing active row kept its status and slot (its insert was
-	// the ignored one, so the normalization never saw its id).
-	var liveStatus string
-	var liveSlot int64
-	if err := newDB.QueryRow(`SELECT status, active_slot FROM twitter_archive_imports WHERE id = 99`).Scan(&liveStatus, &liveSlot); err != nil {
-		t.Fatal(err)
-	}
-	if liveStatus != "queued" || liveSlot != 1 {
-		t.Errorf("pre-existing import 99 = %q slot %d, want queued with its slot", liveStatus, liveSlot)
-	}
-
-	// The completed history row came over untouched.
-	var doneStatus string
-	if err := newDB.QueryRow(`SELECT status FROM twitter_archive_imports WHERE id = 1`).Scan(&doneStatus); err != nil {
-		t.Fatal(err)
-	}
-	if doneStatus != "completed" {
-		t.Errorf("import 1 = %q, want completed", doneStatus)
 	}
 }
 

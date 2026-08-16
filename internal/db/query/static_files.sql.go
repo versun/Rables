@@ -14,9 +14,9 @@ const countStaticFilesForFile = `-- name: CountStaticFilesForFile :one
 SELECT COUNT(*) FROM static_files WHERE file_id = ?
 `
 
-// Record cleanup (articles.Destroy, twitter archive replace) deletes files
-// rows left without references; static_files.file_id references files(id)
-// under foreign_keys enforcement, so these references count too.
+// Record cleanup (articles.Destroy) deletes files rows left without
+// references; static_files.file_id references files(id) under foreign_keys
+// enforcement, so these references count too.
 func (q *Queries) CountStaticFilesForFile(ctx context.Context, fileID int64) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countStaticFilesForFile, fileID)
 	var count int64
