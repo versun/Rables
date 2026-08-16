@@ -12,7 +12,7 @@ All implementation tasks (T01–T29) are complete: core blog, admin, comments, s
 
 ## Features
 
-- **Content**: articles & pages with draft/publish/schedule/trash/shared states, dual editor modes (Lexxy rich text / raw HTML), tags, scheduled publishing with crosspost & newsletter snapshots
+- **Content**: articles & pages with draft/publish/schedule/trash/shared states, three editor modes (Lexxy rich text / Markdown / raw HTML), tags, scheduled publishing with crosspost & newsletter snapshots
 - **Comments**: threaded comments with math captcha + per-IP rate limiting, admin moderation/reply, social comment import (Mastodon/Bluesky/X)
 - **Newsletter**: native SMTP or listmonk, tag-scoped subscriptions, double opt-in confirm/unsubscribe
 - **Crossposting**: Mastodon, Bluesky (hand-written XRPC + facets), X (OAuth1.0a, chunked media upload, quote-tweet/GIF rules); Xiaohongshu is log-only

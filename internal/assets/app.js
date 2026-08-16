@@ -345,6 +345,52 @@
     return easymdeLoading;
   }
 
+  // uploadAdminFile posts one file to the shared multipart endpoint (the same
+  // one lexxy's DirectUpload shim drives) and resolves with the response's url
+  // plus the local name/type needed to build markup.
+  function uploadAdminFile(file) {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return fetch("/admin/uploads", { method: "POST", body: form })
+      .then((response) => {
+        if (!response.ok) throw new Error("Upload failed with status " + response.status);
+        return response.json();
+      })
+      .then((res) => {
+        if (!res || !res.url) throw new Error("Upload failed: no url in response");
+        return { url: res.url, name: file.name, type: file.type };
+      });
+  }
+
+  // pickAndUploadFile is the markdown editor's generic-attachment toolbar
+  // action: images are inserted as markdown, video/audio as media tags (raw
+  // HTML passes goldmark, and the sanitizer allows /files/ src on them), and
+  // anything else as a download link. SVG follows the link rule because
+  // serveFile forces it to download (see sanitize.go's attachment rewrite).
+  function pickAndUploadFile(editor) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      uploadAdminFile(file)
+        .then((upload) => editor.codemirror.getDoc().replaceSelection(markdownSnippetForFile(upload)))
+        .catch((err) => alert(err.message));
+    });
+    input.click();
+  }
+
+  // Brackets/parens in the filename would break the markdown link syntax.
+  function markdownSnippetForFile(upload) {
+    const name = upload.name.replace(/[[\]()]/g, "");
+    if (upload.type.startsWith("image/") && !upload.type.includes("svg")) {
+      return `![${name}](${upload.url})`;
+    }
+    if (upload.type.startsWith("video/")) return `<video controls src="${upload.url}"></video>`;
+    if (upload.type.startsWith("audio/")) return `<audio controls src="${upload.url}"></audio>`;
+    return `[${name}](${upload.url})`;
+  }
+
   class ContentFormController extends Controller {
     static targets = [
       "scheduledAt",
@@ -419,6 +465,47 @@
           element: textarea,
           forceSync: true, // keep the textarea current for the plain form POST
           spellChecker: false,
+          // Image upload posts to the same multipart endpoint lexxy uses; the
+          // custom function covers the toolbar button, drop and paste.
+          uploadImage: true,
+          imageMaxSize: 100 * 1024 * 1024, // the server's maxUploadSize
+          imageUploadFunction: (file, onSuccess, onError) => {
+            uploadAdminFile(file)
+              .then((upload) => {
+                // EasyMDE's onSuccess picks ![](url) vs [name](url) by the
+                // URL's file extension, and /files/<key> URLs have none, so
+                // it would insert a key-labeled link for every upload (and
+                // clobber insertTexts.link on the way). Insert the snippet
+                // ourselves — SVG stays a link here too — and only mirror
+                // the status-bar success feedback.
+                this.easymde.codemirror.getDoc().replaceSelection(markdownSnippetForFile(upload));
+                const texts = this.easymde.options.imageTexts;
+                this.easymde.updateStatusBar("upload-image", texts.sbOnUploaded.replace("#image_name#", upload.name));
+                setTimeout(() => this.easymde.updateStatusBar("upload-image", texts.sbInit), 1000);
+              })
+              .catch((err) => onError(err.message));
+          },
+          // Every built-in button (in EasyMDE's registry order, with guide
+          // moved last as in its default toolbar), plus a generic file
+          // button for video/audio/other files EasyMDE has no built-in
+          // flow for.
+          toolbar: [
+            "bold", "italic", "strikethrough",
+            "heading", "heading-smaller", "heading-bigger",
+            "heading-1", "heading-2", "heading-3", "|",
+            "code", "quote", "unordered-list", "ordered-list", "clean-block", "|",
+            "link", "image", "upload-image", "table", "horizontal-rule",
+            {
+              name: "upload-file",
+              action: pickAndUploadFile,
+              className: "fa fa-upload",
+              title: "Upload File",
+            },
+            "|",
+            "preview", "side-by-side", "fullscreen", "|",
+            "undo", "redo", "|",
+            "guide",
+          ],
         });
       });
     }
