@@ -50,10 +50,11 @@ func (s CommentStatus) String() string {
 	return ""
 }
 
-// ContentType mirrors the Rails content_type enum ('rich_text'|'html'), plus
-// 'markdown' for articles authored in Markdown: the source is kept in
-// content_markdown and the rendered (sanitized) HTML in content_html, so
-// every content_html reader works unchanged.
+// ContentType mirrors the Rails content_type enum. 'rich_text' is legacy data
+// (migrated Action Text bodies and pre-markdown records; the Lexxy editor is
+// gone) — the admin editors are Markdown and raw HTML. For 'markdown' the
+// source is kept in content_markdown and the rendered (sanitized) HTML in
+// content_html, so every content_html reader works unchanged.
 type ContentType string
 
 const (

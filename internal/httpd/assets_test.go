@@ -19,8 +19,7 @@ func TestAssetsRoutes(t *testing.T) {
 
 	names := []string{
 		"app.js", "app.css", "admin.css",
-		"lexxy.min.js", "lexxy.css", "activestorage_shim.js",
-		"easymde.min.js", "easymde.min.css",
+		"easymde.min.js", "easymde.min.css", "fa-subset.css",
 	}
 	contentType := func(name string) string {
 		if name[len(name)-4:] == ".css" {

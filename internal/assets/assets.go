@@ -1,11 +1,10 @@
 // Package assets embeds the static frontend files served under
 // /assets/: app.js (vanilla JS, plan §9), app.css (public/auth core styles),
 // admin.css (the scoped admin design system, loaded by admin_layout.html),
-// the vendored lexxy rich-text editor (lexxy.min.js + lexxy.css, lexxy gem
-// 0.9.28, MIT — the same editor Rails uses via the lexxy gem), the
-// @rails/activestorage shim lexxy's attachment uploads resolve through the
-// admin import map (activestorage_shim.js), and the vendored EasyMDE markdown
-// editor (easymde.min.js + easymde.min.css, v2.20.0, MIT).
+// and the vendored EasyMDE markdown editor (easymde.min.js + easymde.min.css,
+// v2.20.0, MIT). EasyMDE's toolbar Font Awesome class names are covered by
+// fa-subset.css, a 22-glyph Font Awesome Free 7.0.1 subset (CC BY 4.0 / SIL
+// OFL 1.1) with the woff2 inlined as a data URI — no CDN dependency.
 package assets
 
 import (
@@ -15,7 +14,7 @@ import (
 	"strings"
 )
 
-//go:embed app.js app.css admin.css lexxy.min.js lexxy.css activestorage_shim.js easymde.min.js easymde.min.css
+//go:embed app.js app.css admin.css easymde.min.js easymde.min.css fa-subset.css
 var FS embed.FS
 
 // Templates reference content-fingerprinted file names

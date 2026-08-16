@@ -424,6 +424,82 @@ func TestAdminArticlesMarkdownFlow(t *testing.T) {
 	}
 }
 
+// TestAdminArticlesEditorModes covers the post-Lexxy editor surface: the new
+// form defaults to markdown and offers no rich_text option, and a legacy
+// rich_text record edits through the HTML editor (its content_html is already
+// sanitized markup, so saving it back as html is lossless).
+func TestAdminArticlesEditorModes(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	ctx := t.Context()
+
+	rec := doRequest(t, h, http.MethodGet, "/admin/posts/new", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("new form: status = %d", rec.Code)
+	}
+	page := rec.Body.String()
+	if strings.Contains(page, `value="rich_text"`) {
+		t.Errorf("new form still offers rich_text")
+	}
+	if !strings.Contains(page, `value="markdown" selected`) {
+		t.Errorf("new form does not default to markdown")
+	}
+
+	insertAdminArticle(t, s, "Legacy Rich", "legacy-rich", domain.StatusPublish)
+	rec = doRequest(t, h, http.MethodGet, "/admin/posts/legacy-rich/edit", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy edit form: status = %d", rec.Code)
+	}
+	page = rec.Body.String()
+	if strings.Contains(page, `value="rich_text"`) {
+		t.Errorf("legacy edit form still offers rich_text")
+	}
+	if !strings.Contains(page, `value="html" selected`) {
+		t.Errorf("legacy rich_text record is not presented as html")
+	}
+	if !strings.Contains(page, `name="html_content"`) || !strings.Contains(page, "&lt;p&gt;Legacy Rich&lt;/p&gt;") {
+		t.Errorf("legacy edit form does not show content_html in the html editor")
+	}
+
+	// Saving the legacy record through the html editor stores html verbatim.
+	form := validArticleForm()
+	form.Set("title", "Legacy Rich")
+	form.Set("content_type", "html")
+	form.Set("html_content", `<p>Legacy Rich</p><script>alert(1)</script>`)
+	rec = doRequest(t, h, http.MethodPost, "/admin/posts/legacy-rich", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("legacy save: status = %d", rec.Code)
+	}
+	article, err := s.Q.GetAdminArticleBySlug(ctx, nullSlug("legacy-rich"))
+	if err != nil {
+		t.Fatalf("legacy article: %v", err)
+	}
+	if article.ContentType != string(domain.ContentTypeHTML) {
+		t.Errorf("content_type after legacy save = %q, want html", article.ContentType)
+	}
+	if !strings.Contains(article.ContentHtml.String, "alert(1)") {
+		t.Errorf("html save should skip sanitize, content_html = %q", article.ContentHtml.String)
+	}
+
+	// A failed legacy rich_text submission re-renders through the HTML editor
+	// too, so the submitted markup is not silently reinterpreted as markdown.
+	form = validArticleForm()
+	form.Set("slug", "legacy-rich") // taken -> validation error, form re-renders
+	form.Set("content_type", "rich_text")
+	form.Set("content", "<p>draft body</p>")
+	rec = doRequest(t, h, http.MethodPost, "/admin/posts", form, session)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("legacy failed save: status = %d", rec.Code)
+	}
+	page = rec.Body.String()
+	if !strings.Contains(page, `value="html" selected`) {
+		t.Errorf("failed legacy submission is not re-rendered as html")
+	}
+	if !strings.Contains(page, `name="html_content"`) || !strings.Contains(page, "&lt;p&gt;draft body&lt;/p&gt;") {
+		t.Errorf("failed legacy submission does not show its content in the html editor")
+	}
+}
+
 // TestAdminArticlesSchedule covers the schedule save: snapshot fields and the
 // publish_article job, including old-job cancellation on reschedule.
 func TestAdminArticlesSchedule(t *testing.T) {

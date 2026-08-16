@@ -23,14 +23,9 @@
         <div class="field">
           <label for="content_type">Content type</label>
           <select id="content_type" name="content_type" required data-content-form-target="contentTypeSelect" data-action="change->content-form#toggleContentType">
-            <option value="rich_text" {{if eq .Page.ContentType "rich_text"}}selected{{end}}>Rich Text</option>
             <option value="markdown" {{if eq .Page.ContentType "markdown"}}selected{{end}}>Markdown</option>
             <option value="html" {{if eq .Page.ContentType "html"}}selected{{end}}>HTML Code</option>
           </select>
-        </div>
-        <div class="field" data-content-form-target="richTextField"{{if ne .Page.ContentType "rich_text"}} style="display: none;"{{end}}>
-          <label for="content">Rich text content</label>
-          <textarea id="content" name="content" rows="15">{{.RichContent}}</textarea>
         </div>
         <div class="field" data-content-form-target="markdownContentField"{{if ne .Page.ContentType "markdown"}} style="display: none;"{{end}}>
           <label for="markdown_content">Markdown content</label>

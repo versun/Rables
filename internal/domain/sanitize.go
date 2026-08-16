@@ -77,10 +77,11 @@ const maxHTMLParseBytes = 5 << 20
 // SanitizeHTML ports Article#sanitize_html: bluemonday with the §4.4
 // whitelist; src of iframe is restricted to absolute http/https URLs, and
 // src of video/audio/source to http/https or /files/ root-relative paths.
-// Submitted <action-text-attachment> elements (what the lexxy editor emits
-// for uploaded files) are rewritten to plain <img>/<a> first: that is the
-// canonical storage markup (same as the Rails migration rewrite produces),
-// and the unknown element would otherwise not survive the whitelist.
+// Submitted <action-text-attachment> elements (what the retired lexxy editor
+// emitted for uploaded files; they still exist in migrated content) are
+// rewritten to plain <img>/<a> first: that is the canonical storage markup
+// (same as the Rails migration rewrite produces), and the unknown element
+// would otherwise not survive the whitelist.
 func SanitizeHTML(rawHTML string) string {
 	if IsBlank(rawHTML) {
 		return ""

@@ -766,6 +766,55 @@ func TestAdminPagesMarkdown(t *testing.T) {
 	}
 }
 
+// TestAdminPagesEditorModes covers the post-Lexxy editor surface: the new
+// form defaults to markdown and offers no rich_text option, and a legacy
+// rich_text record edits through the HTML editor (its content_html is already
+// sanitized markup, so saving it back as html is lossless).
+func TestAdminPagesEditorModes(t *testing.T) {
+	s, h := newPagesTestServer(t)
+	session := pagesSessionCookie(t, s)
+	ctx := t.Context()
+
+	rec := doRequest(t, h, http.MethodGet, "/admin/pages/new", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("new form: status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `value="rich_text"`) {
+		t.Errorf("new form still offers rich_text")
+	}
+	if !strings.Contains(body, `value="markdown" selected`) {
+		t.Errorf("new form does not default to markdown")
+	}
+
+	now := time.Now().Unix()
+	if _, err := s.Q.CreatePage(ctx, query.CreatePageParams{
+		Title:       sql.NullString{String: "Legacy", Valid: true},
+		Slug:        sql.NullString{String: "legacy", Valid: true},
+		ContentHtml: sql.NullString{String: "<p>Legacy body</p>", Valid: true},
+		ContentType: string(domain.ContentTypeRichText),
+		Status:      int64(domain.StatusPublish),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("insert legacy page: %v", err)
+	}
+	rec = doRequest(t, h, http.MethodGet, "/admin/pages/legacy/edit", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy edit form: status = %d", rec.Code)
+	}
+	body = rec.Body.String()
+	if strings.Contains(body, `value="rich_text"`) {
+		t.Errorf("legacy edit form still offers rich_text")
+	}
+	if !strings.Contains(body, `option value="html" selected`) {
+		t.Errorf("legacy rich_text record is not presented as html")
+	}
+	if !strings.Contains(body, `name="html_content"`) || !strings.Contains(body, "&lt;p&gt;Legacy body&lt;/p&gt;") {
+		t.Errorf("legacy edit form does not show content_html in the html editor")
+	}
+}
+
 // TestAdminPagesBatchLookupDBError covers the batch lookup error split: a
 // missing slug is skipped, but a real DB error aborts with the processing
 // alert instead of riding the success notice.

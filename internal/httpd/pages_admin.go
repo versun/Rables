@@ -258,8 +258,7 @@ type adminPageFormData struct {
 	Errors           []string // validation messages, shown like the Rails form-errors block
 	IsNew            bool
 	StatusName       string // "" for new records (the prompt stays selected)
-	RichContent      string // content_html shown in the rich_text textarea
-	HTMLContent      string // content_html shown in the html textarea
+	HTMLContent      string // content_html shown in the html textarea (also how legacy rich_text records edit)
 	MarkdownContent  string // content_markdown source shown in the markdown textarea
 	ScheduledAtValue string // datetime-local value in the site time zone
 }
@@ -268,7 +267,7 @@ type adminPageFormData struct {
 func (s *Server) adminPagesNew(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "admin_pages_new", adminPageFormData{
 		Flash: s.PopFlash(r, w),
-		Page:  query.Page{Comment: 1, ContentType: string(domain.ContentTypeRichText)},
+		Page:  query.Page{Comment: 1, ContentType: string(domain.ContentTypeMarkdown)},
 		IsNew: true,
 	})
 }
@@ -291,12 +290,16 @@ func (s *Server) adminPagesEdit(w http.ResponseWriter, r *http.Request) {
 		PathSlug:   page.Slug.String,
 		StatusName: pageStatusName(page.Status),
 	}
-	if page.ContentType == string(domain.ContentTypeHTML) {
-		data.HTMLContent = page.ContentHtml.String
-	} else if page.ContentType == string(domain.ContentTypeMarkdown) {
+	if page.ContentType == string(domain.ContentTypeMarkdown) {
 		data.MarkdownContent = page.ContentMarkdown.String
 	} else {
-		data.RichContent = page.ContentHtml.String
+		// Legacy rich_text records edit through the HTML editor: their
+		// content_html is already sanitized markup, so saving it back as html
+		// is lossless.
+		data.HTMLContent = page.ContentHtml.String
+		if page.ContentType == string(domain.ContentTypeRichText) {
+			data.Page.ContentType = string(domain.ContentTypeHTML)
+		}
 	}
 	data.ScheduledAtValue = s.formatScheduledAt(r, page.ScheduledAt)
 	s.render(w, http.StatusOK, "admin_pages_edit", data)
@@ -604,12 +607,15 @@ func (in pageFormInput) formData(isNew bool) adminPageFormData {
 		IsNew:      isNew,
 		StatusName: in.Status.String(),
 	}
-	if in.ContentType == string(domain.ContentTypeHTML) {
-		data.HTMLContent = in.RawContent
-	} else if in.ContentType == string(domain.ContentTypeMarkdown) {
+	if in.ContentType == string(domain.ContentTypeMarkdown) {
 		data.MarkdownContent = in.RawContent
 	} else {
-		data.RichContent = in.RawContent
+		// html, plus legacy rich_text submissions: re-render through the HTML
+		// editor.
+		data.HTMLContent = in.RawContent
+		if in.ContentType == string(domain.ContentTypeRichText) {
+			data.Page.ContentType = string(domain.ContentTypeHTML)
+		}
 	}
 	return data
 }

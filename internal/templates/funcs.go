@@ -31,8 +31,7 @@ func FuncMap() template.FuncMap {
 
 // AssetURL returns the content-fingerprinted /assets/ URL for a logical
 // asset name (see assets.Name): a deploy changes the URL, so caches can never
-// pin a stale copy of app.js/app.css/admin.css or the import-mapped
-// activestorage shim.
+// pin a stale copy of app.js/app.css/admin.css or the vendored editor assets.
 func AssetURL(name string) string {
 	return "/assets/" + assets.Name(name)
 }

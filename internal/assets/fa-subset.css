@@ -1,0 +1,49 @@
+/* Editor toolbar icons: a 22-glyph subset of Font Awesome Free 7.0.1 solid
+   (icons: CC BY 4.0, font: SIL OFL 1.1 — https://fontawesome.com/license/free),
+   covering exactly the EasyMDE toolbar buttons plus the task-list/upload-file
+   customs in app.js. Regenerate: pyftsubset fa-solid-900.woff2 --flavor=woff2
+   --unicodes="U+f032,U+f033,U+f0cc,U+f1dc,U+f121,U+f10d,U+f0ca,U+f0cb,U+f12d,
+   U+f0c1,U+f03e,U+f0ce,U+f068,U+f06e,U+f0db,U+f0b2,U+f0e2,U+f01e,U+f363,
+   U+f059,U+f0ae,U+f093" --no-hinting --desubroutinize, then inline as base64.
+   The woff2 is inlined as a data URI so this single file keeps the app fully
+   self-contained (no CDN, no extra request). Only the editor's own classes
+   are defined here — the generic .fa text-glyph stand-ins in app.css
+   (fa-moon, fa-bars, ...) are untouched. */
+@font-face {
+    font-family: "Rables Editor Icons";
+    font-style: normal;
+    font-weight: 900;
+    font-display: block;
+    src: url(data:font/woff2;base64,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) format("woff2");
+}
+
+.fa-bold, .fa-italic, .fa-strikethrough, .fa-header, .fa-heading, .fa-code, .fa-quote-left, .fa-list-ul, .fa-list-ol, .fa-eraser, .fa-link, .fa-image, .fa-table, .fa-minus, .fa-eye, .fa-columns, .fa-arrows-alt, .fa-undo, .fa-redo, .fa-repeat, .fa-question-circle, .fa-tasks, .fa-upload {
+    font-family: "Rables Editor Icons";
+    font-weight: 900;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.fa-bold::before { content: "\f032"; }
+.fa-italic::before { content: "\f033"; }
+.fa-strikethrough::before { content: "\f0cc"; }
+.fa-header::before { content: "\f1dc"; }
+.fa-heading::before { content: "\f1dc"; }
+.fa-code::before { content: "\f121"; }
+.fa-quote-left::before { content: "\f10d"; }
+.fa-list-ul::before { content: "\f0ca"; }
+.fa-list-ol::before { content: "\f0cb"; }
+.fa-eraser::before { content: "\f12d"; }
+.fa-link::before { content: "\f0c1"; }
+.fa-image::before { content: "\f03e"; }
+.fa-table::before { content: "\f0ce"; }
+.fa-minus::before { content: "\f068"; }
+.fa-eye::before { content: "\f06e"; }
+.fa-columns::before { content: "\f0db"; }
+.fa-arrows-alt::before { content: "\f0b2"; }
+.fa-undo::before { content: "\f0e2"; }
+.fa-redo::before { content: "\f01e"; }
+.fa-repeat::before { content: "\f363"; }
+.fa-question-circle::before { content: "\f059"; }
+.fa-tasks::before { content: "\f0ae"; }
+.fa-upload::before { content: "\f093"; }

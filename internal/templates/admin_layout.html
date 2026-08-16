@@ -6,13 +6,9 @@
     <title>{{block "title" .}}{{end}}</title>
     <link rel="stylesheet" href="{{assetURL "app.css"}}">
     <link rel="stylesheet" href="{{assetURL "admin.css"}}">
-    <script type="importmap">
-      {
-        "imports": {
-          "@rails/activestorage": "{{assetURL "activestorage_shim.js"}}"
-        }
-      }
-    </script>
+    <!-- Icon subset for the EasyMDE toolbar (EasyMDE renders FA class names
+         but ships no icon font of its own) -->
+    <link rel="stylesheet" href="{{assetURL "fa-subset.css"}}">
     <script src="{{assetURL "app.js"}}" defer></script>
     {{block "head" .}}{{end}}
   </head>

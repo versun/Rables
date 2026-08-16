@@ -516,8 +516,7 @@ type adminArticleForm struct {
 	Slug             string
 	Status           string
 	ContentType      string
-	Content          string // rich_text body
-	HTMLContent      string // html body
+	HTMLContent      string // html body (also how legacy rich_text records edit)
 	MarkdownContent  string // markdown source
 	Description      string
 	MetaTitle        string
@@ -559,7 +558,7 @@ func (s *Server) newArticleFormData(w http.ResponseWriter, r *http.Request) (adm
 		FormAction: "/admin/posts",
 		Form: adminArticleForm{
 			Status:      "draft",
-			ContentType: string(domain.ContentTypeRichText),
+			ContentType: string(domain.ContentTypeMarkdown),
 			TagList:     defaultArticleTag,
 			Comment:     true,
 			Crosspost:   map[string]bool{},
@@ -1195,15 +1194,18 @@ func (s *Server) parseArticleForm(r *http.Request, existing *query.Article) (art
 		tz = st.TimeZone
 	}
 
+	// The form offers markdown and html only; an explicit rich_text value is a
+	// legacy submission (the Lexxy editor is gone) and still reads the old
+	// content param, while anything unknown falls back to markdown.
 	contentType := r.PostFormValue("content_type")
-	raw := r.PostFormValue("content")
+	raw := r.PostFormValue("markdown_content")
 	switch contentType {
 	case string(domain.ContentTypeHTML):
 		raw = r.PostFormValue("html_content")
-	case string(domain.ContentTypeMarkdown):
-		raw = r.PostFormValue("markdown_content")
+	case string(domain.ContentTypeRichText):
+		raw = r.PostFormValue("content")
 	default:
-		contentType = string(domain.ContentTypeRichText)
+		contentType = string(domain.ContentTypeMarkdown)
 	}
 
 	snapshot := map[string]bool{}
@@ -1313,14 +1315,18 @@ func (s *Server) articleFormFromArticle(ctx context.Context, article query.Artic
 	for _, platform := range articlesvc.ParseScheduledPlatforms(article.ScheduledCrosspostPlatforms) {
 		crosspost[platform] = true
 	}
-	content := article.ContentHtml.String
+	// Legacy rich_text records edit through the HTML editor: their content_html
+	// is already sanitized markup, so editing and saving it as html is lossless.
+	contentType := article.ContentType
+	if contentType == string(domain.ContentTypeRichText) {
+		contentType = string(domain.ContentTypeHTML)
+	}
 	return adminArticleForm{
 		Title:            article.Title.String,
 		Slug:             article.Slug.String,
 		Status:           domain.Status(article.Status).String(),
-		ContentType:      article.ContentType,
-		Content:          content,
-		HTMLContent:      content,
+		ContentType:      contentType,
+		HTMLContent:      article.ContentHtml.String,
 		MarkdownContent:  article.ContentMarkdown.String,
 		Description:      article.Description.String,
 		MetaTitle:        article.MetaTitle.String,
@@ -1361,13 +1367,15 @@ func articleFormFromParams(p articlesvc.SaveParams, tzName string) adminArticleF
 		Crosspost:       p.Crosspost,
 		SocialURLs:      p.SocialURLs,
 	}
-	switch p.ContentType {
-	case string(domain.ContentTypeHTML):
-		form.HTMLContent = p.ContentHTML
-	case string(domain.ContentTypeMarkdown):
+	if p.ContentType == string(domain.ContentTypeMarkdown) {
 		form.MarkdownContent = p.ContentHTML
-	default:
-		form.Content = p.ContentHTML
+	} else {
+		// html, plus legacy rich_text submissions: re-render through the HTML
+		// editor.
+		form.HTMLContent = p.ContentHTML
+		if p.ContentType == string(domain.ContentTypeRichText) {
+			form.ContentType = string(domain.ContentTypeHTML)
+		}
 	}
 	if !p.CreatedAt.IsZero() {
 		form.CreatedAtLocal = formatFormTime(p.CreatedAt.Unix(), tzName)

@@ -525,11 +525,6 @@ body.admin-body {
     font-size: 13px;
 }
 
-.admin-body lexxy-editor {
-    min-height: 400px;
-    display: block;
-}
-
 .admin-body .help-text,
 .admin-body .field small {
     display: block;
@@ -623,6 +618,58 @@ body.admin-body {
 
 .admin-body .editor-side .card {
     padding: 16px;
+}
+
+/* ============================== EasyMDE editor ============================== */
+
+/* The toolbar's table button carries class "table", which collides with the
+   .admin-body .table data-table rule (width: 100%) and would otherwise take
+   a whole toolbar row by itself. */
+.admin-body .editor-toolbar button.table {
+    width: auto;
+}
+
+/* Let the toolbar flow as a single wrapping row: buttons sit on one row
+   and wrap onto the next only when the available width runs out. */
+.admin-body .editor-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* Fullscreen / side-by-side stay in the content area to the right of the
+   fixed 232px sidebar instead of sliding under it (sidebar z-index 1000).
+   The vendored .EasyMDEContainer .CodeMirror-fullscreen rule would tie
+   .admin-body .CodeMirror-fullscreen on specificity and win by loading
+   later, so these selectors include .EasyMDEContainer to beat it outright.
+   In fullscreen the toolbar never wraps (it scrolls horizontally instead),
+   so the vendored fixed 50px offsets keep lining up at any width. */
+.admin-body .editor-toolbar.fullscreen {
+    left: 232px;
+    width: calc(100% - 232px);
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    z-index: 1003;
+}
+
+.admin-body .EasyMDEContainer .CodeMirror-fullscreen {
+    top: 50px;
+    left: 232px;
+    z-index: 1002;
+}
+
+/* Side-by-side in fullscreen splits the content area, not the viewport
+   (the vendored 50% width is !important, so the override must be too).
+   Without fullscreen the vendored .sided--no-fullscreen rules lay the
+   preview out in-flow and need no help. */
+.admin-body .EasyMDEContainer .CodeMirror-sided.CodeMirror-fullscreen {
+    width: calc((100% - 232px) / 2) !important;
+}
+
+.admin-body .EasyMDEContainer:not(.sided--no-fullscreen) .editor-preview-side {
+    top: 50px;
+    width: calc((100% - 232px) / 2);
+    z-index: 1002;
 }
 
 /* ============================== Toolbar / tabs / search ============================== */
@@ -1128,6 +1175,24 @@ body.admin-body {
 @media (max-width: 768px) {
     .admin-body .mobile-menu-btn {
         display: flex;
+    }
+
+    /* Sidebar is hidden here; fullscreen editor takes the full width. */
+    .admin-body .editor-toolbar.fullscreen {
+        left: 0;
+        width: 100%;
+    }
+
+    .admin-body .EasyMDEContainer .CodeMirror-fullscreen {
+        left: 0;
+    }
+
+    .admin-body .EasyMDEContainer .CodeMirror-sided.CodeMirror-fullscreen {
+        width: 50% !important;
+    }
+
+    .admin-body .EasyMDEContainer:not(.sided--no-fullscreen) .editor-preview-side {
+        width: 50%;
     }
 
     .admin-sidebar {

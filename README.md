@@ -12,7 +12,7 @@ All implementation tasks (T01–T29) are complete: core blog, admin, comments, s
 
 ## Features
 
-- **Content**: articles & pages with draft/publish/schedule/trash/shared states, three editor modes (Lexxy rich text / Markdown / raw HTML), tags, scheduled publishing with crosspost & newsletter snapshots
+- **Content**: articles & pages with draft/publish/schedule/trash/shared states, two editor modes (Markdown / raw HTML), tags, scheduled publishing with crosspost & newsletter snapshots
 - **Comments**: threaded comments with math captcha + per-IP rate limiting, admin moderation/reply, social comment import (Mastodon/Bluesky/X)
 - **Newsletter**: native SMTP or listmonk, tag-scoped subscriptions, double opt-in confirm/unsubscribe
 - **Crossposting**: Mastodon, Bluesky (hand-written XRPC + facets), X (OAuth1.0a, chunked media upload, quote-tweet/GIF rules); Xiaohongshu is log-only
@@ -95,7 +95,8 @@ internal/jobs/      job_runs worker + cron scheduler
 internal/service/   articles, comments, crosspost, media, newsletter, transfer,
                     twittersync, railsmigrate, ...
 internal/templates/ embedded html/template pages (+ `_`-prefixed partials)
-internal/assets/    embedded app.js (vanilla, no build) / app.css / Lexxy editor
+internal/assets/    embedded app.js (vanilla, no build) / app.css / EasyMDE editor
+                    (+ a 22-glyph Font Awesome subset for its toolbar icons)
 migrations/         full DDL (goose)
 queries/            sqlc sources (pure ASCII only)
 deploy/             Dockerfile companions: systemd unit, backup script, docs

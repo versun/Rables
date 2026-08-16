@@ -6,7 +6,7 @@
  * file ships a tiny Stimulus-compatible subset runtime plus one controller
  * class per Rails counterpart. No MutationObserver: pages are server-rendered
  * MPAs and controllers attach once at DOMContentLoaded; DOM inserted later by
- * this file itself (lexxy editor) needs no controllers.
+ * this file itself (EasyMDE editor) needs no controllers.
  */
 (() => {
   "use strict";
@@ -291,39 +291,11 @@
 
   // --- content_form ---------------------------------------------------------
   // Mirrors content_form_controller.js (schedule toggle, editor-mode toggle,
-  // non-blank validation). The Go form fields are flat-named (content /
-  // markdown_content / html_content), so lookups go through the targets
-  // instead of a model param.
-  // Rich-text mode progressively upgrades the plain textarea to the vendored
-  // <lexxy-editor> (same form-associated custom element Rails renders); if the
-  // module fails to load the textarea stays and both modes still work.
-  // Markdown mode likewise upgrades its textarea to the vendored EasyMDE;
-  // forceSync keeps the textarea current so the plain form POST is unchanged.
-  // The pages form shares this controller but has no markdown target, so every
-  // markdown path is guarded by hasMarkdownContentFieldTarget.
-
-  let lexxyLoading = null;
-
-  function ensureLexxyCSS() {
-    if (document.querySelector('link[href="/assets/lexxy.css"]')) return;
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = "/assets/lexxy.css";
-    document.head.appendChild(link);
-  }
-
-  function loadLexxy() {
-    if (customElements.get("lexxy-editor")) return Promise.resolve(true);
-    if (!lexxyLoading) {
-      lexxyLoading = import("/assets/lexxy.min.js")
-        // lexxy registers its elements in a setTimeout(0) after module
-        // evaluation, so a microtask-based .then() would check too early.
-        .then(() => customElements.whenDefined("lexxy-editor"))
-        .then(() => true)
-        .catch(() => false);
-    }
-    return lexxyLoading;
-  }
+  // non-blank validation). The Go form fields are flat-named (markdown_content
+  // / html_content), so lookups go through the targets instead of a model
+  // param. Markdown mode progressively upgrades its textarea to the vendored
+  // EasyMDE; forceSync keeps the textarea current so the plain form POST is
+  // unchanged, and if the module fails to load the textarea stays usable.
 
   let easymdeLoading = null;
 
@@ -345,9 +317,9 @@
     return easymdeLoading;
   }
 
-  // uploadAdminFile posts one file to the shared multipart endpoint (the same
-  // one lexxy's DirectUpload shim drives) and resolves with the response's url
-  // plus the local name/type needed to build markup.
+  // uploadAdminFile posts one file to the shared multipart endpoint and
+  // resolves with the response's url plus the local name/type needed to build
+  // markup.
   function uploadAdminFile(file) {
     const form = new FormData();
     form.append("file", file, file.name);
@@ -391,19 +363,44 @@
     return `[${name}](${upload.url})`;
   }
 
+  // toggleTaskList is the toolbar's task-list action (EasyMDE has no
+  // built-in one): a checked/unchecked marker on every selected line loses
+  // its checkbox, any other bullet gains one, and plain lines become task
+  // items.
+  function toggleTaskList(editor) {
+    const doc = editor.codemirror.getDoc();
+    const from = doc.getCursor("from");
+    const to = doc.getCursor("to");
+    // A selection ending at a line's first column does not cover that line.
+    const lastLine = to.ch === 0 && to.line > from.line ? to.line - 1 : to.line;
+    for (let line = from.line; line <= lastLine; line++) {
+      const text = doc.getLine(line);
+      let next = text;
+      const task = text.match(/^(\s*[-*+] )\[[ xX]\]\s+/);
+      if (task) {
+        next = task[1] + text.slice(task[0].length);
+      } else {
+        const bullet = text.match(/^(\s*[-*+] )/);
+        next = bullet
+          ? bullet[1] + "[ ] " + text.slice(bullet[0].length)
+          : "- [ ] " + text;
+      }
+      if (next !== text) doc.replaceRange(next, { line, ch: 0 }, { line, ch: text.length });
+    }
+    editor.codemirror.focus();
+  }
+
   class ContentFormController extends Controller {
     static targets = [
       "scheduledAt",
       "scheduledAtHint",
       "contentTypeSelect",
-      "richTextField",
       "markdownContentField",
       "htmlContentField",
     ];
 
     connect() {
       this.toggleContentType();
-      this.upgradeRichText();
       this.upgradeMarkdown();
     }
 
@@ -417,7 +414,6 @@
 
     toggleContentType() {
       const mode = this.contentTypeSelectTarget.value;
-      this.richTextFieldTarget.style.display = mode === "rich_text" ? "block" : "none";
       this.htmlContentFieldTarget.style.display = mode === "html" ? "block" : "none";
       if (this.hasMarkdownContentFieldTarget) {
         this.markdownContentFieldTarget.style.display = mode === "markdown" ? "block" : "none";
@@ -434,26 +430,6 @@
       }
     }
 
-    upgradeRichText() {
-      const field = this.richTextFieldTarget;
-      const textarea = field.querySelector("textarea");
-      if (!textarea) return;
-      loadLexxy().then((ok) => {
-        if (!ok || !field.isConnected || !field.contains(textarea)) return;
-        ensureLexxyCSS();
-        const editor = document.createElement("lexxy-editor");
-        editor.setAttribute("name", textarea.getAttribute("name") || "content");
-        editor.setAttribute("value", textarea.value);
-        // Attachment uploads post to the Go server's multipart endpoint via
-        // the @rails/activestorage shim (import map in admin_layout.html);
-        // non-image files derive their URL from the blob URL template.
-        editor.setAttribute("data-direct-upload-url", "/admin/uploads");
-        editor.setAttribute("data-blob-url-template", "/files/:signed_id");
-        editor.className = "lexxy-content";
-        textarea.replaceWith(editor);
-      });
-    }
-
     upgradeMarkdown() {
       if (!this.hasMarkdownContentFieldTarget || this.easymde) return;
       const textarea = this.markdownContentFieldTarget.querySelector("textarea");
@@ -465,7 +441,7 @@
           element: textarea,
           forceSync: true, // keep the textarea current for the plain form POST
           spellChecker: false,
-          // Image upload posts to the same multipart endpoint lexxy uses; the
+          // Image upload posts to the shared multipart endpoint; the
           // custom function covers the toolbar button, drop and paste.
           uploadImage: true,
           imageMaxSize: 100 * 1024 * 1024, // the server's maxUploadSize
@@ -485,16 +461,25 @@
               })
               .catch((err) => onError(err.message));
           },
-          // Every built-in button (in EasyMDE's registry order, with guide
-          // moved last as in its default toolbar), plus a generic file
-          // button for video/audio/other files EasyMDE has no built-in
-          // flow for.
+          // Every kept built-in button (in EasyMDE's registry order, with
+          // guide moved last as in its default toolbar), plus task-list and
+          // a generic file button for video/audio/other files EasyMDE has
+          // no built-in flow for. Headings get just the single cycling
+          // "heading" button — the heading-smaller/bigger/1/2/3 variants
+          // are intentionally omitted. The URL-prompt "image" button is
+          // omitted too: the built-in "upload-image" (Import an image)
+          // already covers image insertion through the upload flow above.
           toolbar: [
-            "bold", "italic", "strikethrough",
-            "heading", "heading-smaller", "heading-bigger",
-            "heading-1", "heading-2", "heading-3", "|",
-            "code", "quote", "unordered-list", "ordered-list", "clean-block", "|",
-            "link", "image", "upload-image", "table", "horizontal-rule",
+            "bold", "italic", "strikethrough", "heading", "|",
+            "code", "quote", "unordered-list", "ordered-list",
+            {
+              name: "task-list",
+              action: toggleTaskList,
+              className: "fa fa-tasks",
+              title: "Task List",
+            },
+            "clean-block", "|",
+            "link", "upload-image", "table", "horizontal-rule",
             {
               name: "upload-file",
               action: pickAndUploadFile,
@@ -510,15 +495,6 @@
       });
     }
 
-    // Lexxy empty content is markup like "<p><br></p>": strip tags and &nbsp;.
-    // An attachment-only body (e.g. a lone uploaded image) is valid, matching
-    // Action Text's blank? semantics (HasContent on the Go side).
-    richTextContentBlank(content) {
-      const text = (content || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").trim();
-      if (text.length > 0) return false;
-      return !/<(img|video|audio|iframe|action-text-attachment)[\s>]/i.test(content || "");
-    }
-
     submit(event) {
       const mode = this.contentTypeSelectTarget.value;
 
@@ -528,14 +504,6 @@
           : null;
         const content = this.easymde ? this.easymde.value() : textarea ? textarea.value : "";
         if (!content.trim()) {
-          event.preventDefault();
-          alert("Content cannot be blank");
-          return false;
-        }
-      } else if (mode !== "html") {
-        const editor = this.richTextFieldTarget.querySelector('lexxy-editor, textarea');
-        const content = editor ? (editor.value ?? editor.getAttribute("value") ?? "") : "";
-        if (this.richTextContentBlank(content)) {
           event.preventDefault();
           alert("Content cannot be blank");
           return false;
