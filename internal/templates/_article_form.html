@@ -1,5 +1,5 @@
 {{define "article_form"}}
-<form method="post" action="{{.FormAction}}" data-controller="content-form" data-action="submit->content-form#submit">
+<form method="post" action="{{.FormAction}}" enctype="multipart/form-data" data-controller="content-form" data-action="submit->content-form#submit">
   {{if .Errors}}
     <div class="form-errors">
       <strong>{{len .Errors}} error(s) prohibited this article from being saved:</strong>
@@ -17,7 +17,14 @@
           <select name="content_type" id="content_type_select" required data-content-form-target="contentTypeSelect" data-action="change->content-form#toggleContentType">
             <option value="markdown" {{if eq .Form.ContentType "markdown"}}selected{{end}}>Markdown</option>
             <option value="html" {{if eq .Form.ContentType "html"}}selected{{end}}>HTML Code</option>
+            <option value="html_archive" {{if eq .Form.ContentType "html_archive"}}selected{{end}}>HTML Archive (ZIP)</option>
           </select>
+        </div>
+        <div class="field" id="archive_content_field" data-content-form-target="archiveContentField"{{if ne .Form.ContentType "html_archive"}} style="display: none;"{{end}}>
+          <label for="archive_file">Archive ZIP</label>
+          <input type="file" id="archive_file" name="archive_file" accept=".zip,application/zip,application/x-zip-compressed">
+          <small class="help-text">Upload a ZIP of your static site — index.html at the top level or inside a single folder. It renders in a sandboxed frame; assets must use relative paths. Newsletters and crossposts of an archive article contain only its title, description and link.</small>
+          {{if .Form.HasArchive}}<small class="help-text">An archive is currently attached; choosing a new ZIP replaces it, leaving the field empty keeps it.</small>{{end}}
         </div>
         <div class="field" id="markdown_content_field" data-content-form-target="markdownContentField"{{if ne .Form.ContentType "markdown"}} style="display: none;"{{end}}>
           <textarea name="markdown_content" rows="14" placeholder="Markdown Content">{{.Form.MarkdownContent}}</textarea>

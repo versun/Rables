@@ -2,7 +2,8 @@
 
 The deliverable is a single static binary plus a `data/` directory. All
 templates, migrations and assets are embedded; the only runtime state is
-`DATA_DIR` (SQLite `rables.db` + uploaded `files/`).
+`DATA_DIR` (SQLite `rables.db` + uploaded `files/` + extracted
+`archives/` trees for html_archive posts).
 
 Required environment:
 
@@ -90,7 +91,9 @@ Restart the service afterwards to drop the in-memory render cache.
 `deploy/backup.sh` takes an online snapshot while the server keeps running:
 
 1. `sqlite3 .backup` — consistent copy of `rables.db` (WAL-safe);
-2. `tar.gz` of `DATA_DIR/files/` (uploaded media; `exports/` is regenerable).
+2. `tar.gz` of `DATA_DIR/files/` (uploaded media; `exports/` is regenerable);
+3. `tar.gz` of `DATA_DIR/archives/` (extracted html_archive trees — the only
+   copy of archive posts' content; `.staging-*` is skipped).
 
 ```sh
 # cron, daily at 03:17 UTC
@@ -101,10 +104,12 @@ Defaults: `DATA_DIR=/var/lib/rables`, `BACKUP_DIR=/var/backups/rables`,
 `KEEP=14` snapshots. Requires the `sqlite3` CLI on the host
 (`apt install sqlite3`). An `rsync` off-site copy line is included, commented
 out. Each snapshot is a timestamped directory with `rables.db` +
-`files.tar.gz`; older snapshots beyond `KEEP` are pruned.
+`files.tar.gz` (+ `archives.tar.gz` once an html_archive post exists); older
+snapshots beyond `KEEP` are pruned.
 
 Restore: stop the service, replace `DATA_DIR/rables.db` with the backed-up
-file, untar `files.tar.gz` into `DATA_DIR/`, start the service.
+file, untar `files.tar.gz` (and `archives.tar.gz` when present) into
+`DATA_DIR/`, start the service.
 
 ## Measured (T29 smoke/stress run, 2026-08-03, Apple Silicon)
 

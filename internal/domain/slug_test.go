@@ -65,7 +65,7 @@ func TestParameterizeConcurrent(t *testing.T) {
 	inputs := map[string]string{
 		"Café":         "cafe",
 		"naïve façade": "naive-facade",
-		"你好 World":    "world",
+		"你好 World":     "world",
 		"Hello--World": "hello-world",
 	}
 	var wg sync.WaitGroup

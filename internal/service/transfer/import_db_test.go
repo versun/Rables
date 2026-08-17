@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -978,5 +979,70 @@ func TestWriteFileAtomicLeavesNoPartialOnError(t *testing.T) {
 	}
 	if string(got) != "full-content" {
 		t.Errorf("retried copy content = %q, want %q", got, "full-content")
+	}
+}
+
+// An export bundle carries the extracted html_archive trees; the import
+// restores them with replace semantics (the imported row wins over a stale
+// local tree) while trees the source does not have stay untouched.
+func TestDBImporterArchivesRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	srcDB, srcDir := newTestDB(t)
+
+	write := func(root, rel, body string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(srcDir, "archives/article/1/index.html", "<h1>archived</h1>")
+	write(srcDir, "archives/article/1/css/style.css", "body{}")
+	// In-progress extractions must not travel in a backup.
+	write(srcDir, "archives/.staging-deadbeef/index.html", "partial")
+
+	zipPath := exportZip(t, srcDB, srcDir)
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	zr.Close()
+	if !slices.Contains(names, "archives/article/1/index.html") || !slices.Contains(names, "archives/article/1/css/style.css") {
+		t.Errorf("bundle missing archive entries: %v", names)
+	}
+	for _, n := range names {
+		if strings.Contains(n, ".staging-") {
+			t.Errorf("bundle contains staging litter %q", n)
+		}
+	}
+
+	dstDB, dstDir := newTestDB(t)
+	// A stale tree for the same record must be replaced; an unrelated tree stays.
+	write(dstDir, "archives/article/1/old.html", "stale")
+	write(dstDir, "archives/page/2/keep.html", "keep")
+
+	res, err := (&DBImporter{DB: dstDB, DataDir: dstDir}).Import(ctx, zipPath)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if res.ArchivesCopied != 2 {
+		t.Errorf("ArchivesCopied = %d, want 2", res.ArchivesCopied)
+	}
+	got, err := os.ReadFile(filepath.Join(dstDir, "archives", "article", "1", "index.html"))
+	if err != nil || string(got) != "<h1>archived</h1>" {
+		t.Errorf("restored index.html = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "archives", "article", "1", "old.html")); !os.IsNotExist(err) {
+		t.Error("stale archive file survived the replace")
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "archives", "page", "2", "keep.html")); err != nil {
+		t.Errorf("unrelated archive tree was removed: %v", err)
 	}
 }

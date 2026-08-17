@@ -114,6 +114,7 @@ func TestStoreSkipsVariantOverPixelBudget(t *testing.T) {
 		t.Errorf("files rows = %d, want 1 (original only)", rows)
 	}
 }
+
 // left behind as an orphan when the files row cannot be created.
 func TestStoreRemovesBlobWhenInsertFails(t *testing.T) {
 	database, err := db.Open(t.TempDir())

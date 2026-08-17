@@ -29,6 +29,7 @@ import (
 	"rables/internal/jobs"
 	"rables/internal/service/activity"
 	"rables/internal/service/contentmigrate"
+	"rables/internal/service/htmlarchive"
 	"rables/internal/service/media"
 )
 
@@ -51,9 +52,10 @@ type DBImporter struct {
 
 // DBImportResult summarizes one import run for the activity log.
 type DBImportResult struct {
-	Rows        map[string]int64 // table -> rows written (inserted or updated)
-	BlobsCopied int
-	BlobsKept   int // already on disk, left untouched
+	Rows           map[string]int64 // table -> rows written (inserted or updated)
+	BlobsCopied    int
+	BlobsKept      int // already on disk, left untouched
+	ArchivesCopied int // archive tree files restored (replacing the local tree)
 }
 
 // dbImportTables are the content tables copied from the source database, in
@@ -103,6 +105,9 @@ func (z *DBImporter) Import(ctx context.Context, path string) (*DBImportResult, 
 	// a failed copy) must not leave orphan blobs no files row points at.
 	if stage != "" {
 		if err := z.restoreBlobs(filepath.Join(stage, "files"), res); err != nil {
+			return nil, &BlobRestoreError{Err: err}
+		}
+		if err := z.restoreArchives(filepath.Join(stage, "archives"), res); err != nil {
 			return nil, &BlobRestoreError{Err: err}
 		}
 	}
@@ -199,6 +204,52 @@ func (z *DBImporter) restoreBlobs(tree string, res *DBImportResult) error {
 			return fmt.Errorf("import db: restore blob %s: %w", rel, err)
 		}
 		res.BlobsCopied++
+		return nil
+	})
+}
+
+// restoreArchives copies the staged archives/ tree into <DataDir>/archives.
+// Unlike blobs (content-addressed, so an existing one is kept), an archive
+// tree is mutable per record, so a bundled tree replaces the local one
+// wholesale — matching the upsert semantics of the row copy. Entries failing
+// the TreeRel layout check are skipped like the litter in restoreBlobs.
+func (z *DBImporter) restoreArchives(tree string, res *DBImportResult) error {
+	info, err := os.Stat(tree)
+	if err != nil || !info.IsDir() {
+		return nil // bundles without archives are fine
+	}
+	replaced := map[string]bool{} // owner dirs already cleared this run
+	return filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(tree, p)
+		if err != nil {
+			return err
+		}
+		slash := filepath.ToSlash(rel)
+		if !htmlarchive.TreeRel(slash) {
+			return nil
+		}
+		parts := strings.Split(slash, "/")
+		owner := filepath.Join(z.DataDir, "archives", parts[0], parts[1])
+		if !replaced[owner] {
+			if err := os.RemoveAll(owner); err != nil {
+				return err
+			}
+			replaced[owner] = true
+		}
+		dest := filepath.Join(z.DataDir, "archives", filepath.FromSlash(slash))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if err := copyFile(p, dest); err != nil {
+			return fmt.Errorf("import db: restore archive %s: %w", slash, err)
+		}
+		res.ArchivesCopied++
 		return nil
 	})
 }
@@ -682,7 +733,7 @@ func formatDBImportResult(res *DBImportResult) string {
 	for _, n := range res.Rows {
 		written += n
 	}
-	return fmt.Sprintf("rows_written=%d blobs_copied=%d blobs_kept=%d", written, res.BlobsCopied, res.BlobsKept)
+	return fmt.Sprintf("rows_written=%d blobs_copied=%d blobs_kept=%d archives_copied=%d", written, res.BlobsCopied, res.BlobsKept, res.ArchivesCopied)
 }
 
 // RegisterImportDBHandler installs the kind "import_db" job handler. Import

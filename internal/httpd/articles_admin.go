@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"rables/internal/jobs"
 	articlesvc "rables/internal/service/articles"
 	"rables/internal/service/comments"
+	"rables/internal/service/htmlarchive"
 	tagsvc "rables/internal/service/tags"
 	"rables/internal/templates"
 )
@@ -518,6 +520,7 @@ type adminArticleForm struct {
 	ContentType      string
 	HTMLContent      string // html body (also how legacy rich_text records edit)
 	MarkdownContent  string // markdown source
+	HasArchive       bool   // an extracted html_archive tree exists for this record
 	Description      string
 	MetaTitle        string
 	MetaImage        string
@@ -588,6 +591,11 @@ func (s *Server) formNewsletterEnabled(ctx context.Context) bool {
 // adminArticlesCreate handles POST /admin/posts, mirroring
 // Admin::ArticlesController#create.
 func (s *Server) adminArticlesCreate(w http.ResponseWriter, r *http.Request) {
+	if err := s.parseContentForm(w, r); err != nil {
+		s.formParseError(w, err)
+		return
+	}
+	defer discardContentForm(r)
 	data, ok := s.newArticleFormData(w, r)
 	if !ok {
 		return
@@ -597,6 +605,18 @@ func (s *Server) adminArticlesCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	staging, archiveErr := s.stageArticleArchive(r, &params, nil)
+	if archiveErr != nil {
+		data.Errors = []string{archiveErr.Error()}
+		data.Form = articleFormFromParams(params, data.TimeZone)
+		s.render(w, http.StatusUnprocessableEntity, "admin_articles_new", data)
+		return
+	}
+	defer func() {
+		if staging != "" {
+			os.RemoveAll(staging)
+		}
+	}()
 	article, validationErrs, err := articlesvc.Save(r.Context(), s.DB, nil, params)
 	if err != nil {
 		s.Log.Error("create article", "error", err)
@@ -611,9 +631,20 @@ func (s *Server) adminArticlesCreate(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusUnprocessableEntity, "admin_articles_new", data)
 		return
 	}
+	flash := templates.Flash{Notice: "Article was successfully created."}
+	if err := s.commitFormArchive(staging, htmlarchive.Article, article.ID, "", params.ContentType); err != nil {
+		// The row is saved; only the archive install failed. Say so instead
+		// of a bare 500 so the admin re-uploads the ZIP from the edit page
+		// instead of retrying the create. staging stays set: the deferred
+		// cleanup removes the uncommitted tree.
+		s.Log.Error("install article archive", "id", article.ID, "error", err)
+		flash = templates.Flash{Alert: "Article was created, but the archive could not be installed — re-upload the ZIP from the edit page."}
+	} else {
+		staging = "" // committed; the deferred cleanup must not remove it
+	}
 	s.logArticleActivity(r.Context(), "article", "created", 0,
 		fmt.Sprintf("title=%s slug=%s", activityQuote(article.Title.String), activityQuote(article.Slug.String)))
-	s.SetFlash(w, templates.Flash{Notice: "Article was successfully created."})
+	s.SetFlash(w, flash)
 	if r.PostFormValue("create_and_add_another") != "" {
 		http.Redirect(w, r, "/admin/posts/new", http.StatusFound)
 		return
@@ -662,6 +693,11 @@ func (s *Server) adminArticlesUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if err := s.parseContentForm(w, r); err != nil {
+		s.formParseError(w, err)
+		return
+	}
+	defer discardContentForm(r)
 	data, ok := s.newArticleFormData(w, r)
 	if !ok {
 		return
@@ -673,6 +709,18 @@ func (s *Server) adminArticlesUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	staging, archiveErr := s.stageArticleArchive(r, &params, &existing)
+	if archiveErr != nil {
+		data.Errors = []string{archiveErr.Error()}
+		data.Form = articleFormFromParams(params, data.TimeZone)
+		s.render(w, http.StatusUnprocessableEntity, "admin_articles_edit", data)
+		return
+	}
+	defer func() {
+		if staging != "" {
+			os.RemoveAll(staging)
+		}
+	}()
 	article, validationErrs, err := articlesvc.Save(ctx, s.DB, &existing, params)
 	if err != nil {
 		s.Log.Error("update article", "error", err)
@@ -687,9 +735,20 @@ func (s *Server) adminArticlesUpdate(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusUnprocessableEntity, "admin_articles_edit", data)
 		return
 	}
+	flash := templates.Flash{Notice: "Article was successfully updated."}
+	if err := s.commitFormArchive(staging, htmlarchive.Article, article.ID, existing.ContentType, params.ContentType); err != nil {
+		// The row is saved; only the archive install failed. Say so instead
+		// of a bare 500 so the admin re-uploads the ZIP from the edit page
+		// instead of retrying the update. staging stays set: the deferred
+		// cleanup removes the uncommitted tree.
+		s.Log.Error("install article archive", "id", article.ID, "error", err)
+		flash = templates.Flash{Alert: "Article was updated, but the archive could not be installed — re-upload the ZIP from the edit page."}
+	} else {
+		staging = "" // committed; the deferred cleanup must not remove it
+	}
 	s.logArticleActivity(ctx, "article", "updated", 0,
 		fmt.Sprintf("title=%s slug=%s", activityQuote(article.Title.String), activityQuote(article.Slug.String)))
-	s.SetFlash(w, templates.Flash{Notice: "Article was successfully updated."})
+	s.SetFlash(w, flash)
 	http.Redirect(w, r, "/admin/posts", http.StatusFound)
 }
 
@@ -1194,10 +1253,12 @@ func (s *Server) parseArticleForm(r *http.Request, existing *query.Article) (art
 		tz = st.TimeZone
 	}
 
-	// The form offers markdown and html only; an explicit rich_text value is a
-	// legacy submission (the Lexxy editor is gone) and still reads the old
-	// content param — Save sanitizes it like before and the service stores it
-	// as html. Anything unknown falls back to markdown.
+	// The form offers markdown, html and html_archive; an explicit rich_text
+	// value is a legacy submission (the Lexxy editor is gone) and still reads
+	// the old content param — Save sanitizes it like before and the service
+	// stores it as html. html_archive has no body param: the content is the
+	// uploaded ZIP, staged by the handler. Anything unknown falls back to
+	// markdown.
 	contentType := r.PostFormValue("content_type")
 	raw := r.PostFormValue("markdown_content")
 	switch contentType {
@@ -1205,6 +1266,8 @@ func (s *Server) parseArticleForm(r *http.Request, existing *query.Article) (art
 		raw = r.PostFormValue("html_content")
 	case string(domain.ContentTypeRichText):
 		raw = r.PostFormValue("content")
+	case string(domain.ContentTypeHTMLArchive):
+		raw = ""
 	default:
 		contentType = string(domain.ContentTypeMarkdown)
 	}
@@ -1322,6 +1385,8 @@ func (s *Server) articleFormFromArticle(ctx context.Context, article query.Artic
 	if contentType == string(domain.ContentTypeRichText) {
 		contentType = string(domain.ContentTypeHTML)
 	}
+	hasArchive := contentType == string(domain.ContentTypeHTMLArchive) &&
+		htmlarchive.Has(s.Cfg.DataDir, htmlarchive.Article, article.ID)
 	return adminArticleForm{
 		Title:            article.Title.String,
 		Slug:             article.Slug.String,
@@ -1329,6 +1394,7 @@ func (s *Server) articleFormFromArticle(ctx context.Context, article query.Artic
 		ContentType:      contentType,
 		HTMLContent:      article.ContentHtml.String,
 		MarkdownContent:  article.ContentMarkdown.String,
+		HasArchive:       hasArchive,
 		Description:      article.Description.String,
 		MetaTitle:        article.MetaTitle.String,
 		MetaImage:        article.MetaImage.String,
@@ -1372,8 +1438,10 @@ func articleFormFromParams(p articlesvc.SaveParams, tzName string) adminArticleF
 		form.MarkdownContent = p.ContentHTML
 	} else {
 		// html, plus legacy rich_text submissions: re-render through the HTML
-		// editor.
+		// editor. html_archive has no body to re-render; HasArchive keeps the
+		// "current archive" note visible on the re-rendered form.
 		form.HTMLContent = p.ContentHTML
+		form.HasArchive = p.HasExistingArchive
 		if p.ContentType == string(domain.ContentTypeRichText) {
 			form.ContentType = string(domain.ContentTypeHTML)
 		}

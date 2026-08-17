@@ -45,7 +45,9 @@ func TestCommentStatusValues(t *testing.T) {
 }
 
 func TestContentTypeValues(t *testing.T) {
-	if ContentTypeRichText != "rich_text" || ContentTypeHTML != "html" {
-		t.Errorf("unexpected content types: %q %q", ContentTypeRichText, ContentTypeHTML)
+	if ContentTypeRichText != "rich_text" || ContentTypeHTML != "html" ||
+		ContentTypeMarkdown != "markdown" || ContentTypeHTMLArchive != "html_archive" {
+		t.Errorf("unexpected content types: %q %q %q %q",
+			ContentTypeRichText, ContentTypeHTML, ContentTypeMarkdown, ContentTypeHTMLArchive)
 	}
 }

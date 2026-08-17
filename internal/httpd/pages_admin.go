@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"rables/internal/db/query"
 	"rables/internal/domain"
 	"rables/internal/jobs"
+	"rables/internal/service/htmlarchive"
 	"rables/internal/templates"
 )
 
@@ -260,6 +262,7 @@ type adminPageFormData struct {
 	StatusName       string // "" for new records (the prompt stays selected)
 	HTMLContent      string // content_html shown in the html textarea (also how legacy rich_text records edit)
 	MarkdownContent  string // content_markdown source shown in the markdown textarea
+	HasArchive       bool   // an extracted html_archive tree exists for this page
 	ScheduledAtValue string // datetime-local value in the site time zone
 }
 
@@ -301,6 +304,9 @@ func (s *Server) adminPagesEdit(w http.ResponseWriter, r *http.Request) {
 			data.Page.ContentType = string(domain.ContentTypeHTML)
 		}
 	}
+	if page.ContentType == string(domain.ContentTypeHTMLArchive) {
+		data.HasArchive = htmlarchive.Has(s.Cfg.DataDir, htmlarchive.Page, page.ID)
+	}
 	data.ScheduledAtValue = s.formatScheduledAt(r, page.ScheduledAt)
 	s.render(w, http.StatusOK, "admin_pages_edit", data)
 }
@@ -308,11 +314,21 @@ func (s *Server) adminPagesEdit(w http.ResponseWriter, r *http.Request) {
 // adminPagesCreate handles POST /admin/pages, mirroring
 // Admin::PagesController#create.
 func (s *Server) adminPagesCreate(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if err := s.parseContentForm(w, r); err != nil {
+		s.formParseError(w, err)
 		return
 	}
-	input, errs := s.parsePageForm(r, 0)
+	defer discardContentForm(r)
+	staging, archiveProvided, hasExistingArchive, archiveErr := s.stagePageArchive(r, nil)
+	defer func() {
+		if staging != "" {
+			os.RemoveAll(staging)
+		}
+	}()
+	input, errs := s.parsePageForm(r, 0, archiveProvided, hasExistingArchive)
+	if archiveErr != nil {
+		errs = append([]string{archiveErr.Error()}, errs...)
+	}
 	if len(errs) > 0 {
 		s.logPageActivity(r.Context(), "failed", 2, pageActivityDescription(input.Title.String, input.Slug.String, strings.Join(errs, ", ")))
 		data := input.formData(true)
@@ -348,9 +364,20 @@ func (s *Server) adminPagesCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	flash := templates.Flash{Notice: "Page was successfully created."}
+	if err := s.commitFormArchive(staging, htmlarchive.Page, page.ID, "", input.ContentType); err != nil {
+		// The row is saved; only the archive install failed. Say so instead
+		// of a bare 500 so the admin re-uploads the ZIP from the edit page
+		// instead of retrying the create. staging stays set: the deferred
+		// cleanup removes the uncommitted tree.
+		s.Log.Error("install page archive", "id", page.ID, "error", err)
+		flash = templates.Flash{Alert: "Page was created, but the archive could not be installed — re-upload the ZIP from the edit page."}
+	} else {
+		staging = "" // committed; the deferred cleanup must not remove it
+	}
 	s.schedulePagePublication(r.Context(), page.ID, input.Status, input.ScheduledAt)
 	s.logPageActivity(r.Context(), "created", 0, pageActivityDescription(page.Title.String, page.Slug.String, ""))
-	s.SetFlash(w, templates.Flash{Notice: "Page was successfully created."})
+	s.SetFlash(w, flash)
 	http.Redirect(w, r, "/admin/pages", http.StatusFound)
 }
 
@@ -368,11 +395,21 @@ func (s *Server) adminPagesUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	if err := s.parseContentForm(w, r); err != nil {
+		s.formParseError(w, err)
 		return
 	}
-	input, errs := s.parsePageForm(r, page.ID)
+	defer discardContentForm(r)
+	staging, archiveProvided, hasExistingArchive, archiveErr := s.stagePageArchive(r, &page)
+	defer func() {
+		if staging != "" {
+			os.RemoveAll(staging)
+		}
+	}()
+	input, errs := s.parsePageForm(r, page.ID, archiveProvided, hasExistingArchive)
+	if archiveErr != nil {
+		errs = append([]string{archiveErr.Error()}, errs...)
+	}
 	if len(errs) > 0 {
 		s.logPageActivity(r.Context(), "failed", 2, pageActivityDescription(input.Title.String, input.Slug.String, strings.Join(errs, ", ")))
 		data := input.formData(false)
@@ -411,9 +448,20 @@ func (s *Server) adminPagesUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	flash := templates.Flash{Notice: "Page was successfully updated."}
+	if err := s.commitFormArchive(staging, htmlarchive.Page, updated.ID, page.ContentType, input.ContentType); err != nil {
+		// The row is saved; only the archive install failed. Say so instead
+		// of a bare 500 so the admin re-uploads the ZIP from the edit page
+		// instead of retrying the update. staging stays set: the deferred
+		// cleanup removes the uncommitted tree.
+		s.Log.Error("install page archive", "id", updated.ID, "error", err)
+		flash = templates.Flash{Alert: "Page was updated, but the archive could not be installed — re-upload the ZIP from the edit page."}
+	} else {
+		staging = "" // committed; the deferred cleanup must not remove it
+	}
 	s.schedulePagePublication(r.Context(), updated.ID, input.Status, input.ScheduledAt)
 	s.logPageActivity(r.Context(), "updated", 0, pageActivityDescription(updated.Title.String, updated.Slug.String, ""))
-	s.SetFlash(w, templates.Flash{Notice: "Page was successfully updated."})
+	s.SetFlash(w, flash)
 	http.Redirect(w, r, "/admin/pages", http.StatusFound)
 }
 
@@ -529,7 +577,9 @@ func (s *Server) adminPagesBatch(w http.ResponseWriter, r *http.Request, action 
 }
 
 // deletePageWithComments mirrors @page.destroy! with dependent: :destroy on
-// the polymorphic comments association.
+// the polymorphic comments association. The extracted html_archive tree (a
+// no-op for other content types) is removed after commit, best effort like
+// the article blob cleanup.
 func (s *Server) deletePageWithComments(ctx context.Context, pageID int64) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -543,7 +593,13 @@ func (s *Server) deletePageWithComments(ctx context.Context, pageID int64) error
 	if err := q.DeletePageByID(ctx, pageID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if err := htmlarchive.Remove(s.Cfg.DataDir, htmlarchive.Page, pageID); err != nil {
+		s.Log.Warn("remove page archive tree", "page_id", pageID, "error", err)
+	}
+	return nil
 }
 
 // schedulePagePublication mirrors Page#schedule_publication with the
@@ -588,6 +644,10 @@ type pageFormInput struct {
 	Status         domain.Status
 	Comment        int64
 	ScheduledAt    sql.NullInt64
+	// archiveProvided/hasExistingArchive feed the html_archive blank check and
+	// the re-rendered form's "current archive" note.
+	archiveProvided    bool
+	hasExistingArchive bool
 }
 
 // formData rebuilds the re-rendered form (Rails render :new/:edit with the
@@ -606,6 +666,7 @@ func (in pageFormInput) formData(isNew bool) adminPageFormData {
 		},
 		IsNew:      isNew,
 		StatusName: in.Status.String(),
+		HasArchive: in.hasExistingArchive,
 	}
 	if in.ContentType == string(domain.ContentTypeMarkdown) {
 		data.MarkdownContent = in.RawContent
@@ -629,7 +690,9 @@ func (in pageFormInput) formData(isNew bool) adminPageFormData {
 // A legacy rich_text submission reads the old content param but stores as
 // html; other unknown enum values are validation errors
 // (Rails raises ArgumentError instead; the form never sends them).
-func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput, []string) {
+// html_archive stores no body: archiveProvided/hasExistingArchive carry the
+// caller's ZIP staging result for the presence check.
+func (s *Server) parsePageForm(r *http.Request, excludeID int64, archiveProvided, hasExistingArchive bool) (pageFormInput, []string) {
 	var in pageFormInput
 	in.Title = sql.NullString{String: r.FormValue("title"), Valid: true}
 	// Handwritten slugs are stripped of URL-unsafe chars like article slugs
@@ -637,11 +700,15 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 	// blank validation below instead of being stored unreachable.
 	in.Slug = sql.NullString{String: domain.CleanSlug(r.FormValue("slug")), Valid: true}
 	in.ContentType = r.FormValue("content_type")
+	in.archiveProvided = archiveProvided
+	in.hasExistingArchive = hasExistingArchive
 	switch in.ContentType {
 	case string(domain.ContentTypeHTML):
 		in.RawContent = r.FormValue("html_content")
 	case string(domain.ContentTypeMarkdown):
 		in.RawContent = r.FormValue("markdown_content")
+	case string(domain.ContentTypeHTMLArchive):
+		// No body param: the content is the uploaded ZIP, staged by the caller.
 	default:
 		in.RawContent = r.FormValue("content")
 	}
@@ -670,7 +737,7 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 		errs = append(errs, "Redirect url is not a valid URL")
 	}
 	switch domain.ContentType(in.ContentType) {
-	case domain.ContentTypeRichText, domain.ContentTypeHTML, domain.ContentTypeMarkdown:
+	case domain.ContentTypeRichText, domain.ContentTypeHTML, domain.ContentTypeMarkdown, domain.ContentTypeHTMLArchive:
 	default:
 		errs = append(errs, "Content type is not included in the list")
 	}
@@ -705,6 +772,11 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 		if domain.IsBlank(in.RawContent) {
 			errs = append(errs, "Content can't be blank")
 		}
+	case string(domain.ContentTypeHTMLArchive):
+		// A create needs the upload; an update may keep the stored tree.
+		if !archiveProvided && !hasExistingArchive {
+			errs = append(errs, "Archive file can't be blank")
+		}
 	default:
 		if !domain.HasContent(in.RawContent) {
 			errs = append(errs, "Content can't be blank")
@@ -718,7 +790,13 @@ func (s *Server) parsePageForm(r *http.Request, excludeID int64) (pageFormInput,
 	// verbatim — content_type keeps only the "skip sanitize" semantic (0001);
 	// the other types are sanitized once at write time (decision log
 	// 2026-08-03, spec 4.4). A legacy rich_text submission takes that same
-	// sanitized path and then stores as html.
+	// sanitized path and then stores as html. html_archive pages store no
+	// body: the content is the extracted ZIP on disk, iframe-embedded by the
+	// public template.
+	if in.ContentType == string(domain.ContentTypeHTMLArchive) {
+		in.StoredContent = sql.NullString{}
+		return in, nil
+	}
 	body := in.RawContent
 	if in.ContentType == string(domain.ContentTypeMarkdown) {
 		body = domain.RenderMarkdown(body)

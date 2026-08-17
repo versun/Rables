@@ -73,9 +73,13 @@
           {{end}}
         </small>
         {{.SourceRef}}
+        {{if .ArchiveURL}}
+        <iframe class="archive-frame" src="{{.ArchiveURL}}" sandbox="allow-scripts allow-popups" title="{{.Title}}"></iframe>
+        {{else}}
         <div class="article-content">
           {{.ContentHTML}}
         </div>
+        {{end}}
       </article>
       {{if .Comments.Enabled}}
       <div id="comments-section">

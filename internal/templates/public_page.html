@@ -6,9 +6,13 @@
   <main class="main-content">
     <div class="limiter">
       <article>
+        {{if .ArchiveURL}}
+        <iframe class="archive-frame" src="{{.ArchiveURL}}" sandbox="allow-scripts allow-popups" title="{{.Title}}"></iframe>
+        {{else}}
         <div class="article-content">
           {{.ContentHTML}}
         </div>
+        {{end}}
       </article>
       {{if .Comments.Enabled}}
       <hr>

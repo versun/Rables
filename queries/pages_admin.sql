@@ -5,6 +5,9 @@
 -- name: GetAdminPageBySlug :one
 SELECT * FROM pages WHERE slug = ?;
 
+-- name: GetAdminPageByID :one
+SELECT * FROM pages WHERE id = ?;
+
 -- Admin list: optional status filter (status_filter -1 = all), 100 per page.
 -- sqlc cannot parameterize the ORDER BY column or direction, so the six sort
 -- combinations the admin list offers (page_order/created_at/updated_at x

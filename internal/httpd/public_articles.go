@@ -13,6 +13,7 @@ import (
 	"rables/internal/db/query"
 	"rables/internal/domain"
 	"rables/internal/service/comments"
+	"rables/internal/service/htmlarchive"
 	"rables/internal/templates"
 )
 
@@ -174,6 +175,7 @@ type publicArticleData struct {
 	DateUnix        int64
 	UpdatedUnix     int64
 	ContentHTML     template.HTML
+	ArchiveURL      string // html_archive iframe src; "" renders ContentHTML
 	MetaTitle       string
 	MetaDescription string
 	MetaImage       string
@@ -253,6 +255,7 @@ func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request, slug 
 		DateUnix:        article.CreatedAt,
 		UpdatedUnix:     article.UpdatedAt,
 		ContentHTML:     s.renderCache().fetch("article", article.ID, article.UpdatedAt, article.ContentHtml.String),
+		ArchiveURL:      publicArchiveURL(article.ContentType, htmlarchive.Article, article.ID),
 		MetaTitle:       metaTitle,
 		MetaDescription: metaDescription,
 		MetaImage:       metaImage,
@@ -261,6 +264,15 @@ func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request, slug 
 		SourceRef:       buildSourceReference(article.SourceContent.String, article.SourceUrl.String),
 		Comments:        section,
 	})
+}
+
+// publicArchiveURL returns the sandboxed iframe src for an html_archive
+// record, "" for every other content type.
+func publicArchiveURL(contentType string, kind htmlarchive.Kind, id int64) string {
+	if contentType != string(domain.ContentTypeHTMLArchive) {
+		return ""
+	}
+	return archiveURL(kind, id)
 }
 
 // seoDescription mirrors Article#seo_meta_description: the squished plain

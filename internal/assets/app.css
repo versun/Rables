@@ -603,6 +603,18 @@ h2 {
     max-width: 800px;
 }
 
+/* html_archive posts/pages: the uploaded static site renders inside this
+   sandboxed frame (see internal/httpd/archives.go). */
+.archive-frame {
+    display: block;
+    width: 100%;
+    max-width: 800px;
+    height: 75vh;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+}
+
 .article-content pre,
 .post-content pre {
     background-color: #f6f8fa;
@@ -1229,6 +1241,11 @@ select:disabled {
 [data-theme="dark"] .comment-form {
     background: #222;
     border-color: var(--border-color);
+}
+
+[data-theme="dark"] .archive-frame {
+    border-color: var(--border-color);
+    background: var(--bg-color);
 }
 
 [data-theme="dark"] .comment-form-input,

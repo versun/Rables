@@ -19,6 +19,7 @@ import (
 	"rables/internal/db/query"
 	"rables/internal/domain"
 	"rables/internal/jobs"
+	"rables/internal/service/htmlarchive"
 	"rables/internal/service/media"
 	tagsvc "rables/internal/service/tags"
 )
@@ -68,7 +69,7 @@ type (
 type SaveParams struct {
 	Title           string
 	Slug            string
-	ContentType     string // domain.ContentTypeHTML | domain.ContentTypeMarkdown (a legacy rich_text submission stores as html)
+	ContentType     string // domain.ContentTypeHTML | ContentTypeMarkdown | ContentTypeHTMLArchive (a legacy rich_text submission stores as html)
 	ContentHTML     string // raw rich-text body, raw html_content, or markdown source
 	Description     string
 	MetaTitle       string
@@ -85,7 +86,13 @@ type SaveParams struct {
 	Crosspost       map[string]bool
 	TagList         string
 	SocialURLs      map[string]string
-	Now             time.Time // zero => time.Now
+	// Archive validation inputs for ContentTypeHTMLArchive (the archive body
+	// never passes through here): ArchiveProvided reports a fresh ZIP was
+	// uploaded and validated into staging, HasExistingArchive that the stored
+	// record already has one on disk. At least one must be true.
+	ArchiveProvided    bool
+	HasExistingArchive bool
+	Now                time.Time // zero => time.Now
 }
 
 // ParseStatus maps the form status string to the domain enum; ok is false
@@ -168,15 +175,22 @@ func Save(ctx context.Context, db *sql.DB, existing *query.Article, p SaveParams
 	// content_html reader (public page, feed, newsletter, crosspost) treat
 	// them exactly like rich-text articles. Raw html articles skip that pass:
 	// content_type keeps only the "skip sanitize" semantic (0001), so the
-	// admin-entered HTML is stored verbatim.
+	// admin-entered HTML is stored verbatim. html_archive articles store no
+	// body at all: the content is the extracted ZIP on disk, iframe-embedded
+	// by the public templates; content_html stays NULL and feed/newsletter/
+	// crosspost fall back to the title/description.
 	isMarkdown := p.ContentType == string(domain.ContentTypeMarkdown)
+	isArchive := p.ContentType == string(domain.ContentTypeHTMLArchive)
 	body := p.ContentHTML
 	if isMarkdown {
 		body = domain.RenderMarkdown(body)
 	}
 	contentHTML := body
-	if p.ContentType != string(domain.ContentTypeHTML) {
+	if p.ContentType != string(domain.ContentTypeHTML) && !isArchive {
 		contentHTML = domain.AddLazyLoading(domain.SanitizeHTML(body))
+	}
+	if isArchive {
+		contentHTML = ""
 	}
 	excerpt := domain.BuildExcerpt(p.Description, contentHTML)
 
@@ -212,6 +226,12 @@ func Save(ctx context.Context, db *sql.DB, existing *query.Article, p SaveParams
 	case isMarkdown:
 		if domain.IsBlank(p.ContentHTML) {
 			errs = append(errs, "Content can't be blank")
+		}
+	case isArchive:
+		// The archive ZIP is validated and staged by the handler before Save;
+		// a create needs the upload, an update may keep the stored tree.
+		if !p.ArchiveProvided && !p.HasExistingArchive {
+			errs = append(errs, "Archive file can't be blank")
 		}
 	case !domain.HasContent(contentHTML):
 		errs = append(errs, "Content can't be blank")
@@ -540,7 +560,9 @@ func Destroy(ctx context.Context, db *sql.DB, id int64, dataDir string) error {
 	}
 
 	// Disk blobs are removed only after the transaction commits; failures are
-	// logged, never fatal. Only well-formed keys ever reach a disk path.
+	// logged, never fatal. Only well-formed keys ever reach a disk path. The
+	// html_archive tree (a no-op RemoveAll for other content types) goes with
+	// the same best-effort rule.
 	for _, ref := range doomed {
 		if !media.ValidKey(ref.key) {
 			slog.Warn("articles: skip blob removal, unsafe key", "key", ref.key)
@@ -550,6 +572,9 @@ func Destroy(ctx context.Context, db *sql.DB, id int64, dataDir string) error {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("articles: remove destroyed article blob", "key", ref.key, "error", err)
 		}
+	}
+	if err := htmlarchive.Remove(dataDir, htmlarchive.Article, id); err != nil {
+		slog.Warn("articles: remove destroyed article archive", "id", id, "error", err)
 	}
 	return nil
 }
@@ -719,13 +744,16 @@ func nullString(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: !domain.IsBlank(s)}
 }
 
-// contentTypeOrDefault normalizes the stored content_type: only markdown and
-// html are written anymore. A legacy rich_text submission stores as html —
-// its body is sanitized HTML, which is exactly what the html editor edits.
+// contentTypeOrDefault normalizes the stored content_type: markdown, html and
+// html_archive are written as-is. A legacy rich_text submission stores as
+// html — its body is sanitized HTML, which is exactly what the html editor
+// edits.
 func contentTypeOrDefault(ct string) string {
 	switch ct {
 	case string(domain.ContentTypeMarkdown):
 		return string(domain.ContentTypeMarkdown)
+	case string(domain.ContentTypeHTMLArchive):
+		return string(domain.ContentTypeHTMLArchive)
 	}
 	return string(domain.ContentTypeHTML)
 }

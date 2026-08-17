@@ -61,4 +61,8 @@ const (
 	ContentTypeRichText ContentType = "rich_text"
 	ContentTypeHTML     ContentType = "html"
 	ContentTypeMarkdown ContentType = "markdown"
+	// ContentTypeHTMLArchive stores no body: the content is an uploaded
+	// static-site ZIP extracted under <DataDir>/archives and iframe-embedded
+	// by the public templates (see internal/service/htmlarchive).
+	ContentTypeHTMLArchive ContentType = "html_archive"
 )

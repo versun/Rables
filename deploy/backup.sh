@@ -5,6 +5,11 @@
 #      the server keeps serving while this runs).
 #   2. tar of DATA_DIR/files/ — uploaded media (exports/ is regenerable and
 #      therefore skipped).
+#   3. tar of DATA_DIR/archives/ — extracted html_archive trees. Unlike media
+#      blobs these are the ONLY copy of archive posts' content (the DB rows
+#      store no body), so losing them leaves archive pages serving a 404
+#      iframe. In-progress .staging-* extractions are skipped like the
+#      in-app export does.
 #
 # Usage:
 #   ./backup.sh                      # uses the defaults below
@@ -26,6 +31,10 @@ sqlite3 "$DATA_DIR/rables.db" ".backup '$dest/rables.db'"
 
 if [ -d "$DATA_DIR/files" ]; then
   tar -C "$DATA_DIR" -czf "$dest/files.tar.gz" files
+fi
+
+if [ -d "$DATA_DIR/archives" ]; then
+  tar -C "$DATA_DIR" --exclude='archives/.staging-*' -czf "$dest/archives.tar.gz" archives
 fi
 
 # Retention: keep only the newest KEEP snapshots.

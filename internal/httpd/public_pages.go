@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"rables/internal/domain"
+	"rables/internal/service/htmlarchive"
 	"rables/internal/templates"
 )
 
@@ -16,6 +17,7 @@ type publicPageData struct {
 	Chrome      siteChrome
 	Title       string
 	ContentHTML template.HTML
+	ArchiveURL  string // html_archive iframe src; "" renders ContentHTML
 	Comments    commentsSectionData
 }
 
@@ -69,6 +71,7 @@ func (s *Server) publicPageShow(w http.ResponseWriter, r *http.Request) {
 		Chrome:      chrome,
 		Title:       page.Title.String,
 		ContentHTML: s.renderCache().fetch("page", page.ID, page.UpdatedAt, page.ContentHtml.String),
+		ArchiveURL:  publicArchiveURL(page.ContentType, htmlarchive.Page, page.ID),
 		Comments:    section,
 	})
 }

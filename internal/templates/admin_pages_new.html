@@ -16,7 +16,7 @@
 </div>
 {{end}}
 
-<form method="post" action="/admin/pages" data-controller="content-form" data-action="submit->content-form#submit">
+<form method="post" action="/admin/pages" enctype="multipart/form-data" data-controller="content-form" data-action="submit->content-form#submit">
   <div class="editor-layout">
     <div class="editor-main">
       <div class="card">
@@ -25,7 +25,14 @@
           <select id="content_type" name="content_type" required data-content-form-target="contentTypeSelect" data-action="change->content-form#toggleContentType">
             <option value="markdown" {{if eq .Page.ContentType "markdown"}}selected{{end}}>Markdown</option>
             <option value="html" {{if eq .Page.ContentType "html"}}selected{{end}}>HTML Code</option>
+            <option value="html_archive" {{if eq .Page.ContentType "html_archive"}}selected{{end}}>HTML Archive (ZIP)</option>
           </select>
+        </div>
+        <div class="field" data-content-form-target="archiveContentField"{{if ne .Page.ContentType "html_archive"}} style="display: none;"{{end}}>
+          <label for="archive_file">Archive ZIP</label>
+          <input type="file" id="archive_file" name="archive_file" accept=".zip,application/zip,application/x-zip-compressed">
+          <small>Upload a ZIP of your static site — index.html at the top level or inside a single folder. It renders in a sandboxed frame; assets must use relative paths.</small>
+          {{if .HasArchive}}<small>An archive is currently attached; choosing a new ZIP replaces it, leaving the field empty keeps it.</small>{{end}}
         </div>
         <div class="field" data-content-form-target="markdownContentField"{{if ne .Page.ContentType "markdown"}} style="display: none;"{{end}}>
           <label for="markdown_content">Markdown content</label>

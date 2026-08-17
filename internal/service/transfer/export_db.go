@@ -1,9 +1,11 @@
 // Database export (replacing the old CSV bundle): a zip containing a
 // consistent copy of the SQLite database (VACUUM INTO) plus every media blob
-// under data/files. The layout is what ImportDB consumes:
+// under data/files and every extracted html_archive tree under data/archives.
+// The layout is what ImportDB consumes:
 //
-//	rables.db:           full SQLite database copy
-//	files/xx/yy/<key>:   raw content of each media blob
+//	rables.db:                    full SQLite database copy
+//	files/xx/yy/<key>:            raw content of each media blob
+//	archives/<kind>/<id>/<path>:  extracted static-site files
 package transfer
 
 import (
@@ -24,6 +26,7 @@ import (
 
 	"rables/internal/jobs"
 	"rables/internal/service/activity"
+	"rables/internal/service/htmlarchive"
 	"rables/internal/service/media"
 )
 
@@ -81,9 +84,12 @@ func vacuumInto(ctx context.Context, db *sql.DB, dest string) error {
 }
 
 // zipBundle packs the staged database copy plus the media blobs under
-// data/files into <stage>.zip (entries sorted, relative slash paths).
+// data/files and the extracted html_archive trees under data/archives into
+// <stage>.zip (entries sorted, relative slash paths).
 // Files that do not match the blob layout (xx/yy/<key>) are skipped, so
-// litter like .DS_Store never makes it into a backup.
+// litter like .DS_Store never makes it into a backup; archive entries are
+// filtered through htmlarchive.TreeRel, which skips in-progress .staging-*
+// extractions the same way.
 //
 // The zip is assembled inside the staging directory and renamed to its final
 // name only once complete: a crash mid-write (SIGKILL/OOM) then leaves a
@@ -132,6 +138,30 @@ func (e *BundleExporter) zipBundle(stage, dbCopy string) (string, error) {
 	})
 	if walkErr != nil {
 		return "", fmt.Errorf("export: scan media files: %w", walkErr)
+	}
+
+	archivesRoot := filepath.Join(e.DataDir, "archives")
+	archivesErr := filepath.WalkDir(archivesRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == archivesRoot && os.IsNotExist(err) {
+				return nil // missing archives/ tree is fine (no archive posts yet)
+			}
+			return err
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(archivesRoot, path)
+		if err != nil {
+			return err
+		}
+		if slash := filepath.ToSlash(rel); htmlarchive.TreeRel(slash) {
+			entries["archives/"+slash] = path
+		}
+		return nil
+	})
+	if archivesErr != nil {
+		return "", fmt.Errorf("export: scan archive files: %w", archivesErr)
 	}
 
 	zipPath := stage + ".zip"

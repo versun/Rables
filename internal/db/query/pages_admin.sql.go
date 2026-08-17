@@ -139,6 +139,31 @@ func (q *Queries) DeletePageComments(ctx context.Context, commentableID sql.Null
 	return err
 }
 
+const getAdminPageByID = `-- name: GetAdminPageByID :one
+SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages WHERE id = ?
+`
+
+func (q *Queries) GetAdminPageByID(ctx context.Context, id int64) (Page, error) {
+	row := q.db.QueryRowContext(ctx, getAdminPageByID, id)
+	var i Page
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Slug,
+		&i.ContentHtml,
+		&i.ContentType,
+		&i.RedirectUrl,
+		&i.PageOrder,
+		&i.Status,
+		&i.Comment,
+		&i.ScheduledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ContentMarkdown,
+	)
+	return i, err
+}
+
 const getAdminPageBySlug = `-- name: GetAdminPageBySlug :one
 
 SELECT id, title, slug, content_html, content_type, redirect_url, page_order, status, comment, scheduled_at, created_at, updated_at, content_markdown FROM pages WHERE slug = ?

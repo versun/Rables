@@ -68,6 +68,7 @@ func NewRouter(s *Server) http.Handler {
 	RegisterPageAdminRoutes(r, s)
 	RegisterRedirectsRoutes(r, s)
 	RegisterStaticFilesRoutes(r, s)
+	RegisterArchiveRoutes(r, s)
 	RegisterActivitiesRoutes(r, s)
 	RegisterNewsletterRoutes(r, s)
 	RegisterSubscriberAdminRoutes(r, s)

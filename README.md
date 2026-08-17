@@ -1,92 +1,106 @@
-# Rables (Go)
+# Rables
 
-A pure-Go rewrite of [Rables](https://github.com/versun/Rables), the Rails personal blog system that runs https://versun.me.
-
-Single static binary + a `data/` directory. No Node.js, no frontend build step, no Redis/Postgres — SQLite (pure Go, no cgo) for everything.
-
-The Rails app in the parent directory remains the behavioral source of truth. The full execution spec, task breakdown (T01–T30), and the decision log live in [`../docs/plans/go-rewrite-plan.md`](../docs/plans/go-rewrite-plan.md).
-
-## Status
-
-All implementation tasks (T01–T29) are complete: core blog, admin, comments, subscriptions, newsletters, crossposting, Twitter sync, import/export, vanilla JS frontend, and deployment artifacts. Remaining: T30 (production cutover), which must be executed against the live environment.
+A self-hosted personal blog and publishing platform, written in Go. The whole
+app ships as a **single static binary** — templates, assets and migrations are
+embedded — with **SQLite** as the only datastore. It is a Go port of a Rails
+original; the schema and routes deliberately mirror the Rails behavior.
 
 ## Features
 
-- **Content**: articles & pages with draft/publish/schedule/trash/shared states, two editor modes (Markdown / raw HTML), tags, scheduled publishing with crosspost & newsletter snapshots
-- **Comments**: threaded comments with math captcha + per-IP rate limiting, admin moderation/reply, social comment import (Mastodon/Bluesky/X)
-- **Newsletter**: native SMTP or listmonk, tag-scoped subscriptions, double opt-in confirm/unsubscribe
-- **Crossposting**: Mastodon, Bluesky (hand-written XRPC + facets), X (OAuth1.0a, chunked media upload, quote-tweet/GIF rules); Xiaohongshu is log-only
-- **Twitter**: account sync (tweets archived as articles)
-- **Transfer**: full-site export (SQLite database + media files in one ZIP), import from a Rables export or bare database (upsert by id — a restore mechanism for fresh installs or the originating site, not a merge of two populated sites; users, including your own account, are overwritten), batch Markdown import (.md files with YAML front matter, one ZIP or a multi-file selection), RSS import (SSRF-hardened)
-- **Ops**: background jobs (`job_runs` table + in-process worker), cron scheduler, activity log, regex redirects, static file hosting
+**Writing & publishing**
+- Articles and standalone pages with a Markdown editor (EasyMDE) and image/file uploads
+- Draft / publish / schedule / trash / shared states; scheduled publishing runs as background jobs
+- Optional public route prefix for article URLs (per-request live setting)
+- Uploaded HTML archives served under `/archives/{kind}/{id}/`
+
+**Feed & discovery**
+- Full-site RSS at `/feed.xml`, per-tag RSS at `/tags/{slug}.rss`, `sitemap.xml`
+- Tags with published-article counts
+
+**Engagement**
+- Threaded comments with math captcha (HMAC-signed tokens) and admin moderation
+- Newsletter: native SMTP sender or listmonk, double opt-in subscribe/confirm/unsubscribe, per-tag subscriptions
+- Crossposting to Mastodon, Twitter/X, Bluesky and Xiaohongshu, with automatic comment fetch-back on a schedule
+- Ongoing Twitter/X timeline sync
+- Optional giscus integration, custom head code and custom CSS
+
+**Site management (admin)**
+- Regex redirects, static file hosting, social links, timezone, meta/SEO fields
+- Background job dashboard (`/admin/jobs`) with stale-job recovery, activity log
+- Import/export: full-site transfer (DB + files ZIP), RSS import, Markdown import;
+  `cmd/migrate-content` converts legacy `rich_text` content to Markdown in place
+
+**Security**
+- Session-cookie auth, rate-limited login/password/subscription endpoints
+- Origin checks on state-changing requests, SSRF guard for outbound fetches
+- Strict file permissions: data dir `0700`, database `0600`
 
 ## Quick start
 
-Requires Go ≥ 1.24 (developed on 1.26).
+Requires Go 1.26+.
 
-```bash
-go build -o server ./cmd/server
-
-HMAC_SECRET=change-me ./server
-# open http://localhost:8080/setup
+```sh
+HMAC_SECRET="$(openssl rand -hex 32)" go run ./cmd/server
 ```
 
-Configuration via environment variables:
+Open http://localhost:8080/setup to create the admin account, then log in at
+`/session/new`. All runtime state lives in `./data` (SQLite `rables.db` +
+uploaded `files/`); migrations run automatically at boot.
+
+## Configuration
 
 | Var | Default | Notes |
 |---|---|---|
 | `ADDR` | `:8080` | Listen address |
-| `DATA_DIR` | `./data` | SQLite DB + uploaded files live here |
-| `HMAC_SECRET` | *(required)* | Signs math-captcha tokens |
-| `ARTICLE_ROUTE_PREFIX` | *(empty)* | Fallback prefix for article URLs (e.g. `blog`); the admin setting at /admin/setting/edit overrides it and applies without a restart |
-| `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` (JSON logs to stdout) |
-| `TRUST_X_FORWARDED_FOR` | `false` | `1`/`true`/`yes`: key rate limits off the rightmost `X-Forwarded-For` hop (the one the proxy appended) — enable only behind a reverse proxy that appends to the header |
-| `SECURE_COOKIES` | `false` | `1`/`true`/`yes`: add `Secure` to session/flash cookies (enable when serving HTTPS) |
-
-## Development
-
-```bash
-# quality gate (run before handoff — must be all green)
-gofmt -l . && go vet ./... && go test ./...
-
-# regenerate sqlc code after editing queries/*.sql
-go tool sqlc generate
-
-# database migrations are embedded and applied automatically at startup
-# (migrations/*.sql via goose)
-```
-
-Conventions: timestamps are INTEGER unix seconds (UTC) everywhere; HTML forms are GET/POST only (Rails PATCH/DELETE actions map to POST path variants); each HTTP feature lives in `internal/httpd/<feature>.go` and exposes `RegisterXxxRoutes`, wired centrally in `router.go`.
+| `DATA_DIR` | `./data` | SQLite DB + uploaded files |
+| `HMAC_SECRET` | — | **Required**; signs math-captcha tokens |
+| `LOG_LEVEL` | `info` | `debug\|info\|warn\|error` |
+| `ARTICLE_ROUTE_PREFIX` | — | Fallback public route prefix; the admin setting takes precedence |
+| `TRUST_X_FORWARDED_FOR` | `false` | Key rate limits off `X-Forwarded-For`; only behind a trusted proxy |
+| `SECURE_COOKIES` | `false` | Add `Secure` to session/flash cookies; enable for HTTPS |
 
 ## Deployment
 
-See [`deploy/README.md`](deploy/README.md). In short:
+See [deploy/README.md](deploy/README.md) for the full guide: hardened systemd
+unit, Docker (distroless, ~48 MB image), backups with `deploy/backup.sh`, and
+the rich-text → Markdown upgrade path.
 
-```bash
+```sh
+# Binary
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o rables-server ./cmd/server
+
+# Docker
 docker build -t rables .
-docker run -e HMAC_SECRET=change-me -v rables-data:/data -p 8080:8080 rables
+docker run -d -e HMAC_SECRET="$(openssl rand -hex 32)" -p 8080:8080 \
+  -v rables-data:/data --restart unless-stopped rables
 ```
 
-- `Dockerfile` — multi-stage build → distroless nonroot image (~48MB)
-- `deploy/rables.service` — hardened systemd unit
-- `deploy/backup.sh` — online SQLite backup (`.backup`) + files tarball with retention
-
-## Layout
+## Development
 
 ```
-cmd/server/         the one long-running process (HTTP + job worker + cron)
-cmd/migrate-content/  one-shot rich_text → markdown content migration tool
-internal/config/    env config + logger
-internal/db/        goose-embedded migrations, connection, sqlc-generated queries
-internal/domain/    pure functions (state machine, slug, excerpt, sanitize, contentbuilder)
-internal/httpd/     chi router, middleware, all HTTP handlers
-internal/jobs/      job_runs worker + cron scheduler
-internal/service/   articles, comments, crosspost, media, newsletter, transfer,
-                    twittersync, ...
-internal/templates/ embedded html/template pages (+ `_`-prefixed partials)
-internal/assets/    embedded app.js (vanilla, no build) / app.css / EasyMDE editor
-                    (+ a 22-glyph Font Awesome subset for its toolbar icons)
-migrations/         full DDL (goose)
-queries/            sqlc sources (pure ASCII only)
-deploy/             Dockerfile companions: systemd unit, backup script, docs
+cmd/server            HTTP server entrypoint (wiring, graceful shutdown)
+cmd/migrate-content   One-off rich_text → Markdown content migration tool
+internal/httpd        chi router, handlers, middleware, rate limiting
+internal/service      Domain services (articles, comments, crosspost,
+                      newsletter, subscribers, transfer, twittersync, ...)
+internal/domain       Pure content logic (markdown, sanitize, slug, excerpt)
+internal/jobs         DB-backed job queue + cron scheduler
+internal/db           SQLite open/migrate; sqlc-generated queries in db/query
+internal/templates    Embedded html/template files
+internal/assets       Embedded CSS/JS
+migrations            Embedded goose migrations (run at boot)
+queries               sqlc query sources
 ```
+
+- **Run tests:** `go test ./...`
+- **Regenerate sqlc code** after editing `queries/` or `migrations/`:
+  `go tool sqlc generate`
+- **Add a migration:** create `migrations/NNNN_name.sql` with goose
+  `-- +goose Up` / `-- +goose Down` sections; it applies on next boot.
+
+The database is pure-Go SQLite (`modernc.org/sqlite`), so builds are CGO-free
+and cross-compile cleanly.
+
+## License
+
+See [LICENSE](LICENSE).

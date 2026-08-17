@@ -397,6 +397,7 @@
       "contentTypeSelect",
       "markdownContentField",
       "htmlContentField",
+      "archiveContentField",
     ];
 
     connect() {
@@ -418,6 +419,9 @@
       if (this.hasMarkdownContentFieldTarget) {
         this.markdownContentFieldTarget.style.display = mode === "markdown" ? "block" : "none";
         if (mode === "markdown") this.upgradeMarkdown();
+      }
+      if (this.hasArchiveContentFieldTarget) {
+        this.archiveContentFieldTarget.style.display = mode === "html_archive" ? "block" : "none";
       }
 
       const htmlTextArea = this.htmlContentFieldTarget.querySelector("textarea");
@@ -508,7 +512,7 @@
           alert("Content cannot be blank");
           return false;
         }
-      } else {
+      } else if (mode === "html") {
         const htmlTextarea = this.htmlContentFieldTarget.querySelector("textarea");
         if (!htmlTextarea || !htmlTextarea.value.trim()) {
           event.preventDefault();
@@ -516,6 +520,8 @@
           return false;
         }
       }
+      // html_archive has no client-side check: the server validates the ZIP
+      // (presence, index.html, safe paths) and re-renders with its errors.
     }
   }
 
