@@ -934,3 +934,39 @@ func TestBuildSourceReferenceUnsafeURL(t *testing.T) {
 		t.Errorf("jump icon missing next to the 引用 link: %s", out)
 	}
 }
+
+// TestPublicArticleSocialPosts covers the "also posted on" links of the
+// article page (articles/show.html.erb social_media_posts): crosspost
+// platforms with a recorded URL render, anything else is skipped.
+func TestPublicArticleSocialPosts(t *testing.T) {
+	s, h := newPublicTestServer(t, "")
+	artID := seedArticle(t, s, seedArticleOpts{slug: "tweet-1", title: "Tweet", status: int64(domain.StatusPublish)})
+	if _, err := s.DB.Exec(`INSERT INTO social_media_posts (article_id, platform, url, created_at, updated_at)
+		VALUES (?, 'twitter', 'https://x.com/me/status/1', 1000, 1000)`, artID); err != nil {
+		t.Fatalf("record twitter post: %v", err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO social_media_posts (article_id, platform, url, created_at, updated_at)
+		VALUES (?, 'mastodon', '', 1000, 1000)`, artID); err != nil {
+		t.Fatalf("record blank mastodon post: %v", err)
+	}
+	seedArticle(t, s, seedArticleOpts{slug: "plain", title: "Plain", status: int64(domain.StatusPublish)})
+
+	t.Run("article with recorded posts renders the links", func(t *testing.T) {
+		body := get(t, h, "/tweet-1").Body.String()
+		for _, want := range []string{"also posted on:", `href="https://x.com/me/status/1"`, ">Twitter</a>"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("article page missing %q", want)
+			}
+		}
+		if strings.Contains(body, ">Mastodon</a>") {
+			t.Error("blank-url post rendered a link")
+		}
+	})
+
+	t.Run("article without posts renders no block", func(t *testing.T) {
+		body := get(t, h, "/plain").Body.String()
+		if strings.Contains(body, "also posted on") {
+			t.Error("article without posts renders the social posts block")
+		}
+	})
+}

@@ -1379,6 +1379,15 @@ func (s *Server) articleFormFromArticle(ctx context.Context, article query.Artic
 	for _, platform := range articlesvc.ParseScheduledPlatforms(article.ScheduledCrosspostPlatforms) {
 		crosspost[platform] = true
 	}
+	// A recorded post URL also checks the box — a twitter-sync archive carries
+	// its tweet URL, a successful crosspost records its post URL — so the
+	// Distribution checkbox reads "distributed on this platform". The save
+	// path skips re-posting platforms with a recorded URL.
+	for platform, url := range socialURLs {
+		if url != "" {
+			crosspost[platform] = true
+		}
+	}
 	// Legacy rich_text records edit through the HTML editor: their content_html
 	// is already sanitized markup, so editing and saving it as html is lossless.
 	contentType := article.ContentType

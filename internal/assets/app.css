@@ -597,6 +597,19 @@ h2 {
     margin-left: auto;
 }
 
+.article-meta .article-meta-divider {
+    color: #ccc;
+}
+
+.article-meta .social-posts-label {
+    color: #999;
+}
+
+.article-meta .social-post-link {
+    color: #666;
+    margin-right: 0.25rem;
+}
+
 .article-content {
     display: block;
     unicode-bidi: isolate;

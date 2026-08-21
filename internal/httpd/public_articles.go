@@ -182,7 +182,23 @@ type publicArticleData struct {
 	FullURL         string
 	Tags            []query.Tag
 	SourceRef       template.HTML
+	SocialPosts     []socialPostLink
 	Comments        commentsSectionData
+}
+
+// socialPostLink is one "also posted on" entry: the platform display name and
+// the recorded post URL (articles/show.html.erb social_media_posts links).
+type socialPostLink struct {
+	Name string
+	URL  string
+}
+
+// socialPostPlatformNames maps crosspost platform keys to display names.
+var socialPostPlatformNames = map[string]string{
+	"mastodon":    "Mastodon",
+	"twitter":     "Twitter",
+	"bluesky":     "Bluesky",
+	"xiaohongshu": "Xiaohongshu",
 }
 
 // publicArticleShow renders GET /{slug} (or /{prefix}/{slug}), mirroring
@@ -215,6 +231,11 @@ func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request, slug 
 	tags, err := s.Q.ListTagsForArticle(ctx, article.ID)
 	if err != nil {
 		s.listError(w, "list article tags", err)
+		return
+	}
+	socialPosts, err := s.socialPostLinks(ctx, article.ID)
+	if err != nil {
+		s.listError(w, "list article social posts", err)
 		return
 	}
 	section, err := s.commentsSection(ctx, "Article", article.ID, slug, article.Comment, chrome)
@@ -262,8 +283,27 @@ func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request, slug 
 		FullURL:         chrome.SiteURL + comments.ArticlePath(s.routePrefix(ctx), slug),
 		Tags:            tags,
 		SourceRef:       buildSourceReference(article.SourceContent.String, article.SourceUrl.String),
+		SocialPosts:     socialPosts,
 		Comments:        section,
 	})
+}
+
+// socialPostLinks builds the "also posted on" links of the article page:
+// recorded crosspost-platform posts with a URL (Rails selects
+// Crosspost::PLATFORMS and renders only url.present? entries).
+func (s *Server) socialPostLinks(ctx context.Context, articleID int64) ([]socialPostLink, error) {
+	posts, err := s.Q.ListSocialPostsByArticleID(ctx, articleID)
+	if err != nil {
+		return nil, err
+	}
+	var out []socialPostLink
+	for _, post := range posts {
+		if post.Url == "" || !isCrosspostPlatform(post.Platform) {
+			continue
+		}
+		out = append(out, socialPostLink{Name: socialPostPlatformNames[post.Platform], URL: post.Url})
+	}
+	return out, nil
 }
 
 // publicArchiveURL returns the sandboxed iframe src for an html_archive

@@ -1650,3 +1650,57 @@ func TestAdminArticlesBatchLookupDBError(t *testing.T) {
 		t.Errorf("batch_publish flash = %+v, want the processing alert", flash)
 	}
 }
+
+// TestAdminArticlesRecordedURLDistribution: an article with a recorded
+// twitter post URL (the twitter-sync shape) edits with the twitter box
+// checked, and a publish save with the box still checked enqueues no
+// crosspost job — the article is already distributed there. Clearing the URL
+// re-arms crossposting.
+func TestAdminArticlesRecordedURLDistribution(t *testing.T) {
+	s, h := newArticlesTestServer(t)
+	session := articlesSessionCookie(t, s)
+	ctx := t.Context()
+	enableCrosspost(t, s, "twitter")
+
+	article := insertAdminArticle(t, s, "", "tweet-123", domain.StatusPublish)
+	now := time.Now().Unix()
+	if _, err := s.DB.Exec(`INSERT INTO social_media_posts (article_id, platform, url, created_at, updated_at)
+		VALUES (?, 'twitter', 'https://x.com/me/status/123', ?, ?)`, article.ID, now, now); err != nil {
+		t.Fatalf("record twitter post: %v", err)
+	}
+
+	// Edit form checks the twitter box from the recorded URL.
+	rec := doRequest(t, h, http.MethodGet, "/admin/posts/tweet-123/edit", nil, session)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `name="crosspost_twitter" value="1" checked`) {
+		t.Fatalf("edit form: status = %d, twitter box not checked", rec.Code)
+	}
+
+	// Publish save with the box still checked: no re-post to twitter.
+	form := validArticleForm()
+	form.Set("slug", "tweet-123")
+	form.Set("status", "publish")
+	form.Set("crosspost_twitter", "1")
+	form.Set("social_url_twitter", "https://x.com/me/status/123")
+	rec = doRequest(t, h, http.MethodPost, "/admin/posts/tweet-123", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("update: status = %d", rec.Code)
+	}
+	if n := len(queuedJobs(t, s, jobs.KindCrosspost)); n != 0 {
+		t.Errorf("crosspost jobs = %d, want 0 (recorded url skips the re-post)", n)
+	}
+	posts, _ := s.Q.ListSocialPostsByArticleID(ctx, article.ID)
+	if len(posts) != 1 || posts[0].Url != "https://x.com/me/status/123" {
+		t.Errorf("social posts = %+v, want the tweet url kept", posts)
+	}
+
+	// Clearing the URL re-arms crossposting: the next checked save posts.
+	form.Set("social_url_twitter", "")
+	rec = doRequest(t, h, http.MethodPost, "/admin/posts/tweet-123", form, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("update after clearing url: status = %d", rec.Code)
+	}
+	crossJobs := queuedJobs(t, s, jobs.KindCrosspost)
+	if len(crossJobs) != 1 || crossJobs[0]["platform"] != "twitter" {
+		t.Errorf("crosspost jobs = %+v, want one twitter job after clearing the url", crossJobs)
+	}
+}

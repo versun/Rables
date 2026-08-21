@@ -8,10 +8,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"rables/internal/db"
 	"rables/internal/db/query"
 	"rables/internal/domain"
+	"rables/internal/jobs"
 )
 
 func TestParseStatus(t *testing.T) {
@@ -526,5 +528,74 @@ func TestDestroyKeepsContentReferencedFile(t *testing.T) {
 	}
 	if _, err := os.Stat(blob); err != nil {
 		t.Errorf("blob removed while article B content still references it: %v", err)
+	}
+}
+
+// TestEnqueuePublishEffectsSkipsRecordedURL: a selected platform whose post
+// URL is already recorded enqueues no crosspost job — a twitter-sync archive
+// carries its tweet URL and a successful crosspost records its post URL, so
+// saving with the box checked must not publish a duplicate. Clearing the URL
+// re-arms crossposting.
+func TestEnqueuePublishEffectsSkipsRecordedURL(t *testing.T) {
+	database, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := t.Context()
+	q := query.New(database)
+	now := time.Now()
+
+	article, errs, err := Save(ctx, database, nil, SaveParams{
+		Title:       "Post",
+		ContentType: string(domain.ContentTypeMarkdown),
+		ContentHTML: "body",
+		Status:      domain.StatusDraft,
+	})
+	if err != nil || len(errs) > 0 {
+		t.Fatalf("Save: errs = %v, err = %v", errs, err)
+	}
+	if _, err := database.Exec(`INSERT INTO crossposts (platform, enabled, created_at, updated_at) VALUES ('twitter', 1, 1, 1)`); err != nil {
+		t.Fatalf("enable twitter crosspost: %v", err)
+	}
+
+	countJobs := func() int {
+		runs, err := q.ListQueuedJobRunsByKind(ctx, jobs.KindCrosspost)
+		if err != nil {
+			t.Fatalf("list crosspost jobs: %v", err)
+		}
+		return len(runs)
+	}
+	selected := map[string]bool{"twitter": true}
+
+	if err := EnqueuePublishEffects(ctx, q, article.ID, selected, false, now); err != nil {
+		t.Fatalf("enqueue without recorded url: %v", err)
+	}
+	if n := countJobs(); n != 1 {
+		t.Fatalf("crosspost jobs = %d, want 1 without a recorded url", n)
+	}
+
+	// The twitter-sync / crosspost write path: a recorded post URL.
+	if err := q.UpsertSocialMediaPost(ctx, query.UpsertSocialMediaPostParams{
+		ArticleID: article.ID, Platform: "twitter", Url: "https://x.com/me/status/1",
+		CreatedAt: now.Unix(), UpdatedAt: now.Unix(),
+	}); err != nil {
+		t.Fatalf("record social post: %v", err)
+	}
+	if err := EnqueuePublishEffects(ctx, q, article.ID, selected, false, now); err != nil {
+		t.Fatalf("enqueue with recorded url: %v", err)
+	}
+	if n := countJobs(); n != 1 {
+		t.Errorf("crosspost jobs = %d, want 1 (recorded url skips the re-post)", n)
+	}
+
+	if err := q.DeleteSocialMediaPost(ctx, query.DeleteSocialMediaPostParams{ArticleID: article.ID, Platform: "twitter"}); err != nil {
+		t.Fatalf("delete social post: %v", err)
+	}
+	if err := EnqueuePublishEffects(ctx, q, article.ID, selected, false, now); err != nil {
+		t.Fatalf("enqueue after clearing url: %v", err)
+	}
+	if n := countJobs(); n != 2 {
+		t.Errorf("crosspost jobs = %d, want 2 (cleared url re-arms crossposting)", n)
 	}
 }

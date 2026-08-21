@@ -638,6 +638,13 @@ func SelectedPlatforms(crosspost map[string]bool) []string {
 // crosspost job per selected, enabled platform (xiaohongshu is log-only in
 // Rails and never enqueued), and one send_newsletter job when the newsletter
 // is selected and ready.
+//
+// A selected platform whose post URL is already recorded is skipped: the
+// article is already distributed there — a twitter-sync archive carries its
+// tweet URL, a successful crosspost records its post URL — so saving with the
+// box checked must never publish a duplicate. To re-post deliberately, clear
+// the URL field first (Save deletes the row) or use the batch Crosspost
+// action.
 func EnqueuePublishEffects(ctx context.Context, q *query.Queries, articleID int64, crosspost map[string]bool, sendNewsletter bool, now time.Time) error {
 	for _, platform := range CrosspostPlatforms {
 		if !crosspost[platform] {
@@ -648,6 +655,13 @@ func EnqueuePublishEffects(ctx context.Context, q *query.Queries, articleID int6
 			return err
 		}
 		if !enabled || platform == "xiaohongshu" {
+			continue
+		}
+		posted, err := socialPostRecorded(ctx, q, articleID, platform)
+		if err != nil {
+			return err
+		}
+		if posted {
 			continue
 		}
 		if err := enqueueTx(ctx, q, now, jobs.KindCrosspost, CrosspostPayload{
@@ -680,6 +694,18 @@ func CrosspostEnabled(ctx context.Context, q *query.Queries, platform string) (b
 		return false, err
 	}
 	return row.Enabled == 1, nil
+}
+
+// socialPostRecorded reports whether the article already has a
+// social_media_posts row with a URL for the platform.
+func socialPostRecorded(ctx context.Context, q *query.Queries, articleID int64, platform string) (bool, error) {
+	posts, err := q.ListFetchableSocialPostsByPlatform(ctx, query.ListFetchableSocialPostsByPlatformParams{
+		ArticleID: articleID, Platform: platform,
+	})
+	if err != nil {
+		return false, err
+	}
+	return len(posts) > 0, nil
 }
 
 // NewsletterReady mirrors NewsletterSetting#enabled? && #configured?.

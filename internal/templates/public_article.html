@@ -28,6 +28,11 @@
         </div>
         <small class="article-meta">
           <span class="article-date">{{formatTime .DateUnix .Chrome.TimeZone "2006-01-02"}}</span>
+          {{if .SocialPosts}}
+            <span class="article-meta-divider">|</span>
+            <span class="social-posts-label">also posted on:</span>
+            {{range .SocialPosts}}<a href="{{.URL}}" target="_blank" rel="noopener noreferrer" class="social-post-link">{{.Name}}</a>{{end}}
+          {{end}}
           <span class="share-container" data-controller="share" data-share-url-value="{{.FullURL}}">
             <button class="share-button" data-action="click->share#toggle" title="Share Article">
               <span>share</span>
