@@ -7,9 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"rables/internal/db/query"
@@ -198,23 +196,14 @@ func campaignBody(article query.Article) string {
 // renderSourceReference ports articles/_source_reference.html.erb for the
 // campaign body (the Rails model renders it via
 // ApplicationController.renderer). Called only when has_source?, so the
-// blockquote branch is always present. The header is a fixed 引用 link (with
-// a jump icon) pointing at the source URL.
+// blockquote branch is always present. The header comes from
+// domain.SourceReferenceHeader, shared with the public pages.
 func renderSourceReference(article query.Article) string {
 	var b strings.Builder
 	b.WriteString(`<div style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">`)
 	b.WriteString(`<i class="fas fa-quote-left" style="color: #6c757d; font-size: 1.25rem; margin-top: 0.125rem; opacity: 0.6;"></i>`)
 	b.WriteString(`<div style="flex: 1;">`)
-	// source_url may come from attacker-controlled imports; only link absolute
-	// http(s) URLs with a host (same rule as safeArchiveURL in internal/httpd).
-	if safeURL := safeSourceURL(article.SourceUrl.String); safeURL != "" {
-		b.WriteString(`<a href="` + html.EscapeString(safeURL) + `" target="_blank" rel="noopener noreferrer" style="color: #495057; text-decoration: none;">`)
-		b.WriteString(`<span style="font-weight: 600; font-size: 0.95rem;">引用</span>`)
-		b.WriteString(` <i class="fas fa-external-link-alt" style="font-size: 0.75rem;"></i>`)
-		b.WriteString(`</a>`)
-	} else {
-		b.WriteString(`<span style="font-weight: 600; color: #495057; font-size: 0.95rem;">引用</span>`)
-	}
+	b.WriteString(domain.SourceReferenceHeader(article.SourceUrl.String, article.SourceAuthor.String))
 	b.WriteString(`</div></div>`)
 	b.WriteString(`<blockquote class="source-reference__quote">`)
 	if !domain.IsBlank(article.SourceContent.String) {
@@ -222,18 +211,4 @@ func renderSourceReference(article query.Article) string {
 	}
 	b.WriteString(`</blockquote>`)
 	return b.String()
-}
-
-// safeSourceURL applies the rule of safeArchiveURL (internal/httpd, not
-// importable from here): only absolute http(s) URLs with a host survive;
-// anything else (javascript:, data:, relative) is dropped.
-func safeSourceURL(value string) string {
-	u, err := url.Parse(strings.TrimSpace(value))
-	if err != nil {
-		return ""
-	}
-	if (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
-		return u.String()
-	}
-	return ""
 }

@@ -453,7 +453,7 @@ func (s *Server) listItems(ctx context.Context, articles []query.Article) ([]art
 			item.SummaryHTML = simpleFormat(summary)
 		}
 		if domain.IsBlank(a.Title.String) {
-			item.SourceRef = buildSourceReference(a.SourceContent.String, a.SourceUrl.String)
+			item.SourceRef = buildSourceReference(a.SourceContent.String, a.SourceUrl.String, a.SourceAuthor.String)
 		}
 		items = append(items, item)
 	}
@@ -477,39 +477,17 @@ func simpleFormat(text string) template.HTML {
 	return template.HTML(strings.Join(paras, "\n\n")) //nolint:gosec // escaped above
 }
 
-// safeArchiveURL mirrors safe_archive_url: only absolute http(s) URLs with a
-// host survive; anything else (javascript:, data:, relative) is dropped.
-func safeArchiveURL(value string) string {
-	u, err := url.Parse(strings.TrimSpace(value))
-	if err != nil {
-		return ""
-	}
-	if (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
-		return u.String()
-	}
-	return ""
-}
-
 // buildSourceReference renders articles/_source_reference.html.erb semantics:
-// present only when source_url is set (Article#has_source?). The header is a
-// fixed 引用 link (with a jump icon) pointing at the source URL.
-func buildSourceReference(content, rawURL string) template.HTML {
+// present only when source_url is set (Article#has_source?). The header comes
+// from domain.SourceReferenceHeader, shared with the newsletter campaign body.
+func buildSourceReference(content, rawURL, author string) template.HTML {
 	if domain.IsBlank(rawURL) {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(`<div class="source-reference" style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">`)
 	b.WriteString(`<div style="flex: 1;">`)
-	// source_url may come from attacker-controlled imports; only link absolute
-	// http(s) URLs with a host (same rule as safeArchiveURL).
-	if safeURL := safeArchiveURL(rawURL); safeURL != "" {
-		b.WriteString(`<a href="` + html.EscapeString(safeURL) + `" target="_blank" rel="noopener noreferrer" style="color: #495057; text-decoration: none;">`)
-		b.WriteString(`<span style="font-weight: 600; font-size: 0.95rem;">引用</span>`)
-		b.WriteString(` <i class="fas fa-external-link-alt" style="font-size: 0.75rem;"></i>`)
-		b.WriteString(`</a>`)
-	} else {
-		b.WriteString(`<span style="font-weight: 600; color: #495057; font-size: 0.95rem;">引用</span>`)
-	}
+	b.WriteString(domain.SourceReferenceHeader(rawURL, author))
 	b.WriteString(`</div></div>`)
 	b.WriteString(`<blockquote class="source-reference__quote">`)
 	if !domain.IsBlank(content) {

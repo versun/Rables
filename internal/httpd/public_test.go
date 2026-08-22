@@ -918,7 +918,7 @@ func TestPublicChromeSocialLinksOrder(t *testing.T) {
 // attacker-controlled import (transfer) must not become an href
 // unless it is an absolute http(s) URL with a host.
 func TestBuildSourceReferenceUnsafeURL(t *testing.T) {
-	out := string(buildSourceReference("quoted", "javascript:alert(1)"))
+	out := string(buildSourceReference("quoted", "javascript:alert(1)", ""))
 	if strings.Contains(out, "<a href=") {
 		t.Errorf("javascript: source_url rendered a link: %s", out)
 	}
@@ -926,7 +926,7 @@ func TestBuildSourceReferenceUnsafeURL(t *testing.T) {
 		t.Error("quote label dropped together with the unsafe link")
 	}
 
-	out = string(buildSourceReference("quoted", "https://example.com/post"))
+	out = string(buildSourceReference("quoted", "https://example.com/post", ""))
 	if !strings.Contains(out, `href="https://example.com/post"`) {
 		t.Errorf("https source_url not linked: %s", out)
 	}
@@ -935,12 +935,34 @@ func TestBuildSourceReferenceUnsafeURL(t *testing.T) {
 	}
 }
 
+// TestBuildSourceReferenceAuthorLabel: a source_author replaces the fixed
+// 引用 header label (escaped — it comes from imports/syncs), while the link
+// still points at the source URL.
+func TestBuildSourceReferenceAuthorLabel(t *testing.T) {
+	out := string(buildSourceReference("quoted", "https://example.com/post", "Jane <Doe>"))
+	if !strings.Contains(out, ">Jane &lt;Doe&gt;</span>") {
+		t.Errorf("escaped author label missing: %s", out)
+	}
+	if strings.Contains(out, "引用") {
+		t.Errorf("引用 fallback shown despite a source author: %s", out)
+	}
+	if !strings.Contains(out, `href="https://example.com/post"`) {
+		t.Errorf("author label lost the source link: %s", out)
+	}
+
+	// A blank author keeps the 引用 fallback.
+	out = string(buildSourceReference("quoted", "https://example.com/post", "  "))
+	if !strings.Contains(out, ">引用</span>") {
+		t.Errorf("引用 fallback missing for a blank author: %s", out)
+	}
+}
+
 // TestBuildSourceReferenceHTMLContent: a media-bearing twitter-sync quote
 // stores an HTML fragment in source_content; the blockquote renders the
 // embed through the content sanitizer instead of escaping it like plain
 // text. Plain-text content keeps the simpleFormat rendering.
 func TestBuildSourceReferenceHTMLContent(t *testing.T) {
-	out := string(buildSourceReference(`<p>quoted words</p><img src="/files/abc.jpg" alt="tweet-1-x.jpg" loading="lazy">`, "https://example.com/post"))
+	out := string(buildSourceReference(`<p>quoted words</p><img src="/files/abc.jpg" alt="tweet-1-x.jpg" loading="lazy">`, "https://example.com/post", ""))
 	if !strings.Contains(out, `src="/files/abc.jpg"`) {
 		t.Errorf("media embed must render as <img> in the quote block: %s", out)
 	}
@@ -950,7 +972,7 @@ func TestBuildSourceReferenceHTMLContent(t *testing.T) {
 
 	// The fragment is attacker-influenced (quoted tweet); anything beyond the
 	// content whitelist is stripped.
-	out = string(buildSourceReference(`<p>x</p><img src="/files/a.jpg" onerror="alert(1)"><iframe src="/admin"></iframe>`, "https://example.com/post"))
+	out = string(buildSourceReference(`<p>x</p><img src="/files/a.jpg" onerror="alert(1)"><iframe src="/admin"></iframe>`, "https://example.com/post", ""))
 	if strings.Contains(out, "onerror") {
 		t.Errorf("onerror survived sanitizing: %s", out)
 	}
@@ -958,14 +980,14 @@ func TestBuildSourceReferenceHTMLContent(t *testing.T) {
 		t.Errorf("same-origin iframe src survived sanitizing: %s", out)
 	}
 
-	out = string(buildSourceReference("quoted\nwords", "https://example.com/post"))
+	out = string(buildSourceReference("quoted\nwords", "https://example.com/post", ""))
 	if !strings.Contains(out, "<p>quoted<br>words</p>") {
 		t.Errorf("plain-text quote lost simpleFormat rendering: %s", out)
 	}
 
 	// Plain text containing "<" (math, arrows) is not a stored fragment: it
 	// keeps the simpleFormat rendering, escaped.
-	out = string(buildSourceReference("5 < 3\nand 7 > 4", "https://example.com/post"))
+	out = string(buildSourceReference("5 < 3\nand 7 > 4", "https://example.com/post", ""))
 	if !strings.Contains(out, "<p>5 &lt; 3<br>and 7 &gt; 4</p>") {
 		t.Errorf("plain-text quote with angle brackets lost simpleFormat rendering: %s", out)
 	}

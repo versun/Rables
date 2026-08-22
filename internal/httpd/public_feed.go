@@ -59,7 +59,7 @@ func (s *Server) publicFeed(w http.ResponseWriter, r *http.Request) {
 		}
 		// content_html is sanitized and lazy-loaded at write time; the source
 		// reference is prepended like the RSS builder does.
-		content := string(buildSourceReference(a.SourceContent.String, a.SourceUrl.String)) + a.ContentHtml.String
+		content := string(buildSourceReference(a.SourceContent.String, a.SourceUrl.String, a.SourceAuthor.String)) + a.ContentHtml.String
 		items = append(items, rssItem{
 			Title:       rssItemTitle(a, tzLocation(st.TimeZone)),
 			Description: firstPresent(a.Description.String, a.Excerpt.String),

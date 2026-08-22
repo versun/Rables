@@ -282,7 +282,7 @@ func (s *Server) publicArticleShow(w http.ResponseWriter, r *http.Request, slug 
 		MetaImage:       metaImage,
 		FullURL:         chrome.SiteURL + comments.ArticlePath(s.routePrefix(ctx), slug),
 		Tags:            tags,
-		SourceRef:       buildSourceReference(article.SourceContent.String, article.SourceUrl.String),
+		SourceRef:       buildSourceReference(article.SourceContent.String, article.SourceUrl.String, article.SourceAuthor.String),
 		SocialPosts:     socialPosts,
 		Comments:        section,
 	})

@@ -606,8 +606,8 @@ func TestRenderSourceReferenceUnsafeURL(t *testing.T) {
 	if strings.Contains(out, "<a href=") {
 		t.Errorf("javascript: source_url rendered a link: %s", out)
 	}
-	if !strings.Contains(out, "引用") {
-		t.Error("quote label dropped together with the unsafe link")
+	if !strings.Contains(out, "alice") {
+		t.Error("author label dropped together with the unsafe link")
 	}
 
 	article.SourceUrl = sql.NullString{String: "https://example.com/post", Valid: true}
@@ -615,8 +615,31 @@ func TestRenderSourceReferenceUnsafeURL(t *testing.T) {
 	if !strings.Contains(out, `href="https://example.com/post"`) {
 		t.Errorf("https source_url not linked: %s", out)
 	}
+	if !strings.Contains(out, "alice") {
+		t.Errorf("author label missing next to the source link: %s", out)
+	}
+	if strings.Contains(out, "引用") {
+		t.Errorf("引用 fallback shown despite a source author: %s", out)
+	}
 	if !strings.Contains(out, "fa-external-link-alt") {
-		t.Errorf("jump icon missing next to the 引用 link: %s", out)
+		t.Errorf("jump icon missing next to the author link: %s", out)
+	}
+
+	// A blank author keeps the 引用 fallback label.
+	article.SourceAuthor = sql.NullString{}
+	out = renderSourceReference(article)
+	if !strings.Contains(out, ">引用</span>") {
+		t.Errorf("引用 fallback label missing without a source author: %s", out)
+	}
+
+	// A blank author with an unsafe URL keeps the 引用 fallback, unlinked.
+	article.SourceUrl = sql.NullString{String: "javascript:alert(1)", Valid: true}
+	out = renderSourceReference(article)
+	if strings.Contains(out, "<a href=") {
+		t.Errorf("javascript: source_url rendered a link: %s", out)
+	}
+	if !strings.Contains(out, ">引用</span>") {
+		t.Errorf("引用 fallback label dropped with the unsafe link: %s", out)
 	}
 }
 
