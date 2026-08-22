@@ -619,3 +619,64 @@ func TestRenderSourceReferenceUnsafeURL(t *testing.T) {
 		t.Errorf("jump icon missing next to the 引用 link: %s", out)
 	}
 }
+
+// TestRenderSourceReferenceHTMLContent: a media-bearing twitter-sync quote
+// stores an HTML fragment in source_content; the campaign quote block
+// renders the embed through the content sanitizer instead of escaping it
+// like plain text. Plain-text content keeps the simpleFormat rendering.
+func TestRenderSourceReferenceHTMLContent(t *testing.T) {
+	article := query.Article{
+		SourceUrl:     sql.NullString{String: "https://example.com/post", Valid: true},
+		SourceContent: sql.NullString{String: `<p>quoted</p><img src="/files/q.jpg" alt="tweet-1-x.jpg" loading="lazy">`, Valid: true},
+	}
+	out := renderSourceReference(article)
+	if !strings.Contains(out, `src="/files/q.jpg"`) {
+		t.Errorf("media embed must render as <img> in the quote block: %s", out)
+	}
+	article.SourceContent = sql.NullString{String: "quoted\nwords", Valid: true}
+	out = renderSourceReference(article)
+	if !strings.Contains(out, "<span>quoted<br>\nwords</span>") {
+		t.Errorf("plain-text quote lost simpleFormat rendering: %s", out)
+	}
+}
+
+// TestRenderArticleEmailHTMLSourceContent covers the native newsletter
+// template: an HTML source_content fragment renders its media embed inside
+// the quote block (sanitized), while plain text stays simpleFormat-rendered.
+func TestRenderArticleEmailHTMLSourceContent(t *testing.T) {
+	htmlBody, textBody, err := RenderArticleEmail(ArticleEmailData{
+		Title:         "T",
+		HasSource:     true,
+		SourceContent: `<p>quoted</p><p>words</p><img src="/files/q.jpg" alt="tweet-1-x.jpg" loading="lazy">`,
+		SourceURL:     "https://source.example.com/post",
+		ContentHTML:   `<p>x</p>`, ContentText: "x",
+		ArticleURL: "https://b/a", UnsubscribeURL: "https://b/u",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(htmlBody, `src="/files/q.jpg"`) {
+		t.Errorf("media embed must render as <img> in the email quote block")
+	}
+	// The text part degrades the fragment to plain text: no markup leaks,
+	// paragraph breaks survive, media drops out.
+	if strings.Contains(textBody, "<p>") || strings.Contains(textBody, "<img") {
+		t.Errorf("text email leaked the source_content markup: %q", textBody)
+	}
+	if !strings.Contains(textBody, "quoted\nwords") {
+		t.Errorf("text email lost the quote text or its line break: %q", textBody)
+	}
+
+	htmlBody, _, err = RenderArticleEmail(ArticleEmailData{
+		Title: "T", HasSource: true,
+		SourceContent: "quoted\nwords",
+		ContentHTML:   `<p>x</p>`, ContentText: "x",
+		ArticleURL: "https://b/a", UnsubscribeURL: "https://b/u",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(htmlBody, "<span>quoted<br>\nwords</span>") {
+		t.Errorf("plain-text quote lost simpleFormat rendering in email")
+	}
+}

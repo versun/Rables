@@ -444,6 +444,83 @@ func TestRunQuoteTweetMapping(t *testing.T) {
 	}
 }
 
+// TestRunQuoteTweetMediaPlacement: the quoted tweet's media belongs to the
+// source-reference block (source_content), not the tweet body; the tweet's
+// own media stays in content_html. Both remain article attachments.
+func TestRunQuoteTweetMediaPlacement(t *testing.T) {
+	database := newTestDB(t)
+	enableSync(t, database, "alice")
+	dataDir := t.TempDir()
+	tweet := tweetJSON(501, "my take")
+	tweet["referenced_tweets"] = []map[string]any{{"type": "quoted", "id": "499"}}
+	tweet["attachments"] = map[string]any{"media_keys": []string{"mk_own"}}
+	extra := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/img/own.jpg", "/img/quote.jpg":
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write(testJPEG)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	var mediaSrv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/by/username/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"id":"42"}}`)
+	})
+	mux.HandleFunc("/users/42/tweets", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"data": []map[string]any{tweet},
+			"includes": map[string]any{
+				"tweets": []map[string]any{{
+					"id": "499", "text": "quoted words", "author_id": "7",
+					"created_at":  "2024-05-01T00:00:00.000Z",
+					"attachments": map[string]any{"media_keys": []string{"mk_quoted"}},
+				}},
+				"users": []map[string]any{{"id": "7", "name": "Quoted Author", "username": "someone"}},
+				"media": []map[string]any{
+					{"media_key": "mk_own", "type": "photo", "url": mediaSrv.URL + "/img/own.jpg"},
+					{"media_key": "mk_quoted", "type": "photo", "url": mediaSrv.URL + "/img/quote.jpg"},
+				},
+			},
+			"meta": map[string]any{"result_count": 1},
+		})
+	})
+	mux.Handle("/", extra)
+	mediaSrv = httptest.NewServer(mux)
+	t.Cleanup(mediaSrv.Close)
+	s := newSyncer(database, dataDir, mediaSrv)
+
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	article := articleBySlug(t, database, "tweet-501")
+
+	content := article.SourceContent.String
+	if !strings.Contains(content, "<p>quoted words</p>") {
+		t.Errorf("source_content = %q, want the quote text as an HTML paragraph", content)
+	}
+	if !strings.Contains(content, `<img src="/files/`) || !strings.Contains(content, "tweet-499-") {
+		t.Errorf("source_content = %q, want the quoted media embed", content)
+	}
+
+	html := article.ContentHtml.String
+	if !strings.Contains(html, "tweet-501-") {
+		t.Errorf("content_html = %q, want the tweet's own media embed", html)
+	}
+	if strings.Contains(html, "tweet-499-") {
+		t.Errorf("content_html = %q, quoted media must not leak into the body", html)
+	}
+
+	var attachments int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM attachments WHERE record_type = 'Article' AND record_id = ? AND name = 'embeds'`, article.ID).Scan(&attachments); err != nil {
+		t.Fatalf("count attachments: %v", err)
+	}
+	if attachments != 2 {
+		t.Errorf("attachments = %d, want 2 (own + quoted media stay attached)", attachments)
+	}
+}
+
 func TestRunTcoResolution(t *testing.T) {
 	database := newTestDB(t)
 	enableSync(t, database, "alice")

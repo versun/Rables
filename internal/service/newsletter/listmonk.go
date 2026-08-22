@@ -218,7 +218,7 @@ func renderSourceReference(article query.Article) string {
 	b.WriteString(`</div></div>`)
 	b.WriteString(`<blockquote class="source-reference__quote">`)
 	if !domain.IsBlank(article.SourceContent.String) {
-		b.WriteString(string(simpleFormat(article.SourceContent.String, "span")))
+		b.WriteString(string(renderSourceContent(article.SourceContent.String)))
 	}
 	b.WriteString(`</blockquote>`)
 	return b.String()

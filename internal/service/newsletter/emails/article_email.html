@@ -20,6 +20,11 @@
         margin: 0 0 0.75rem 0.3em;
         padding-left: 0.6em;
       }
+      .article-content img, .article-content video,
+      .source-reference__quote img, .source-reference__quote video {
+        max-width: 100%;
+        height: auto;
+      }
       .source-reference__links {
         margin-top: 0.75rem;
       }
@@ -64,7 +69,7 @@
     {{if or .SourceContent .SourceURL}}
     <blockquote class="source-reference__quote">
       {{if .SourceContent}}
-      {{simpleFormatSpan .SourceContent}}
+      {{sourceContent .SourceContent}}
       {{end}}
 
       {{if .SourceURL}}

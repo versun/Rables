@@ -513,10 +513,23 @@ func buildSourceReference(content, rawURL string) template.HTML {
 	b.WriteString(`</div></div>`)
 	b.WriteString(`<blockquote class="source-reference__quote">`)
 	if !domain.IsBlank(content) {
-		b.WriteString(string(simpleFormat(content)))
+		b.WriteString(string(renderSourceContent(content)))
 	}
 	b.WriteString(`</blockquote>`)
 	return template.HTML(b.String()) //nolint:gosec // parts escaped above
+}
+
+// renderSourceContent renders the source-reference quote body. Plain-text
+// source_content (legacy rows, no-media quotes, admin input) goes through
+// simpleFormat like Rails; a twitter-sync quote with media is stored as an
+// HTML fragment (escaped text paragraphs + /files embeds), rendered through
+// the same sanitizer policy as content_html — applied at render time because
+// both formats share the column.
+func renderSourceContent(content string) template.HTML {
+	if domain.IsSourceContentFragment(content) {
+		return template.HTML(domain.SanitizeHTML(content)) //nolint:gosec // sanitized above
+	}
+	return simpleFormat(content)
 }
 
 // commentsSectionData feeds the comments block of the show pages.

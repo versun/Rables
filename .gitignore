@@ -4,6 +4,7 @@ data/
 # Go binaries built at repo root
 /server
 /migrate-content
+/migrate-quote-media
 
 # Archives
 *.zip

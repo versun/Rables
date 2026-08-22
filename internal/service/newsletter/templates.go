@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	texttemplate "text/template"
+
+	"rables/internal/domain"
 )
 
 // The mail bodies live in emails/ as html+text pairs, one per Rails mailer
@@ -19,8 +21,8 @@ var emailsFS embed.FS
 
 var (
 	emailHTMLTemplates = template.Must(template.New("emails").Funcs(template.FuncMap{
-		"simpleFormat":     func(s string) template.HTML { return simpleFormat(s, "p") },
-		"simpleFormatSpan": func(s string) template.HTML { return simpleFormat(s, "span") },
+		"simpleFormat":  func(s string) template.HTML { return simpleFormat(s, "p") },
+		"sourceContent": renderSourceContent,
 	}).ParseFS(emailsFS, "emails/*.html"))
 	emailTextTemplates = texttemplate.Must(texttemplate.New("emails").ParseFS(emailsFS, "emails/*.text"))
 )
@@ -28,7 +30,9 @@ var (
 // ArticleEmailData feeds the article_email templates
 // (NewsletterMailer#article_email). ContentHTML is sanitized at write time
 // (plan section 4.4); ContentText and the source fields are plain text
-// (full_sanitizer output in Rails). The Go schema has no newsletter footer
+// (full_sanitizer output in Rails), except SourceContent of a media-bearing
+// twitter-sync quote, which is an HTML fragment sanitized at render time
+// (sourceContent template func). The Go schema has no newsletter footer
 // column, so the Footer fields stay empty until one exists; the template
 // blocks are kept for parity with the Rails views.
 type ArticleEmailData struct {
@@ -70,6 +74,9 @@ func RenderArticleEmail(d ArticleEmailData) (htmlBody, textBody string, err erro
 	if htmlBody, err = renderEmailHTML("article_email.html", d); err != nil {
 		return "", "", err
 	}
+	// The text part takes the quote as plain text: a media-bearing fragment
+	// must not leak its markup into text/plain.
+	d.SourceContent = sourceContentText(d.SourceContent)
 	textBody, err = renderEmailText("article_email.text", d)
 	return htmlBody, textBody, err
 }
@@ -117,6 +124,31 @@ func simpleFormat(s, tag string) template.HTML {
 		paras[i] = "<" + tag + ">" + strings.ReplaceAll(template.HTMLEscapeString(p), "\n", "<br>\n") + "</" + tag + ">"
 	}
 	return template.HTML(strings.Join(paras, "\n\n"))
+}
+
+// renderSourceContent renders source_content like the public pages do
+// (internal/httpd renderSourceContent): plain text through simpleFormat; a
+// twitter-sync quote with media is a stored HTML fragment, emitted through
+// the content sanitizer.
+func renderSourceContent(content string) template.HTML {
+	if domain.IsSourceContentFragment(content) {
+		return template.HTML(domain.SanitizeHTML(content)) //nolint:gosec // sanitized above
+	}
+	return simpleFormat(content, "span")
+}
+
+// sourceContentText is the text/plain counterpart of renderSourceContent:
+// plain text passes through unchanged; the quote-media fragment degrades to
+// its paragraph text, media embeds dropping out like images do from
+// ContentText. Paragraph boundaries become newlines first, because PlainText
+// concatenates the text of sibling elements without a separator.
+func sourceContentText(content string) string {
+	if !domain.IsSourceContentFragment(content) {
+		return content
+	}
+	sanitized := domain.SanitizeHTML(content)
+	sanitized = strings.ReplaceAll(sanitized, "</p><p>", "</p>\n<p>")
+	return domain.PlainText(sanitized)
 }
 
 // truncate mirrors String#truncate with the default "..." omission: at most

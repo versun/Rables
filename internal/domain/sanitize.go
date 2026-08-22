@@ -89,6 +89,19 @@ func SanitizeHTML(rawHTML string) string {
 	return restrictMediaSrc(sanitizePolicy.Sanitize(rewriteActionTextAttachments(rawHTML)))
 }
 
+// IsSourceContentFragment reports whether an articles.source_content value
+// holds the HTML fragment the twitter-sync quote-media path writes (escaped
+// <p> paragraphs followed by /files <img>/<video> embeds, also what
+// migrate-quote-media writes) rather than the plain text of legacy rows,
+// no-media quotes and admin input. Both formats share the column, so the
+// render paths (internal/httpd, internal/service/newsletter) branch on this
+// instead of a bare "<" check, which would misread plain text like "a < b".
+func IsSourceContentFragment(content string) bool {
+	return strings.HasPrefix(content, "<p>") ||
+		strings.HasPrefix(content, "<img ") ||
+		strings.HasPrefix(content, "<video ")
+}
+
 // rewriteActionTextAttachments replaces every <action-text-attachment> that
 // carries a url attribute per attachmentReplacement. Attachments without a
 // url (e.g. a failed upload left in the markup) are left in place for the

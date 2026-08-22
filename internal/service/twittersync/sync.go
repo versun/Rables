@@ -625,19 +625,27 @@ func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tw
 		createdAt = t
 	}
 
-	// Download media (own attachments first, then the quoted tweet's).
-	var stored []storedMedia
-	for _, t := range collectMediaTweets(tweet, quotedID, inc) {
-		stored = append(stored, s.downloadTweetMedia(ctx, t, inc.media)...)
+	// Download media (own attachments first, then the quoted tweet's — the
+	// Rails blob order). Own media embeds in the tweet content; the quoted
+	// tweet's media embeds in the source-reference block, not the body.
+	ownMedia := s.downloadTweetMedia(ctx, tweet, inc.media)
+	var quotedMedia []storedMedia
+	if quoted, ok := inc.tweets[quotedID]; quotedID != "" && ok {
+		quotedMedia = s.downloadTweetMedia(ctx, quoted, inc.media)
 	}
+	if len(quotedMedia) > 0 {
+		sourceContent = buildQuotedSourceContent(sourceContent, quotedMedia)
+	}
+	stored := append(ownMedia, quotedMedia...)
 
 	now := s.clock().Unix()
 
 	// Tweet content is stored as Markdown: buildTweetContent's HTML goes
 	// through the same ToMarkdown write path as migrated rich_text content
 	// (media embeds stay raw HTML inside the Markdown source).
-	contentMarkdown, contentHTML, err := contentmigrate.ToMarkdown(buildTweetContent(fullText, stored))
+	contentMarkdown, contentHTML, err := contentmigrate.ToMarkdown(buildTweetContent(fullText, ownMedia))
 	if err != nil {
+		s.discardStoredMedia(ctx, stored)
 		return fmt.Errorf("convert tweet content to markdown: %w", err)
 	}
 
@@ -715,16 +723,24 @@ func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tw
 	return nil
 }
 
-// collectMediaTweets yields the tweet and then its quoted tweet (when
-// expanded), mirroring the blob collection order.
-func collectMediaTweets(tweet apiTweet, quotedID string, inc includes) []apiTweet {
-	out := []apiTweet{tweet}
-	if quotedID != "" {
-		if quoted, ok := inc.tweets[quotedID]; ok {
-			out = append(out, quoted)
+// buildQuotedSourceContent builds the source_content of a quote tweet with
+// media attachments: the truncated quote text as escaped paragraphs followed
+// by the media embeds — the quote's media belongs to the source-reference
+// block, not the tweet body. Unlike plain-text source_content this is an
+// HTML fragment; render paths emit it through the content sanitizer.
+func buildQuotedSourceContent(text string, media []storedMedia) string {
+	var parts []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
 		}
+		parts = append(parts, "<p>"+escapeHTML(line)+"</p>")
 	}
-	return out
+	for _, m := range media {
+		parts = append(parts, mediaAttachmentHTML(m))
+	}
+	return strings.Join(parts, "")
 }
 
 // articleAnnouncement ports article_announcement?: X Articles surface only as
@@ -1031,11 +1047,12 @@ func (s *Syncer) downloadMedia(ctx context.Context, rawURL, contentType, tweetID
 }
 
 // discardStoredMedia reclaims the files rows and disk blobs stored for a
-// tweet whose archive transaction failed. It must run after the transaction
-// has rolled back (its attachment rows would otherwise still reference the
-// files and block the deletes). Best effort: failures are logged, not fatal.
-// The failure may come with an already-canceled ctx, so the cleanup runs on
-// a context that cannot be canceled.
+// tweet whose archive failed after the downloads (content conversion error,
+// or transaction failure). When the archive transaction began, it must run
+// after the rollback (its attachment rows would otherwise still reference
+// the files and block the deletes). Best effort: failures are logged, not
+// fatal. The failure may come with an already-canceled ctx, so the cleanup
+// runs on a context that cannot be canceled.
 func (s *Syncer) discardStoredMedia(ctx context.Context, stored []storedMedia) {
 	ctx = context.WithoutCancel(ctx)
 	mediaSvc := media.New(s.db, s.dataDir)

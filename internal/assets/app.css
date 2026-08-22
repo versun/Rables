@@ -695,6 +695,14 @@ h2 {
     padding-left: 0.6em;
 }
 
+/* Quote-tweet media embeds live in the source-reference block, outside
+   .article-content, so they need the same width constraint. */
+.source-reference__quote img,
+.source-reference__quote video {
+    max-width: 100%;
+    height: auto;
+}
+
 /* Pagination (public, will_paginate markup) */
 .pagination {
     display: flex;

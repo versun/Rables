@@ -935,6 +935,42 @@ func TestBuildSourceReferenceUnsafeURL(t *testing.T) {
 	}
 }
 
+// TestBuildSourceReferenceHTMLContent: a media-bearing twitter-sync quote
+// stores an HTML fragment in source_content; the blockquote renders the
+// embed through the content sanitizer instead of escaping it like plain
+// text. Plain-text content keeps the simpleFormat rendering.
+func TestBuildSourceReferenceHTMLContent(t *testing.T) {
+	out := string(buildSourceReference(`<p>quoted words</p><img src="/files/abc.jpg" alt="tweet-1-x.jpg" loading="lazy">`, "https://example.com/post"))
+	if !strings.Contains(out, `src="/files/abc.jpg"`) {
+		t.Errorf("media embed must render as <img> in the quote block: %s", out)
+	}
+	if !strings.Contains(out, "<p>quoted words</p>") {
+		t.Errorf("quote text paragraph missing: %s", out)
+	}
+
+	// The fragment is attacker-influenced (quoted tweet); anything beyond the
+	// content whitelist is stripped.
+	out = string(buildSourceReference(`<p>x</p><img src="/files/a.jpg" onerror="alert(1)"><iframe src="/admin"></iframe>`, "https://example.com/post"))
+	if strings.Contains(out, "onerror") {
+		t.Errorf("onerror survived sanitizing: %s", out)
+	}
+	if strings.Contains(out, `<iframe src="/admin"`) {
+		t.Errorf("same-origin iframe src survived sanitizing: %s", out)
+	}
+
+	out = string(buildSourceReference("quoted\nwords", "https://example.com/post"))
+	if !strings.Contains(out, "<p>quoted<br>words</p>") {
+		t.Errorf("plain-text quote lost simpleFormat rendering: %s", out)
+	}
+
+	// Plain text containing "<" (math, arrows) is not a stored fragment: it
+	// keeps the simpleFormat rendering, escaped.
+	out = string(buildSourceReference("5 < 3\nand 7 > 4", "https://example.com/post"))
+	if !strings.Contains(out, "<p>5 &lt; 3<br>and 7 &gt; 4</p>") {
+		t.Errorf("plain-text quote with angle brackets lost simpleFormat rendering: %s", out)
+	}
+}
+
 // TestPublicArticleSocialPosts covers the "also posted on" links of the
 // article page (articles/show.html.erb social_media_posts): crosspost
 // platforms with a recorded URL render, anything else is skipped.
