@@ -185,6 +185,7 @@ type Redirect struct {
 	Permanent   int64
 	CreatedAt   int64
 	UpdatedAt   int64
+	MatchOn     string
 }
 
 type Session struct {

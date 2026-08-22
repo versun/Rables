@@ -11,6 +11,7 @@
   <table class="table">
     <thead>
       <tr>
+        <th>Match</th>
         <th>Regex Pattern</th>
         <th>Replacement</th>
         <th>Type</th>
@@ -21,6 +22,9 @@
     <tbody>
       {{range .Redirects}}
       <tr>
+        <td>
+          {{if eq .MatchOn "host"}}<span class="badge badge-info">Host</span>{{else}}<span class="badge">Path</span>{{end}}
+        </td>
         <td><code>{{.Regex}}</code></td>
         <td><code>{{.Replacement}}</code></td>
         <td>
@@ -38,7 +42,7 @@
       </tr>
       {{else}}
       <tr>
-        <td colspan="5" class="empty">No redirects found.</td>
+        <td colspan="6" class="empty">No redirects found.</td>
       </tr>
       {{end}}
     </tbody>

@@ -19,11 +19,26 @@
 <div class="card">
   <form method="post" action="/admin/redirects">
     <div class="field">
+      <label for="match_on">Match</label>
+      <select id="match_on" name="match_on">
+        <option value="path"{{if ne .Redirect.MatchOn "host"}} selected{{end}}>URL Path</option>
+        <option value="host"{{if eq .Redirect.MatchOn "host"}} selected{{end}}>Host (subdomain)</option>
+      </select>
+      <small>
+        What the regex is matched against. <code>URL Path</code>: the request path, e.g. <code>/old-page</code>.
+        <code>Host (subdomain)</code>: the request host without port, e.g. <code>abc.example.com</code>;
+        host rules run on every path of the matched host, before any path rule. The whole host must
+        match — <code>^</code>/<code>$</code> anchors are optional and unmatched host text is never
+        carried into the target.
+      </small>
+    </div>
+    <div class="field">
       <label for="regex">Regex Pattern</label>
       <input type="text" id="regex" name="regex" placeholder="^/old-path$" value="{{.Redirect.Regex}}">
       <small>
         Regular expression to match the URL path. Examples:
-        <code>^/old-page$</code> (exact match), <code>^/posts/(.+)$</code> (with capture groups)
+        <code>^/old-page$</code> (exact match), <code>^/posts/(.+)$</code> (with capture groups).
+        For host rules: <code>^([a-z0-9-]+)\.example\.com$</code> matches any single-label subdomain.
       </small>
     </div>
     <div class="field">
@@ -31,7 +46,10 @@
       <input type="text" id="replacement" name="replacement" placeholder="/new-path" value="{{.Redirect.Replacement}}">
       <small>
         Target URL or replacement pattern. Use <code>\1</code>, <code>\2</code> etc. to reference capture groups.
-        Examples: <code>/new-page</code>, <code>/articles/\1</code>
+        Examples: <code>/new-page</code>, <code>/articles/\1</code>.
+        For host rules the target may be an absolute URL (<code>https://google.com</code>) or a path
+        (<code>/tags/\1</code>); a path is resolved against the site URL from settings. The request's
+        own path and query string are never appended.
       </small>
     </div>
     <div class="field-checkbox">

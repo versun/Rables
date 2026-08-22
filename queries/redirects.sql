@@ -8,13 +8,13 @@ SELECT * FROM redirects WHERE enabled = 1 ORDER BY id;
 SELECT * FROM redirects WHERE id = ?;
 
 -- name: CreateRedirect :one
-INSERT INTO redirects (regex, replacement, permanent, enabled, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO redirects (regex, replacement, permanent, enabled, match_on, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: UpdateRedirect :exec
 UPDATE redirects
-SET regex = ?, replacement = ?, permanent = ?, enabled = ?, updated_at = ?
+SET regex = ?, replacement = ?, permanent = ?, enabled = ?, match_on = ?, updated_at = ?
 WHERE id = ?;
 
 -- name: DeleteRedirect :exec

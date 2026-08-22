@@ -98,11 +98,12 @@ func TestAdminRedirectsCRUD(t *testing.T) {
 		t.Fatalf("new form: status = %d", rec.Code)
 	}
 
-	// Create (enabled checked, permanent unchecked -> hidden 0).
+	// Create (enabled checked, permanent unchecked -> hidden 0, host rule).
 	form := url.Values{
 		"regex":       {"^/old$"},
 		"replacement": {"/new"},
 		"enabled":     {"1"},
+		"match_on":    {"host"},
 	}
 	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", form, session)
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/redirects" {
@@ -115,6 +116,36 @@ func TestAdminRedirectsCRUD(t *testing.T) {
 	redirect := rows[0]
 	if redirect.Regex != "^/old$" || redirect.Replacement != "/new" || redirect.Enabled != 1 || redirect.Permanent != 0 {
 		t.Errorf("stored redirect = %+v", redirect)
+	}
+	if redirect.MatchOn != "host" {
+		t.Errorf("stored match_on = %q, want host", redirect.MatchOn)
+	}
+
+	// An unrecognized match_on value normalizes to a path rule.
+	rec = doRequest(t, h, http.MethodPost, "/admin/redirects",
+		url.Values{"regex": {"^/bogus$"}, "replacement": {"/x"}, "match_on": {"bogus"}}, session)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("create bogus match_on: status = %d", rec.Code)
+	}
+	rows, err = s.Q.ListRedirects(ctx)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("list redirects: %v rows = %d", err, len(rows))
+	}
+	var bogus *query.Redirect
+	for i := range rows {
+		if rows[i].Regex == "^/bogus$" {
+			bogus = &rows[i]
+			break
+		}
+	}
+	if bogus == nil {
+		t.Fatal("bogus match_on redirect not stored")
+	}
+	if bogus.MatchOn != "path" {
+		t.Errorf("bogus match_on stored as %q, want path", bogus.MatchOn)
+	}
+	if err := s.Q.DeleteRedirect(ctx, bogus.ID); err != nil {
+		t.Fatalf("delete bogus redirect: %v", err)
 	}
 
 	// Index lists it.
@@ -156,6 +187,9 @@ func TestAdminRedirectsCRUD(t *testing.T) {
 	if updated.Regex != "^/older$" || updated.Permanent != 1 || updated.Enabled != 0 {
 		t.Errorf("updated redirect = %+v, want regex ^/older$ permanent 1 enabled 0", updated)
 	}
+	if updated.MatchOn != "path" {
+		t.Errorf("update without match_on stored %q, want path", updated.MatchOn)
+	}
 
 	// Update validation failure re-renders the edit page.
 	rec = doRequest(t, h, http.MethodPost, "/admin/redirects/"+itoa(redirect.ID),
@@ -192,7 +226,7 @@ func TestAdminRedirectsInvalidateCache(t *testing.T) {
 	session := redirectsSessionCookie(t, s)
 
 	// Prime the middleware cache with an empty rule list.
-	_ = s.redirectRules(t.Context())
+	_, _ = s.redirectRules(t.Context())
 	if _, ok := s.Ext.Load(redirectCacheKey); !ok {
 		t.Fatal("redirect cache not primed")
 	}

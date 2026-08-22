@@ -94,6 +94,7 @@ func (s *Server) adminRedirectsCreate(w http.ResponseWriter, r *http.Request) {
 		Replacement: in.Replacement,
 		Permanent:   in.Permanent,
 		Enabled:     in.Enabled,
+		MatchOn:     in.MatchOn,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	})
@@ -159,6 +160,7 @@ func (s *Server) adminRedirectsUpdate(w http.ResponseWriter, r *http.Request) {
 		Replacement: in.Replacement,
 		Permanent:   in.Permanent,
 		Enabled:     in.Enabled,
+		MatchOn:     in.MatchOn,
 		UpdatedAt:   time.Now().Unix(),
 		ID:          id,
 	}); err != nil {
@@ -207,14 +209,24 @@ func redirectIDParam(r *http.Request) int64 {
 }
 
 // redirectFromForm reads the permitted redirect params (regex, replacement,
-// permanent, enabled).
+// permanent, enabled, match_on).
 func redirectFromForm(r *http.Request) query.Redirect {
 	return query.Redirect{
 		Regex:       r.FormValue("regex"),
 		Replacement: r.FormValue("replacement"),
 		Permanent:   checkboxInt(r, "permanent"),
 		Enabled:     checkboxInt(r, "enabled"),
+		MatchOn:     normalizeRedirectMatchOn(r.FormValue("match_on")),
 	}
+}
+
+// normalizeRedirectMatchOn constrains the posted value to the two known match
+// targets; anything unexpected (including an empty old form) is a path rule.
+func normalizeRedirectMatchOn(v string) string {
+	if v == redirectMatchHost {
+		return redirectMatchHost
+	}
+	return redirectMatchPath
 }
 
 // checkboxInt interprets a Rails-style checkbox param: "1"/"true"/"on" is 1,

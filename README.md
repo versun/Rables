@@ -25,7 +25,7 @@ original; the schema and routes deliberately mirror the Rails behavior.
 - Optional giscus integration, custom head code and custom CSS
 
 **Site management (admin)**
-- Regex redirects, static file hosting, social links, timezone, meta/SEO fields
+- Regex redirects (URL path and host/subdomain matching), static file hosting, social links, timezone, meta/SEO fields
 - Background job dashboard (`/admin/jobs`) with stale-job recovery, activity log
 - Import/export: full-site transfer (DB + files ZIP), RSS import, Markdown import;
   `cmd/migrate-content` converts legacy `rich_text` content to Markdown in place

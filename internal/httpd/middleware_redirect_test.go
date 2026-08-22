@@ -38,15 +38,20 @@ func newRedirectTestServer(t *testing.T) (*Server, *chi.Mux) {
 	return s, r
 }
 
-// insertRedirect stores one redirect row directly.
-func insertRedirect(t *testing.T, s *Server, regex, replacement string, permanent, enabled int64) query.Redirect {
+// insertRedirect stores one redirect row directly; an empty matchOn means a
+// path rule.
+func insertRedirect(t *testing.T, s *Server, regex, replacement string, permanent, enabled int64, matchOn string) query.Redirect {
 	t.Helper()
+	if matchOn == "" {
+		matchOn = redirectMatchPath
+	}
 	now := time.Now().Unix()
 	redirect, err := s.Q.CreateRedirect(t.Context(), query.CreateRedirectParams{
 		Regex:       regex,
 		Replacement: replacement,
 		Permanent:   permanent,
 		Enabled:     enabled,
+		MatchOn:     matchOn,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	})
@@ -163,7 +168,7 @@ func TestRedirectMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s, h := newRedirectTestServer(t)
 			for _, rule := range tt.rules {
-				insertRedirect(t, s, rule.Regex, rule.Replacement, rule.Permanent, rule.Enabled)
+				insertRedirect(t, s, rule.Regex, rule.Replacement, rule.Permanent, rule.Enabled, rule.MatchOn)
 			}
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
@@ -181,7 +186,7 @@ func TestRedirectMiddleware(t *testing.T) {
 // InvalidateRedirectCache makes writes visible immediately.
 func TestRedirectMiddlewareCacheInvalidation(t *testing.T) {
 	s, h := newRedirectTestServer(t)
-	insertRedirect(t, s, "^/old$", "/new", 0, 1)
+	insertRedirect(t, s, "^/old$", "/new", 0, 1, "")
 
 	get := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -216,5 +221,221 @@ func TestRedirectMiddlewareCacheInvalidation(t *testing.T) {
 	s.InvalidateRedirectCache()
 	if rec := get(); rec.Code != http.StatusOK {
 		t.Fatalf("after delete: status = %d, want 200", rec.Code)
+	}
+}
+
+// TestRedirectMiddlewareHostRules covers the match_on='host' extension:
+// subdomain redirects against the request Host, ahead of every path rule.
+func TestRedirectMiddlewareHostRules(t *testing.T) {
+	tests := []struct {
+		name         string
+		siteURL      string // configured settings.url; empty = unset
+		rules        []query.Redirect
+		method       string // empty = GET
+		url          string
+		wantStatus   int
+		wantLocation string
+	}{
+		{
+			name: "exact host to external URL",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://abc.example.com/",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "capture group into absolute target",
+			rules: []query.Redirect{
+				{Regex: `^(\d+)\.example\.com$`, Replacement: `https://example.com/tags/\1`, Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://54321.example.com/",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://example.com/tags/54321",
+		},
+		{
+			name:    "relative target completed with site URL",
+			siteURL: "https://example.com",
+			rules: []query.Redirect{
+				{Regex: `^abcd\.example\.com$`, Replacement: `/blog/abcd`, Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://abcd.example.com/",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://example.com/blog/abcd",
+		},
+		{
+			name: "relative target without site URL fails open",
+			rules: []query.Redirect{
+				{Regex: `^abcd\.example\.com$`, Replacement: `/blog/abcd`, Enabled: 1, MatchOn: "host"},
+			},
+			url:        "http://abcd.example.com/",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "request path and query never appended",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://abc.example.com/foo/bar?x=1",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "host rule fires on skip-prefix path",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://abc.example.com/admin",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "host rule beats earlier path rule",
+			rules: []query.Redirect{
+				{Regex: "^/old$", Replacement: "/path-rule", Enabled: 1},
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://abc.example.com/old",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "host with port matches",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://abc.example.com:8080/",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "host case-insensitive",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://ABC.Example.COM/",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "apex host does not match subdomain rule",
+			rules: []query.Redirect{
+				{Regex: `^([^.]+)\.example\.com$`, Replacement: `https://example.com/\1`, Enabled: 1, MatchOn: "host"},
+			},
+			url:        "http://example.com/",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "disabled host rule skipped",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 0, MatchOn: "host"},
+			},
+			url:        "http://abc.example.com/",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:   "POST not redirected by host rule",
+			method: http.MethodPost,
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:        "http://abc.example.com/",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "non-matching host falls through to path rules",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+				{Regex: "^/old$", Replacement: "/new", Enabled: 1},
+			},
+			url:          "http://www.example.com/old",
+			wantStatus:   http.StatusFound,
+			wantLocation: "/new",
+		},
+		{
+			name: "permanent host rule is 301",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Permanent: 1, Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://abc.example.com/",
+			wantStatus:   http.StatusMovedPermanently,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "unanchored regex still matches whole host only",
+			rules: []query.Redirect{
+				{Regex: `abc\.example\.com`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://abc.example.com/",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "host suffix beyond a missing-$ regex does not leak into target",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:        "http://abc.example.com.evil.example.com/",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "host prefix beyond a missing-^ regex does not match",
+			rules: []query.Redirect{
+				{Regex: `abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:        "http://evil-abc.example.com/",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "trailing-dot FQDN matches",
+			rules: []query.Redirect{
+				{Regex: `^abc\.example\.com$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://abc.example.com./",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "IPv6 literal with port matches bracketless pattern",
+			rules: []query.Redirect{
+				{Regex: `^::1$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://[::1]:8080/",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+		{
+			name: "IPv6 literal without port matches bracketless pattern",
+			rules: []query.Redirect{
+				{Regex: `^::1$`, Replacement: "https://google.com", Enabled: 1, MatchOn: "host"},
+			},
+			url:          "http://[::1]/",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://google.com",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, h := newRedirectTestServer(t)
+			if tt.siteURL != "" {
+				setSiteURL(t, s, tt.siteURL)
+			}
+			for _, rule := range tt.rules {
+				insertRedirect(t, s, rule.Regex, rule.Replacement, rule.Permanent, rule.Enabled, rule.MatchOn)
+			}
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(method, tt.url, nil))
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if got := rec.Header().Get("Location"); got != tt.wantLocation {
+				t.Errorf("location = %q, want %q", got, tt.wantLocation)
+			}
+		})
 	}
 }
