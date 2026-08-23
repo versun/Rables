@@ -186,6 +186,9 @@ type Redirect struct {
 	CreatedAt   int64
 	UpdatedAt   int64
 	MatchOn     string
+	MatchFrom   string
+	MatchPrefix int64
+	Position    int64
 }
 
 type Session struct {

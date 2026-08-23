@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"rables/internal/db/query"
 )
 
@@ -86,6 +88,42 @@ func originCheck(next http.Handler) http.Handler {
 		default:
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// stripTrailingSlash normalizes a single trailing "/" out of the routing
+// path before matching, so every route also answers its trailing-slash form
+// without a redirect (/blog/a/ serves the same handler as /blog/a) — the
+// Rails router this app mirrors ignores it. /archives/ URLs are excluded:
+// the archive tree route is directory-shaped and redirects the bare record
+// URL to its trailing-slash form on purpose, so relative asset links inside
+// the static site resolve against the record directory (see archives.go).
+//
+// Like chi's middleware.StripSlashes, only the chi routing path is rewritten;
+// r.URL.Path keeps the original value for access logs and handlers.
+func stripTrailingSlash(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if len(path) > 1 && path[len(path)-1] == '/' && !strings.HasPrefix(path, "/archives/") {
+			// chi routes on URL.RawPath when the URL carries escapes and
+			// slugParam relies on that to unescape params itself, so strip
+			// from the same form chi would route on. A literal trailing "/"
+			// is never escaped, so both forms end in "/" together; a Path
+			// trailing slash decoded from %2F leaves RawPath without one,
+			// and nothing is stripped.
+			routePath := r.URL.RawPath
+			if routePath == "" {
+				routePath = path
+			}
+			if strings.HasSuffix(routePath, "/") {
+				if rctx := chi.RouteContext(r.Context()); rctx != nil {
+					rctx.RoutePath = routePath[:len(routePath)-1]
+				} else {
+					r.URL.Path = path[:len(path)-1]
+				}
+			}
 		}
 		next.ServeHTTP(w, r)
 	})

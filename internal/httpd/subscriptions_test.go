@@ -44,6 +44,7 @@ func newSubscriptionTestServer(t *testing.T) (*Server, http.Handler) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	s := NewServer(database, config.Config{Addr: ":8080", HMACSecret: "x"}, logger, renderer)
 	r := chi.NewRouter()
+	r.Use(stripTrailingSlash)
 	RegisterSubscriptionRoutes(r, s)
 	RegisterSubscriberAdminRoutes(r, s)
 	RegisterPublicRoutes(r, s)

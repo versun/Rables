@@ -900,6 +900,56 @@ body.admin-body {
     width: 36px;
 }
 
+/* Drag-and-drop row ordering (redirects index): the grip starts the drag, the
+   row being dragged is dimmed. */
+.admin-body .table .drag-cell {
+    width: 28px;
+    padding-right: 0;
+}
+
+.admin-body .table .row-number {
+    width: 36px;
+    color: var(--ad-text-2);
+}
+
+/* The # column counts rows itself, so the number always follows the visual
+   order — server render and live drag alike. */
+.admin-body .table tbody[data-controller="redirect-order"] {
+    counter-reset: redirect-row;
+}
+
+.admin-body .table tbody[data-controller="redirect-order"] tr {
+    counter-increment: redirect-row;
+}
+
+/* Scoped to body cells: on the thead th the counter is out of scope and
+   counter() would render a stray "0" in front of the "#". */
+.admin-body .table tbody .row-number::before {
+    content: counter(redirect-row);
+}
+
+.drag-handle {
+    display: inline-block;
+    padding: 2px 4px;
+    cursor: grab;
+    color: var(--ad-text-2);
+    font-size: 15px;
+    line-height: 1;
+    user-select: none;
+}
+
+.drag-handle:hover {
+    color: var(--ad-text);
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+.admin-body .table tbody tr.is-dragging {
+    opacity: 0.4;
+}
+
 .admin-body .table .row-actions {
     text-align: right;
     white-space: nowrap;

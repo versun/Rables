@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -191,8 +192,8 @@ func TestMigrationsValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectMigrations: %v", err)
 	}
-	if got := len(migs); got != 7 {
-		t.Fatalf("collected %d migrations, want 7", got)
+	if got := len(migs); got != 8 {
+		t.Fatalf("collected %d migrations, want 8", got)
 	}
 
 	db := open(t)
@@ -334,5 +335,127 @@ func TestGeneratedQuerySmoke(t *testing.T) {
 	}
 	if !article.Title.Valid || article.Title.String != "hello" || article.Status != 1 {
 		t.Errorf("unexpected article: %+v", article)
+	}
+}
+
+// TestMigration0008RewritesHostRules seeds redirect rows at schema version 7
+// and checks the host -> host_path rewrite: the pattern is wrapped in a
+// non-capturing group (top-level alternations and capture-group numbering
+// intact), a trailing '$' anchor is dropped (a literal '\$' is kept), and an
+// optional path group is appended. Path rules and blank-regex rows are
+// untouched, and the position backfill keeps the old host-rules-first
+// evaluation order.
+func TestMigration0008RewritesHostRules(t *testing.T) {
+	dsn := "file:" + filepath.Join(t.TempDir(), "rables.db")
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite"); err != nil {
+		t.Fatalf("SetDialect: %v", err)
+	}
+	if err := goose.UpTo(db, ".", 7); err != nil {
+		t.Fatalf("UpTo 7: %v", err)
+	}
+	seed := []struct {
+		regex    string
+		matchOn  string
+		wantRe   string
+		wantOn   string
+		wantDown string // regex after rolling back to 7; empty = row untouched
+	}{
+		// A path rule created before any host rule: the two-tier position
+		// backfill still ranks it after every host rule, like the old
+		// host-rules-first middleware.
+		{`^/old$`, "path", `^/old$`, "path", `^/old$`},
+		{`^abc\.example\.com$`, "host", `(?:^abc\.example\.com)(?:/.*)?$`, "host_path", `^abc\.example\.com$`},
+		{`^a\.example\.com|b\.example\.com$`, "host", `(?:^a\.example\.com|b\.example\.com)(?:/.*)?$`, "host_path", `^a\.example\.com|b\.example\.com$`},
+		// The unanchored original cannot be told apart from an anchored one
+		// after the rewrite, so the rollback gains a '$'.
+		{`abc\.example\.com`, "host", `(?:abc\.example\.com)(?:/.*)?$`, "host_path", `abc\.example\.com$`},
+		{`abc\.example\.com\$`, "host", `(?:abc\.example\.com\$)(?:/.*)?$`, "host_path", `abc\.example\.com\$`},
+		// A blank-regex host row is not rewritten: the middleware's
+		// blank-pattern skip keeps it inert.
+		{``, "host", ``, "host", ``},
+	}
+	for i, row := range seed {
+		if _, err := db.Exec(
+			`INSERT INTO redirects (regex, replacement, permanent, enabled, match_on, created_at, updated_at)
+			 VALUES (?, '/x', 0, 1, ?, ?, ?)`, row.regex, row.matchOn, int64(100+i), int64(100+i)); err != nil {
+			t.Fatalf("seed %q: %v", row.regex, err)
+		}
+	}
+	if err := goose.UpTo(db, ".", 8); err != nil {
+		t.Fatalf("UpTo 8: %v", err)
+	}
+	positions := make([]int64, len(seed))
+	for i, row := range seed {
+		var gotRe, gotOn string
+		if err := db.QueryRow(`SELECT regex, match_on, position FROM redirects WHERE created_at = ?`, int64(100+i)).
+			Scan(&gotRe, &gotOn, &positions[i]); err != nil {
+			t.Fatalf("query %q: %v", row.regex, err)
+		}
+		if gotRe != row.wantRe || gotOn != row.wantOn {
+			t.Errorf("rule %q: got regex %q match_on %q, want %q %q", row.regex, gotRe, gotOn, row.wantRe, row.wantOn)
+		}
+		if positions[i] == 0 {
+			t.Errorf("rule %q: position not backfilled", row.regex)
+		}
+		if _, err := regexp.Compile(gotRe); err != nil {
+			t.Errorf("rule %q: rewritten regex %q does not compile: %v", row.regex, gotRe, err)
+		}
+	}
+	// The two-tier backfill keeps the old host-rules-first runtime order:
+	// every rewritten host rule ranks ahead of the path rule even though the
+	// path rule has the lowest id.
+	for i, row := range seed {
+		if row.wantOn == "host_path" && positions[i] > positions[0] {
+			t.Errorf("host rule %q position = %d, path rule position = %d; host rules must come first",
+				row.regex, positions[i], positions[0])
+		}
+	}
+
+	// Rolling back restores the original pattern text (modulo the documented
+	// unanchored case above) and the 'host' match_on.
+	if err := goose.DownTo(db, ".", 7); err != nil {
+		t.Fatalf("DownTo 7: %v", err)
+	}
+	for i, row := range seed {
+		var gotRe, gotOn string
+		if err := db.QueryRow(`SELECT regex, match_on FROM redirects WHERE created_at = ?`, int64(100+i)).
+			Scan(&gotRe, &gotOn); err != nil {
+			t.Fatalf("query after rollback %q: %v", row.regex, err)
+		}
+		if gotRe != row.wantDown || gotOn != row.matchOn {
+			t.Errorf("rollback of %q: got regex %q match_on %q, want %q %q", row.regex, gotRe, gotOn, row.wantDown, row.matchOn)
+		}
+	}
+	// The rollback also drops the 0008 columns, restoring the v7 table shape
+	// (match_on stays: it was added by 0007).
+	cols := map[string]bool{}
+	colRows, err := db.Query(`SELECT name FROM pragma_table_info('redirects')`)
+	if err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	defer colRows.Close()
+	for colRows.Next() {
+		var name string
+		if err := colRows.Scan(&name); err != nil {
+			t.Fatalf("scan column: %v", err)
+		}
+		cols[name] = true
+	}
+	if err := colRows.Err(); err != nil {
+		t.Fatalf("table_info rows: %v", err)
+	}
+	for _, gone := range []string{"match_from", "match_prefix", "position"} {
+		if cols[gone] {
+			t.Errorf("column %q still present after rollback to 7", gone)
+		}
+	}
+	if !cols["match_on"] {
+		t.Error("column match_on missing after rollback to 7")
 	}
 }

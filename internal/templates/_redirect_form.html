@@ -1,0 +1,89 @@
+{{/* Shared body of the new/edit redirect forms: the errors block plus every
+     field. The page supplies the outer <form> tag (its action differs) and
+     the data (adminRedirectFormData with .Redirect and .Errors). The
+     redirect-form controller toggles the simple/regex field groups from the
+     mode select. */}}
+{{define "redirect_form_fields"}}
+{{if .Errors}}
+<div class="form-errors">
+  <strong>{{len .Errors}} error(s) prohibited this redirect from being saved:</strong>
+  <ul>
+    {{range .Errors}}<li>{{.}}</li>{{end}}
+  </ul>
+</div>
+{{end}}
+
+<div data-controller="redirect-form">
+  <div class="field">
+    <label for="kind">Mode</label>
+    <select id="kind" name="kind" data-action="change->redirect-form#toggle">
+      <option value="simple"{{if and (ne .Redirect.MatchOn "path") (ne .Redirect.MatchOn "host_path") (ne .Redirect.MatchOn "host")}} selected{{end}}>Simple</option>
+      <option value="regex"{{if or (eq .Redirect.MatchOn "path") (eq .Redirect.MatchOn "host_path") (eq .Redirect.MatchOn "host")}} selected{{end}}>Advanced (regex)</option>
+    </select>
+    <small>
+      <code>Simple</code> matches a plain address string — no regular expression needed.
+      <code>Advanced (regex)</code> matches a regular expression with capture groups.
+    </small>
+  </div>
+
+  <div data-redirect-form-target="simpleFields">
+    <div class="field">
+      <label for="match_from">From</label>
+      <input type="text" id="match_from" name="match_from" placeholder="blog.example.com/blog/" value="{{.Redirect.MatchFrom}}">
+      <small>
+        The address to match: a path (<code>/old-page</code>, applies on any host) or a host with
+        an optional path (<code>blog.example.com</code> or <code>blog.example.com/blog/</code>).
+      </small>
+    </div>
+    <div class="field">
+      <label for="match_mode">Match</label>
+      <select id="match_mode" name="match_mode">
+        <option value="exact"{{if ne .Redirect.MatchPrefix 1}} selected{{end}}>Exact match</option>
+        <option value="prefix"{{if eq .Redirect.MatchPrefix 1}} selected{{end}}>Include sub-paths (the remainder is appended to the target)</option>
+      </select>
+    </div>
+  </div>
+
+  <div data-redirect-form-target="regexFields">
+    <div class="field">
+      <label for="regex">Regex Pattern</label>
+      <input type="text" id="regex" name="regex" placeholder="^/old-path$" value="{{.Redirect.Regex}}">
+      <small>
+        A pattern starting with <code>/</code> matches the URL path on any host, e.g.
+        <code>^/old-page$</code> (exact match) or <code>^/posts/(.+)$</code> (capture groups).
+        Anything else matches host + path, e.g. <code>^blog\.example\.com/blog/(.+)$</code>;
+        a pattern without any <code>/</code> (e.g. <code>^blog\.example\.com$</code>) matches the
+        whole host, every path. Host + path rules must match the whole address
+        (<code>^</code>/<code>$</code> anchors are optional).
+      </small>
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="replacement">To</label>
+    <input type="text" id="replacement" name="replacement" placeholder="/new-path" value="{{.Redirect.Replacement}}">
+    <small>
+      Target path (<code>/new-page</code>) or absolute URL (<code>https://example.com</code>).
+      Regex rules may reference capture groups with <code>\1</code>, <code>\2</code> etc. For rules
+      with a host, a path target is resolved against the site URL from settings. The request's
+      query string is never carried over.
+    </small>
+  </div>
+
+  <div class="field-checkbox">
+    <input type="hidden" name="permanent" value="0">
+    <input type="checkbox" id="permanent" name="permanent" value="1"{{if .Redirect.Permanent}} checked{{end}}>
+    <label for="permanent">Permanent Redirect (301)</label>
+  </div>
+  <small class="help-text">
+    Permanent redirects (301) tell search engines to update their index.
+    Temporary redirects (302) are used for short-term changes.
+  </small>
+  <div class="field-checkbox">
+    <input type="hidden" name="enabled" value="0">
+    <input type="checkbox" id="enabled" name="enabled" value="1"{{if .Redirect.Enabled}} checked{{end}}>
+    <label for="enabled">Enabled</label>
+  </div>
+  <small class="help-text">Only enabled redirects will be active.</small>
+</div>
+{{end}}

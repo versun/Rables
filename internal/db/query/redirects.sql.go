@@ -10,17 +10,19 @@ import (
 )
 
 const createRedirect = `-- name: CreateRedirect :one
-INSERT INTO redirects (regex, replacement, permanent, enabled, match_on, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-RETURNING id, regex, replacement, enabled, permanent, created_at, updated_at, match_on
+INSERT INTO redirects (regex, replacement, match_from, match_prefix, match_on, permanent, enabled, position, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM redirects), ?, ?)
+RETURNING id, regex, replacement, enabled, permanent, created_at, updated_at, match_on, match_from, match_prefix, position
 `
 
 type CreateRedirectParams struct {
 	Regex       string
 	Replacement string
+	MatchFrom   string
+	MatchPrefix int64
+	MatchOn     string
 	Permanent   int64
 	Enabled     int64
-	MatchOn     string
 	CreatedAt   int64
 	UpdatedAt   int64
 }
@@ -29,9 +31,11 @@ func (q *Queries) CreateRedirect(ctx context.Context, arg CreateRedirectParams) 
 	row := q.db.QueryRowContext(ctx, createRedirect,
 		arg.Regex,
 		arg.Replacement,
+		arg.MatchFrom,
+		arg.MatchPrefix,
+		arg.MatchOn,
 		arg.Permanent,
 		arg.Enabled,
-		arg.MatchOn,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -45,6 +49,9 @@ func (q *Queries) CreateRedirect(ctx context.Context, arg CreateRedirectParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MatchOn,
+		&i.MatchFrom,
+		&i.MatchPrefix,
+		&i.Position,
 	)
 	return i, err
 }
@@ -59,7 +66,7 @@ func (q *Queries) DeleteRedirect(ctx context.Context, id int64) error {
 }
 
 const getRedirectByID = `-- name: GetRedirectByID :one
-SELECT id, regex, replacement, enabled, permanent, created_at, updated_at, match_on FROM redirects WHERE id = ?
+SELECT id, regex, replacement, enabled, permanent, created_at, updated_at, match_on, match_from, match_prefix, position FROM redirects WHERE id = ?
 `
 
 func (q *Queries) GetRedirectByID(ctx context.Context, id int64) (Redirect, error) {
@@ -74,12 +81,15 @@ func (q *Queries) GetRedirectByID(ctx context.Context, id int64) (Redirect, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MatchOn,
+		&i.MatchFrom,
+		&i.MatchPrefix,
+		&i.Position,
 	)
 	return i, err
 }
 
 const listEnabledRedirects = `-- name: ListEnabledRedirects :many
-SELECT id, regex, replacement, enabled, permanent, created_at, updated_at, match_on FROM redirects WHERE enabled = 1 ORDER BY id
+SELECT id, regex, replacement, enabled, permanent, created_at, updated_at, match_on, match_from, match_prefix, position FROM redirects WHERE enabled = 1 ORDER BY position, id
 `
 
 func (q *Queries) ListEnabledRedirects(ctx context.Context) ([]Redirect, error) {
@@ -100,6 +110,9 @@ func (q *Queries) ListEnabledRedirects(ctx context.Context) ([]Redirect, error) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.MatchOn,
+			&i.MatchFrom,
+			&i.MatchPrefix,
+			&i.Position,
 		); err != nil {
 			return nil, err
 		}
@@ -115,7 +128,7 @@ func (q *Queries) ListEnabledRedirects(ctx context.Context) ([]Redirect, error) 
 }
 
 const listRedirects = `-- name: ListRedirects :many
-SELECT id, regex, replacement, enabled, permanent, created_at, updated_at, match_on FROM redirects ORDER BY created_at DESC
+SELECT id, regex, replacement, enabled, permanent, created_at, updated_at, match_on, match_from, match_prefix, position FROM redirects ORDER BY position, id
 `
 
 func (q *Queries) ListRedirects(ctx context.Context) ([]Redirect, error) {
@@ -136,6 +149,9 @@ func (q *Queries) ListRedirects(ctx context.Context) ([]Redirect, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.MatchOn,
+			&i.MatchFrom,
+			&i.MatchPrefix,
+			&i.Position,
 		); err != nil {
 			return nil, err
 		}
@@ -150,18 +166,34 @@ func (q *Queries) ListRedirects(ctx context.Context) ([]Redirect, error) {
 	return items, nil
 }
 
+const setRedirectPosition = `-- name: SetRedirectPosition :exec
+UPDATE redirects SET position = ? WHERE id = ?
+`
+
+type SetRedirectPositionParams struct {
+	Position int64
+	ID       int64
+}
+
+func (q *Queries) SetRedirectPosition(ctx context.Context, arg SetRedirectPositionParams) error {
+	_, err := q.db.ExecContext(ctx, setRedirectPosition, arg.Position, arg.ID)
+	return err
+}
+
 const updateRedirect = `-- name: UpdateRedirect :exec
 UPDATE redirects
-SET regex = ?, replacement = ?, permanent = ?, enabled = ?, match_on = ?, updated_at = ?
+SET regex = ?, replacement = ?, match_from = ?, match_prefix = ?, match_on = ?, permanent = ?, enabled = ?, updated_at = ?
 WHERE id = ?
 `
 
 type UpdateRedirectParams struct {
 	Regex       string
 	Replacement string
+	MatchFrom   string
+	MatchPrefix int64
+	MatchOn     string
 	Permanent   int64
 	Enabled     int64
-	MatchOn     string
 	UpdatedAt   int64
 	ID          int64
 }
@@ -170,9 +202,11 @@ func (q *Queries) UpdateRedirect(ctx context.Context, arg UpdateRedirectParams) 
 	_, err := q.db.ExecContext(ctx, updateRedirect,
 		arg.Regex,
 		arg.Replacement,
+		arg.MatchFrom,
+		arg.MatchPrefix,
+		arg.MatchOn,
 		arg.Permanent,
 		arg.Enabled,
-		arg.MatchOn,
 		arg.UpdatedAt,
 		arg.ID,
 	)

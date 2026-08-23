@@ -44,6 +44,8 @@ func newArticlesTestServer(t *testing.T) (*Server, http.Handler) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	s := NewServer(database, config.Config{Addr: ":8080", HMACSecret: "x"}, logger, renderer)
 	r := chi.NewRouter()
+	// Mirror NewRouter so trailing-slash requests resolve like production.
+	r.Use(stripTrailingSlash)
 	RegisterArticlesAdminRoutes(r, s)
 	return s, r
 }

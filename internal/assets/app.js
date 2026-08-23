@@ -1,12 +1,14 @@
 /* Rables frontend — dependency-free vanilla JS port of the 14 Rails Stimulus
- * controllers (plan §9, sources: app/javascript/controllers/*.js).
+ * controllers (plan §9, sources: app/javascript/controllers/*.js), plus two
+ * Go-port additions for the reworked redirects admin (redirect_form,
+ * redirect_order).
  *
  * The Go templates carry the same data-controller / data-action /
  * data-<id>-target / data-<id>-<name>-value hooks as the Rails views, so this
  * file ships a tiny Stimulus-compatible subset runtime plus one controller
- * class per Rails counterpart. No MutationObserver: pages are server-rendered
- * MPAs and controllers attach once at DOMContentLoaded; DOM inserted later by
- * this file itself (EasyMDE editor) needs no controllers.
+ * class per data-controller identifier. No MutationObserver: pages are
+ * server-rendered MPAs and controllers attach once at DOMContentLoaded; DOM
+ * inserted later by this file itself (EasyMDE editor) needs no controllers.
  */
 (() => {
   "use strict";
@@ -1376,6 +1378,125 @@
     }
   }
 
+  // --- redirect_form -----------------------------------------------------------
+  // New/edit redirect form: the mode select toggles between the simple
+  // (From/Match) field group and the advanced regex field group.
+
+  class RedirectFormController extends Controller {
+    static targets = ["simpleFields", "regexFields"];
+
+    connect() {
+      this.toggle();
+    }
+
+    toggle() {
+      const kind = this.element.querySelector('[name="kind"]')?.value || "simple";
+      if (this.hasSimpleFieldsTarget) {
+        this.simpleFieldsTarget.style.display = kind === "regex" ? "none" : "block";
+      }
+      if (this.hasRegexFieldsTarget) {
+        this.regexFieldsTarget.style.display = kind === "regex" ? "block" : "none";
+      }
+    }
+  }
+
+  // --- redirect_order ------------------------------------------------------------
+  // Drag-and-drop row ordering on the redirects index: the grip handle starts
+  // the drag, rows move live on dragover, and dragend posts the new id order
+  // to the reorder endpoint. A canceled drag (Escape, or a drop outside any
+  // row) restores the original order and saves nothing; a failed save reloads
+  // the server-side order.
+
+  class RedirectOrderController extends Controller {
+    static targets = ["row"];
+    static values = { url: String };
+
+    start(event) {
+      // A new drag is blocked while the previous reorder POST is in flight:
+      // two in-flight requests could arrive out of order and leave the saved
+      // order behind the page's.
+      if (this.saving) {
+        event.preventDefault();
+        return;
+      }
+      const row = event.target.closest("tr[data-id]");
+      if (!row) return;
+      this.dragRow = row;
+      this.dropped = false;
+      // Snapshot the order so a canceled drag can be rolled back.
+      this.originalIds = this.rowTargets.map((r) => r.dataset.id);
+      row.classList.add("is-dragging");
+      event.dataTransfer.effectAllowed = "move";
+      // Firefox refuses to start a drag at all without a setData payload.
+      event.dataTransfer.setData("text/plain", row.dataset.id);
+      // Show the whole row as the drag image instead of just the handle.
+      try {
+        event.dataTransfer.setDragImage(row, 24, 12);
+      } catch (e) { /* setDragImage is best-effort */ }
+    }
+
+    over(event) {
+      if (!this.dragRow) return;
+      event.preventDefault(); // required for drop to fire
+      const row = event.currentTarget;
+      if (row === this.dragRow) return;
+      const rect = row.getBoundingClientRect();
+      const after = event.clientY - rect.top > rect.height / 2;
+      row.parentNode.insertBefore(this.dragRow, after ? row.nextSibling : row);
+    }
+
+    drop(event) {
+      event.preventDefault();
+      this.dropped = true;
+    }
+
+    end() {
+      if (!this.dragRow) return;
+      this.dragRow.classList.remove("is-dragging");
+      this.dragRow = null;
+      // A drag canceled (Escape) or landed off any row never fires drop; the
+      // drop-fired flag is used instead of dataTransfer.dropEffect, which
+      // Safari does not reliably report at dragend.
+      const canceled = !this.dropped;
+      this.dropped = false;
+      if (canceled) this.restoreOrder();
+      const ids = this.rowTargets.map((r) => r.dataset.id);
+      const changed = ids.some((id, i) => id !== this.originalIds[i]);
+      if (!canceled && changed) this.persist(ids.map(Number));
+      this.originalIds = null;
+    }
+
+    // restoreOrder puts the rows back into the order snapshot from dragstart.
+    restoreOrder() {
+      const tbody = this.element;
+      const rows = new Map(this.rowTargets.map((r) => [r.dataset.id, r]));
+      this.originalIds.forEach((id) => {
+        const row = rows.get(id);
+        if (row) tbody.appendChild(row);
+      });
+    }
+
+    async persist(ids) {
+      this.saving = true;
+      try {
+        const response = await fetch(this.urlValue, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        // !ok covers 4xx/5xx; redirected means RequireAuth bounced us to the
+        // login page (302 -> 200 HTML), so the order was never saved.
+        if (!response.ok || response.redirected) throw new Error("status " + response.status);
+        this.saving = false;
+      } catch (error) {
+        // Keep drags blocked: the reload below restores the saved order.
+        console.error("Failed to save redirect order:", error);
+        alert("Failed to save the new order; reloading the saved order.");
+        window.location.reload();
+      }
+    }
+  }
+
   // --- registration & boot -----------------------------------------------------------
 
   registry.set("batch-selection", BatchSelectionController);
@@ -1386,6 +1507,8 @@
   registry.set("newsletter", NewsletterController);
   registry.set("newsletter-subscription", NewsletterSubscriptionController);
   registry.set("password-toggle", PasswordToggleController);
+  registry.set("redirect-form", RedirectFormController);
+  registry.set("redirect-order", RedirectOrderController);
   registry.set("reply-form", ReplyFormController);
   registry.set("share", ShareController);
   registry.set("sidebar", SidebarController);

@@ -7,26 +7,44 @@
   </div>
 </div>
 
+<p class="help-text">Rules are checked in this order and the first match wins. Drag the handle to reorder.</p>
+
 <div class="table-card">
   <table class="table">
     <thead>
       <tr>
+        <th class="drag-cell"></th>
+        <th class="row-number">#</th>
+        <th>From / Regex</th>
+        <th>To</th>
         <th>Match</th>
-        <th>Regex Pattern</th>
-        <th>Replacement</th>
         <th>Type</th>
         <th>Status</th>
         <th class="row-actions">Actions</th>
       </tr>
     </thead>
-    <tbody>
+    <tbody data-controller="redirect-order" data-redirect-order-url-value="/admin/redirects/reorder">
       {{range .Redirects}}
-      <tr>
-        <td>
-          {{if eq .MatchOn "host"}}<span class="badge badge-info">Host</span>{{else}}<span class="badge">Path</span>{{end}}
+      <tr data-id="{{.ID}}" data-redirect-order-target="row"
+          data-action="dragover->redirect-order#over drop->redirect-order#drop">
+        <td class="drag-cell">
+          <span class="drag-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder"
+                data-action="dragstart->redirect-order#start dragend->redirect-order#end">&#x283F;</span>
         </td>
-        <td><code>{{.Regex}}</code></td>
+        <td class="row-number"></td>
+        <td>
+          {{if eq .MatchOn "simple"}}<code>{{.MatchFrom}}</code>{{else}}<code>{{.Regex}}</code>{{end}}
+        </td>
         <td><code>{{.Replacement}}</code></td>
+        <td>
+          {{if eq .MatchOn "simple"}}
+            {{if .MatchPrefix}}<span class="badge badge-info">Prefix</span>{{else}}<span class="badge">Exact</span>{{end}}
+          {{else if or (eq .MatchOn "host_path") (eq .MatchOn "host")}}
+            <span class="badge badge-info">Host + Path</span>
+          {{else}}
+            <span class="badge">Path</span>
+          {{end}}
+        </td>
         <td>
           {{if .Permanent}}<span class="badge badge-danger">301 Permanent</span>{{else}}<span class="badge badge-info">302 Temporary</span>{{end}}
         </td>
@@ -42,7 +60,7 @@
       </tr>
       {{else}}
       <tr>
-        <td colspan="6" class="empty">No redirects found.</td>
+        <td colspan="8" class="empty">No redirects found.</td>
       </tr>
       {{end}}
     </tbody>

@@ -24,7 +24,8 @@ import (
 
 // newPublicTestServer builds a Server with only the public routes mounted, in
 // the order the integrator must use (RegisterPublicRoutes before
-// RegisterArticleRoutes so static paths beat the /{slug} catch-all).
+// RegisterArticleRoutes so static paths beat the /{slug} catch-all), behind
+// the same trailing-slash normalization NewRouter applies.
 func newPublicTestServer(t *testing.T, routePrefix string) (*Server, http.Handler) {
 	t.Helper()
 	database, err := db.Open(t.TempDir())
@@ -40,6 +41,7 @@ func newPublicTestServer(t *testing.T, routePrefix string) (*Server, http.Handle
 	cfg := config.Config{Addr: ":8080", HMACSecret: "x", ArticleRoutePrefix: routePrefix}
 	s := NewServer(database, cfg, logger, renderer)
 	r := chi.NewRouter()
+	r.Use(stripTrailingSlash)
 	RegisterPublicRoutes(r, s)
 	RegisterArticleRoutes(r, s)
 	return s, r
@@ -428,6 +430,62 @@ func TestPublicShowPercentEncodedSlug(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "Year") {
 		t.Error("article title not rendered")
 	}
+}
+
+// TestPublicTrailingSlash covers stripTrailingSlash: every public route also
+// answers its trailing-slash form without a redirect, like the Rails router
+// this app mirrors. Only one slash is normalized.
+func TestPublicTrailingSlash(t *testing.T) {
+	t.Run("article show without prefix", func(t *testing.T) {
+		s, h := newPublicTestServer(t, "")
+		seedArticle(t, s, seedArticleOpts{slug: "post-01", title: "Post 01", status: int64(domain.StatusPublish), createdAt: 1})
+		if rec := get(t, h, "/post-01/"); rec.Code != http.StatusOK {
+			t.Errorf("GET /post-01/: status = %d, want 200", rec.Code)
+		}
+		if rec := get(t, h, "/post-01//"); rec.Code != http.StatusNotFound {
+			t.Errorf("GET /post-01//: status = %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("article show and index with prefix", func(t *testing.T) {
+		s, h := newPublicTestServer(t, "blog")
+		seedArticle(t, s, seedArticleOpts{slug: "post-01", title: "Post 01", status: int64(domain.StatusPublish), createdAt: 1})
+		for _, target := range []string{"/blog/post-01/", "/blog/", "/blog"} {
+			if rec := get(t, h, target); rec.Code != http.StatusOK {
+				t.Errorf("GET %s: status = %d, want 200", target, rec.Code)
+			}
+		}
+	})
+
+	t.Run("feed", func(t *testing.T) {
+		_, h := newPublicTestServer(t, "")
+		if rec := get(t, h, "/feed.xml/"); rec.Code != http.StatusOK {
+			t.Errorf("GET /feed.xml/: status = %d, want 200", rec.Code)
+		}
+	})
+
+	t.Run("percent-encoded slug", func(t *testing.T) {
+		s, h := newPublicTestServer(t, "")
+		seedArticle(t, s, seedArticleOpts{slug: "2024年", title: "Year", status: int64(domain.StatusPublish), createdAt: 1})
+		seedArticle(t, s, seedArticleOpts{slug: "a%41b", title: "Literal Percent", status: int64(domain.StatusPublish), createdAt: 2})
+		seedArticle(t, s, seedArticleOpts{slug: "aAb", title: "Decoded", status: int64(domain.StatusPublish), createdAt: 3})
+		// Same lowercase-hex escaping as TestPublicShowPercentEncodedSlug,
+		// plus the trailing slash: the strip must keep chi routing on
+		// RawPath, or slugParam would double-decode and miss the slug.
+		if rec := get(t, h, "/2024%e5%b9%b4/"); rec.Code != http.StatusOK {
+			t.Errorf("GET /2024%%e5%%b9%%b4/: status = %d, want 200", rec.Code)
+		}
+		// %61 decodes to "a" and %2541 to "%41", so the URL names the
+		// literal-percent slug, but the non-canonical escaping sets RawPath.
+		// Routing the strip on the decoded Path would let slugParam's
+		// unescape run a second time and serve "aAb" instead.
+		rec := get(t, h, "/%61%2541b/")
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET /%%61%%2541b/: status = %d, want 200", rec.Code)
+		} else if !strings.Contains(rec.Body.String(), "Literal Percent") {
+			t.Errorf("GET /%%61%%2541b/: served the wrong article (slugParam double-decode)")
+		}
+	})
 }
 
 // TestPublicShowErrorNotCached: Cache-Control is set only after every

@@ -30,6 +30,9 @@ func NewRouter(s *Server) http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(accessLog(s.Log))
 	r.Use(middleware.Recoverer)
+	// stripTrailingSlash only rewrites the chi routing path, so the
+	// middlewares below still see the original request path.
+	r.Use(stripTrailingSlash)
 	r.Use(s.redirectMiddleware)
 	r.Use(s.setupRedirect)
 	r.Use(originCheck)

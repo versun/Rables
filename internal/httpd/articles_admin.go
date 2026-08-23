@@ -45,8 +45,9 @@ const defaultArticleTag = "blog"
 // unpublish member PATCHes become POSTs. Wired into NewRouter by the
 // integrator.
 func RegisterArticlesAdminRoutes(r chi.Router, s *Server) {
+	// stripTrailingSlash normalizes /admin/ to /admin before routing, so a
+	// single pattern covers both spellings.
 	r.With(s.RequireAuth).Get("/admin", s.adminArticlesIndex)
-	r.With(s.RequireAuth).Get("/admin/", s.adminArticlesIndex)
 	r.Route("/admin/posts", func(r chi.Router) {
 		r.Use(s.RequireAuth)
 		r.Get("/", s.adminArticlesIndex)

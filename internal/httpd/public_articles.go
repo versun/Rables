@@ -31,10 +31,14 @@ import (
 // settings change takes effect without a restart or re-registration. chi
 // requires one param name per path position, so the root wildcard is {p1}
 // everywhere; the handlers interpret it as prefix or slug.
+//
+// The Rails routes ignore one trailing slash and stripTrailingSlash
+// (middleware.go) reproduces that by normalizing the routing path, so the
+// trailing-slash forms arrive here as /{p1} and /{p1}/{slug}: /{prefix}/ is
+// the index via /{p1}, /{prefix}/{slug}/ the show via /{p1}/{slug}.
 func RegisterArticleRoutes(r chi.Router, s *Server) {
 	r.Get("/", s.publicArticleIndex)
 	r.Get("/{p1}", s.publicArticleShowAtRoot)
-	r.Get("/{p1}/", s.publicArticleIndexAtPrefix)
 	r.Get("/{p1}/{slug}", s.publicArticleShowAtPrefix)
 }
 
@@ -51,25 +55,22 @@ func (s *Server) routePrefix(ctx context.Context) string {
 	return strings.Trim(s.Cfg.ArticleRoutePrefix, "/")
 }
 
-// publicArticleShowAtRoot serves /{slug} only when no route prefix is
-// configured; with a prefix the bare slug is not routed (Rails scope
-// behavior) and answers the static 404.
+// publicArticleShowAtRoot serves /{slug} when no route prefix is configured.
+// With a prefix the bare slug is not routed (Rails scope behavior) and
+// answers the static 404 — unless p1 is the prefix itself, in which case the
+// request is the scoped article index (/{prefix}, or /{prefix}/ normalized by
+// stripTrailingSlash).
 func (s *Server) publicArticleShowAtRoot(w http.ResponseWriter, r *http.Request) {
-	if s.routePrefix(r.Context()) != "" {
-		s.publicNotFound(w)
+	prefix := s.routePrefix(r.Context())
+	if prefix == "" {
+		s.publicArticleShow(w, r, slugParam(r, "p1"))
 		return
 	}
-	s.publicArticleShow(w, r, slugParam(r, "p1"))
-}
-
-// publicArticleIndexAtPrefix serves /{p1}/ as the article index only when p1
-// matches the configured prefix.
-func (s *Server) publicArticleIndexAtPrefix(w http.ResponseWriter, r *http.Request) {
-	if p := s.routePrefix(r.Context()); p == "" || chi.URLParam(r, "p1") != p {
-		s.publicNotFound(w)
+	if chi.URLParam(r, "p1") == prefix {
+		s.publicArticleIndex(w, r)
 		return
 	}
-	s.publicArticleIndex(w, r)
+	s.publicNotFound(w)
 }
 
 // publicArticleShowAtPrefix serves /{p1}/{slug} only when p1 matches the
