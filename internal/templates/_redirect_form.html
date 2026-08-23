@@ -1,8 +1,9 @@
 {{/* Shared body of the new/edit redirect forms: the errors block plus every
      field. The page supplies the outer <form> tag (its action differs) and
-     the data (adminRedirectFormData with .Redirect and .Errors). The
-     redirect-form controller toggles the simple/regex field groups from the
-     mode select. */}}
+     the data (adminRedirectFormData with .Redirect, .Kind, .Host, .Path and
+     .Errors). The redirect-form controller shows the field group of the
+     selected kind, hides the match-mode select for regex rules, and keeps
+     the plain-language summary of what will match current. */}}
 {{define "redirect_form_fields"}}
 {{if .Errors}}
 <div class="form-errors">
@@ -15,32 +16,43 @@
 
 <div data-controller="redirect-form">
   <div class="field">
-    <label for="kind">Mode</label>
+    <label for="kind">Match on</label>
     <select id="kind" name="kind" data-action="change->redirect-form#toggle">
-      <option value="simple"{{if and (ne .Redirect.MatchOn "path") (ne .Redirect.MatchOn "host_path") (ne .Redirect.MatchOn "host")}} selected{{end}}>Simple</option>
-      <option value="regex"{{if or (eq .Redirect.MatchOn "path") (eq .Redirect.MatchOn "host_path") (eq .Redirect.MatchOn "host")}} selected{{end}}>Advanced (regex)</option>
+      <option value="path"{{if eq .Kind "path"}} selected{{end}}>Path — a path on this site</option>
+      <option value="host"{{if eq .Kind "host"}} selected{{end}}>Host — a specific (sub)domain</option>
+      <option value="regex"{{if eq .Kind "regex"}} selected{{end}}>Advanced (regex)</option>
     </select>
     <small>
-      <code>Simple</code> matches a plain address string — no regular expression needed.
+      <code>Path</code> matches a URL path on any host the site answers.
+      <code>Host</code> matches one (sub)domain, with an optional path.
       <code>Advanced (regex)</code> matches a regular expression with capture groups.
     </small>
   </div>
 
-  <div data-redirect-form-target="simpleFields">
+  <div data-redirect-form-target="pathFields">
     <div class="field">
-      <label for="match_from">From</label>
-      <input type="text" id="match_from" name="match_from" placeholder="blog.example.com/blog/" value="{{.Redirect.MatchFrom}}">
-      <small>
-        The address to match: a path (<code>/old-page</code>, applies on any host) or a host with
-        an optional path (<code>blog.example.com</code> or <code>blog.example.com/blog/</code>).
-      </small>
+      <label for="path">Path</label>
+      <input type="text" id="path" name="path" placeholder="/old-page" value="{{.Path}}"
+             data-action="input->redirect-form#summarize">
+      <small>The URL path to match, on any host, e.g. <code>/old-page</code>.</small>
+    </div>
+  </div>
+
+  <div data-redirect-form-target="hostFields">
+    <div class="field">
+      <label for="host">Host</label>
+      <input type="text" id="host" name="host" placeholder="blog.example.com" value="{{.Host}}"
+             data-action="input->redirect-form#summarize">
+      <small>The (sub)domain to match, without scheme or path, e.g. <code>blog.example.com</code>.</small>
     </div>
     <div class="field">
-      <label for="match_mode">Match</label>
-      <select id="match_mode" name="match_mode">
-        <option value="exact"{{if ne .Redirect.MatchPrefix 1}} selected{{end}}>Exact match</option>
-        <option value="prefix"{{if eq .Redirect.MatchPrefix 1}} selected{{end}}>Include sub-paths (the remainder is appended to the target)</option>
-      </select>
+      <label for="host_path">Path (optional)</label>
+      <input type="text" id="host_path" name="host_path" placeholder="/feed" value="{{.Path}}"
+             data-action="input->redirect-form#summarize">
+      <small>
+        Limits the rule to one path on the host, e.g. <code>/feed</code>. Leave blank to match
+        the root page only — or pick <code>Include sub-paths</code> below to cover the whole host.
+      </small>
     </div>
   </div>
 
@@ -58,6 +70,16 @@
       </small>
     </div>
   </div>
+
+  <div class="field" data-redirect-form-target="matchMode">
+    <label for="match_mode">Match</label>
+    <select id="match_mode" name="match_mode" data-action="change->redirect-form#summarize">
+      <option value="exact"{{if ne .Redirect.MatchPrefix 1}} selected{{end}}>Exact match</option>
+      <option value="prefix"{{if eq .Redirect.MatchPrefix 1}} selected{{end}}>Include sub-paths (the remainder is appended to the target)</option>
+    </select>
+  </div>
+
+  <p class="help-text" data-redirect-form-target="summary"></p>
 
   <div class="field">
     <label for="replacement">To</label>

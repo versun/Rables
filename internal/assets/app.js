@@ -1379,24 +1379,77 @@
   }
 
   // --- redirect_form -----------------------------------------------------------
-  // New/edit redirect form: the mode select toggles between the simple
-  // (From/Match) field group and the advanced regex field group.
+  // New/edit redirect form: the kind select toggles between the path, host and
+  // regex field groups, hides the match-mode select for regex rules, and keeps
+  // the plain-language summary of what will match current — so whether a rule
+  // fires on the path or on a host is visible before saving.
 
   class RedirectFormController extends Controller {
-    static targets = ["simpleFields", "regexFields"];
+    static targets = ["pathFields", "hostFields", "regexFields", "matchMode", "summary"];
 
     connect() {
       this.toggle();
     }
 
     toggle() {
-      const kind = this.element.querySelector('[name="kind"]')?.value || "simple";
-      if (this.hasSimpleFieldsTarget) {
-        this.simpleFieldsTarget.style.display = kind === "regex" ? "none" : "block";
+      const kind = this.kind();
+      if (this.hasPathFieldsTarget) {
+        this.pathFieldsTarget.style.display = kind === "path" ? "block" : "none";
+      }
+      if (this.hasHostFieldsTarget) {
+        this.hostFieldsTarget.style.display = kind === "host" ? "block" : "none";
       }
       if (this.hasRegexFieldsTarget) {
         this.regexFieldsTarget.style.display = kind === "regex" ? "block" : "none";
       }
+      if (this.hasMatchModeTarget) {
+        this.matchModeTarget.style.display = kind === "regex" ? "none" : "block";
+      }
+      this.summarize();
+    }
+
+    // summarize rewrites the plain-language preview of what the rule matches.
+    // Regex rules get no summary: their subject is derived from the pattern,
+    // which the regex field's help text already explains.
+    summarize() {
+      if (!this.hasSummaryTarget) return;
+      const kind = this.kind();
+      if (kind === "regex") {
+        this.summaryTarget.textContent = "";
+        this.summaryTarget.style.display = "none";
+        return;
+      }
+      this.summaryTarget.style.display = "";
+      const prefix = this.valueOf("match_mode") === "prefix";
+      if (kind === "host") {
+        const host = this.valueOf("host") || "…";
+        const path = this.valueOf("host_path");
+        // Join like joinHostPath server-side, so the preview never shows the
+        // two inputs squashed together while the path misses its leading "/".
+        const from = path ? `${host.replace(/\/$/, "")}/${path.replace(/^\//, "")}` : host;
+        if (prefix) {
+          this.summaryTarget.textContent = path
+            ? `Matches "${from}" and everything under it; the remainder is appended to the target.`
+            : `Matches every page on "${host}"; the requested path is appended to the target.`;
+        } else {
+          this.summaryTarget.textContent = path
+            ? `Matches "${from}" exactly.`
+            : `Matches only the root page of "${host}".`;
+        }
+      } else {
+        const path = this.valueOf("path") || "…";
+        this.summaryTarget.textContent = prefix
+          ? `Matches the path "${path}" and everything under it, on any host; the remainder is appended to the target.`
+          : `Matches the path "${path}" exactly, on any host.`;
+      }
+    }
+
+    kind() {
+      return this.element.querySelector('[name="kind"]')?.value || "path";
+    }
+
+    valueOf(name) {
+      return (this.element.querySelector(`[name="${name}"]`)?.value || "").trim();
     }
   }
 

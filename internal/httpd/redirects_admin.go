@@ -64,15 +64,19 @@ func (s *Server) adminRedirectsIndex(w http.ResponseWriter, r *http.Request) {
 type adminRedirectFormData struct {
 	Flash    templates.Flash
 	Redirect query.Redirect
+	Kind     string   // form kind: "path", "host" or "regex"
+	Host     string   // host-kind input (raw on errors, split from match_from on edit)
+	Path     string   // path input of the path/host kinds (same sourcing as Host)
 	Errors   []string // validation messages, shown like the Rails form-errors block
 }
 
 // adminRedirectsNew renders GET /admin/redirects/new. New records default to
-// enabled, like the Rails form's checkbox.
+// enabled, like the Rails form's checkbox, and to the path kind.
 func (s *Server) adminRedirectsNew(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "admin_redirects_new", adminRedirectFormData{
 		Flash:    s.PopFlash(r, w),
 		Redirect: query.Redirect{Enabled: 1},
+		Kind:     "path",
 	})
 }
 
@@ -86,9 +90,12 @@ func (s *Server) adminRedirectsCreate(w http.ResponseWriter, r *http.Request) {
 	in := redirectFromForm(r)
 	if errs := validateRedirectForm(in); len(errs) > 0 {
 		activity.Log(r.Context(), s.DB, "error", "failed", "redirect",
-			fmt.Sprintf("%s errors=%s", redirectLogMatch(in), activity.Quote(strings.Join(errs, ", "))))
+			fmt.Sprintf("%s errors=%s", redirectLogMatch(in.Redirect), activity.Quote(strings.Join(errs, ", "))))
 		s.render(w, http.StatusUnprocessableEntity, "admin_redirects_new", adminRedirectFormData{
-			Redirect: in,
+			Redirect: in.Redirect,
+			Kind:     in.kind,
+			Host:     in.host,
+			Path:     in.path,
 			Errors:   errs,
 		})
 		return
@@ -129,9 +136,13 @@ func (s *Server) adminRedirectsEdit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	kind, host, path := redirectFormSplit(redirect)
 	s.render(w, http.StatusOK, "admin_redirects_edit", adminRedirectFormData{
 		Flash:    s.PopFlash(r, w),
 		Redirect: redirect,
+		Kind:     kind,
+		Host:     host,
+		Path:     path,
 	})
 }
 
@@ -159,14 +170,17 @@ func (s *Server) adminRedirectsUpdate(w http.ResponseWriter, r *http.Request) {
 	// like "posts/(\d+)" (no leading "/") to host+path, where the
 	// whole-subject anchoring can never match. Editing the pattern re-derives
 	// the subject as documented in the form.
-	if in.MatchOn != redirectMatchSimple && existing.MatchOn != redirectMatchSimple && existing.Regex == in.Regex {
+	if in.kind == "regex" && existing.MatchOn != redirectMatchSimple && existing.Regex == in.Regex {
 		in.MatchOn = existing.MatchOn
 	}
 	if errs := validateRedirectForm(in); len(errs) > 0 {
 		activity.Log(r.Context(), s.DB, "error", "failed", "redirect",
-			fmt.Sprintf("%s errors=%s", redirectLogMatch(in), activity.Quote(strings.Join(errs, ", "))))
+			fmt.Sprintf("%s errors=%s", redirectLogMatch(in.Redirect), activity.Quote(strings.Join(errs, ", "))))
 		s.render(w, http.StatusUnprocessableEntity, "admin_redirects_edit", adminRedirectFormData{
-			Redirect: in,
+			Redirect: in.Redirect,
+			Kind:     in.kind,
+			Host:     in.host,
+			Path:     in.path,
 			Errors:   errs,
 		})
 		return
@@ -187,7 +201,7 @@ func (s *Server) adminRedirectsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	activity.Log(r.Context(), s.DB, "info", "updated", "redirect",
-		fmt.Sprintf("%s replacement=%s", redirectLogMatch(in), activity.Quote(in.Replacement)))
+		fmt.Sprintf("%s replacement=%s", redirectLogMatch(in.Redirect), activity.Quote(in.Replacement)))
 	s.InvalidateRedirectCache()
 	s.SetFlash(w, templates.Flash{Notice: "Redirect was successfully updated."})
 	http.Redirect(w, r, "/admin/redirects", http.StatusFound)
@@ -270,27 +284,78 @@ func redirectIDParam(r *http.Request) int64 {
 	return id
 }
 
+// redirectFormValues is one parsed redirect form: the synthesized Redirect
+// ready to persist, plus the raw kind/host/path inputs. The raw inputs are
+// kept because the stored match_from loses the host/path split, which the
+// validation messages and the re-rendered form need.
+type redirectFormValues struct {
+	query.Redirect
+	kind string // "path", "host" or "regex"
+	host string // host-kind input as typed (trimmed)
+	path string // path/host_path input as typed (trimmed)
+}
+
 // redirectFromForm reads the permitted redirect params. kind selects the mode:
-// "simple" fills match_from/match_prefix/replacement and clears the regex,
-// "regex" fills regex/replacement and derives the match subject from the
-// pattern. Anything unexpected (including an absent kind) is a simple rule.
-func redirectFromForm(r *http.Request) query.Redirect {
-	in := query.Redirect{
-		Replacement: r.FormValue("replacement"),
-		Permanent:   checkboxInt(r, "permanent"),
-		Enabled:     checkboxInt(r, "enabled"),
+// "path" and "host" build a simple rule (match_from/match_prefix/replacement,
+// regex cleared), "regex" fills regex/replacement and derives the match subject
+// from the pattern. Anything unexpected (including an absent kind) is a path
+// rule.
+func redirectFromForm(r *http.Request) redirectFormValues {
+	in := redirectFormValues{
+		Redirect: query.Redirect{
+			Replacement: r.FormValue("replacement"),
+			Permanent:   checkboxInt(r, "permanent"),
+			Enabled:     checkboxInt(r, "enabled"),
+		},
+		kind: r.FormValue("kind"),
 	}
-	if r.FormValue("kind") == "regex" {
+	switch in.kind {
+	case "regex":
 		in.Regex = r.FormValue("regex")
 		in.MatchOn = detectRedirectMatchOn(in.Regex)
 		return in
+	case "host":
+		in.host = strings.TrimSpace(r.FormValue("host"))
+		in.path = strings.TrimSpace(r.FormValue("host_path"))
+		in.MatchOn = redirectMatchSimple
+		in.MatchFrom = normalizeMatchFrom(joinHostPath(in.host, in.path))
+	default: // "path" and anything unexpected
+		in.kind = "path"
+		in.path = strings.TrimSpace(r.FormValue("path"))
+		in.MatchOn = redirectMatchSimple
+		in.MatchFrom = in.path
 	}
-	in.MatchOn = redirectMatchSimple
-	in.MatchFrom = normalizeMatchFrom(r.FormValue("match_from"))
 	if r.FormValue("match_mode") == "prefix" {
 		in.MatchPrefix = 1
 	}
 	return in
+}
+
+// joinHostPath combines the host kind's two inputs into one match_from string:
+// the bare host when the optional path is blank.
+func joinHostPath(host, path string) string {
+	if path == "" {
+		return host
+	}
+	return strings.TrimSuffix(host, "/") + "/" + strings.TrimPrefix(path, "/")
+}
+
+// redirectFormSplit derives the form kind and the host/path inputs of a stored
+// redirect: simple rules split on the leading-"/" convention (a path rule's
+// match_from is the path; a host rule's splits at the first "/"), everything
+// else edits as a regex rule.
+func redirectFormSplit(red query.Redirect) (kind, host, path string) {
+	if red.MatchOn == redirectMatchSimple {
+		if strings.HasPrefix(red.MatchFrom, "/") {
+			return "path", "", red.MatchFrom
+		}
+		h, p, found := strings.Cut(red.MatchFrom, "/")
+		if !found {
+			return "host", red.MatchFrom, ""
+		}
+		return "host", h, "/" + p
+	}
+	return "regex", "", ""
 }
 
 // redirectLogMatch is the activity-log subject of one redirect write: a simple
@@ -429,41 +494,52 @@ func checkboxInt(r *http.Request, name string) int64 {
 }
 
 // validateRedirectForm mirrors the Redirect validations: presence first, then
-// per-mode shape checks — a regex must compile, a simple match_from must be a
-// path or host/path string, and a simple target must be a path or absolute URL
-// (a bare word like "tags/blog" would emit a broken relative Location).
-func validateRedirectForm(in query.Redirect) []string {
+// per-kind shape checks — a regex must compile, a host must be a plain host
+// name, a path must start with "/", and a simple target must be a path or
+// absolute URL (a bare word like "tags/blog" would emit a broken relative
+// Location). Messages name the form field the admin sees.
+func validateRedirectForm(in redirectFormValues) []string {
 	var errs []string
-	if in.MatchOn == redirectMatchSimple {
-		from := in.MatchFrom
-		if from == "" {
-			errs = append(errs, "Match from can't be blank")
-		} else if host, _, _ := strings.Cut(from, "/"); strings.ContainsAny(from, " \t") ||
-			strings.Contains(from, "://") || strings.HasSuffix(host, ":") {
+	if in.kind == "regex" {
+		regexBlank := strings.TrimSpace(in.Regex) == ""
+		if regexBlank {
+			errs = append(errs, "Regex can't be blank")
+		}
+		if strings.TrimSpace(in.Replacement) == "" {
+			errs = append(errs, "Replacement can't be blank")
+		}
+		if !regexBlank {
+			if _, err := regexp.Compile(in.Regex); err != nil {
+				errs = append(errs, fmt.Sprintf("Regex is not a valid regular expression: %s", err))
+			}
+		}
+		return errs
+	}
+	if in.kind == "host" {
+		if in.host == "" {
+			errs = append(errs, "Host can't be blank")
+		} else if strings.ContainsAny(in.host, " \t") || strings.Contains(in.host, "://") ||
+			strings.Contains(in.host, "/") || strings.HasSuffix(in.host, ":") {
 			// A trailing bare colon is an empty port ("host:"), which
 			// normalizeMatchFrom deliberately keeps (see its comment): the
 			// rule would never match, so reject it here instead. IPv6 hosts
 			// ("::1") do not end in a colon and pass.
-			errs = append(errs, "Match from must be a path (like /old-page) or a host with an optional path (like blog.example.com/blog/)")
+			errs = append(errs, "Host must be a plain host name, like blog.example.com (no scheme, path or port)")
 		}
-		if strings.TrimSpace(in.Replacement) == "" {
-			errs = append(errs, "Replacement can't be blank")
-		} else if !validSimpleRedirectTarget(in.Replacement) {
-			errs = append(errs, "Replacement must start with / or be an absolute URL (http:// or https://)")
-		}
-		return errs
 	}
-	regexBlank := strings.TrimSpace(in.Regex) == ""
-	if regexBlank {
-		errs = append(errs, "Regex can't be blank")
+	if in.path == "" {
+		if in.kind == "path" {
+			errs = append(errs, "Path can't be blank")
+		}
+	} else if !strings.HasPrefix(in.path, "/") {
+		errs = append(errs, "Path must start with /")
+	} else if strings.ContainsAny(in.path, " \t") {
+		errs = append(errs, "Path must not contain spaces")
 	}
 	if strings.TrimSpace(in.Replacement) == "" {
 		errs = append(errs, "Replacement can't be blank")
-	}
-	if !regexBlank {
-		if _, err := regexp.Compile(in.Regex); err != nil {
-			errs = append(errs, fmt.Sprintf("Regex is not a valid regular expression: %s", err))
-		}
+	} else if !validSimpleRedirectTarget(in.Replacement) {
+		errs = append(errs, "Replacement must start with / or be an absolute URL (http:// or https://)")
 	}
 	return errs
 }

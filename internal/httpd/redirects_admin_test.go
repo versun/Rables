@@ -94,14 +94,14 @@ func TestAdminRedirectsCRUD(t *testing.T) {
 		t.Fatalf("empty index: status = %d", rec.Code)
 	}
 
-	// New form defaults to enabled and simple mode.
+	// New form defaults to enabled and the path kind.
 	rec = doRequest(t, h, http.MethodGet, "/admin/redirects/new", nil, session)
 	newForm := rec.Body.String()
 	if rec.Code != http.StatusOK || !strings.Contains(newForm, `action="/admin/redirects"`) {
 		t.Fatalf("new form: status = %d", rec.Code)
 	}
-	if !strings.Contains(newForm, `<option value="simple" selected`) {
-		t.Errorf("new form does not default to simple mode")
+	if !strings.Contains(newForm, `<option value="path" selected`) {
+		t.Errorf("new form does not default to the path kind")
 	}
 	if !strings.Contains(newForm, `id="enabled" name="enabled" value="1" checked`) {
 		t.Errorf("new form does not default to enabled")
@@ -160,16 +160,17 @@ func TestAdminRedirectsCRUD(t *testing.T) {
 		t.Fatalf("delete host+path redirect: %v", err)
 	}
 
-	// Create a simple rule: the host part of match_from is lowercased.
+	// Create a simple host rule: the host part is lowercased at save time.
 	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{
-		"kind":        {"simple"},
-		"match_from":  {"Blog.Example.COM/Blog/"},
+		"kind":        {"host"},
+		"host":        {"Blog.Example.COM"},
+		"host_path":   {"/Blog/"},
 		"match_mode":  {"prefix"},
 		"replacement": {"/blog/"},
 		"enabled":     {"1"},
 	}, session)
 	if rec.Code != http.StatusFound {
-		t.Fatalf("create simple rule: status = %d", rec.Code)
+		t.Fatalf("create host rule: status = %d", rec.Code)
 	}
 	rows, err = s.Q.ListRedirects(ctx)
 	if err != nil || len(rows) != 2 {
@@ -189,7 +190,8 @@ func TestAdminRedirectsCRUD(t *testing.T) {
 		t.Errorf("stored simple redirect = %+v", simpleRule)
 	}
 
-	// Index lists both in evaluation order with row numbers.
+	// Index lists both in evaluation order with row numbers, and the simple
+	// host rule carries Host + Prefix badges.
 	rec = doRequest(t, h, http.MethodGet, "/admin/redirects", nil, session)
 	body := rec.Body.String()
 	regexAt := strings.Index(body, "^/old$")
@@ -198,6 +200,9 @@ func TestAdminRedirectsCRUD(t *testing.T) {
 		t.Errorf("index does not list the created redirects")
 	} else if regexAt > simpleAt {
 		t.Errorf("index lists the simple rule before the older regex rule, want evaluation (position) order")
+	}
+	if !strings.Contains(body, `<span class="badge badge-info">Host</span>`) {
+		t.Errorf("index does not badge the simple host rule as Host")
 	}
 	if !strings.Contains(body, `data-redirect-order-url-value="/admin/redirects/reorder"`) {
 		t.Errorf("index is missing the drag-and-drop controller hooks")
@@ -216,28 +221,42 @@ func TestAdminRedirectsCRUD(t *testing.T) {
 	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "is not a valid regular expression") {
 		t.Errorf("invalid regex create: status = %d, want 422 with the regex error", rec.Code)
 	}
-	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"simple"}, "replacement": {"/x"}}, session)
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Match from can&#39;t be blank") {
-		t.Errorf("blank match_from create: status = %d, want 422 with the blank error", rec.Code)
+	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"path"}, "replacement": {"/x"}}, session)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Path can&#39;t be blank") {
+		t.Errorf("blank path create: status = %d, want 422 with the blank error", rec.Code)
 	}
-	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"simple"}, "match_from": {"https://x.com"}, "replacement": {"/x"}}, session)
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "must be a path") {
-		t.Errorf("scheme in match_from: status = %d, want 422 with the shape error", rec.Code)
+	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"path"}, "path": {"old"}, "replacement": {"/x"}}, session)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Path must start with /") {
+		t.Errorf("relative path create: status = %d, want 422 with the path error", rec.Code)
 	}
-	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"simple"}, "match_from": {"/old"}, "replacement": {"tags/blog"}}, session)
+	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"host"}, "replacement": {"/x"}}, session)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Host can&#39;t be blank") {
+		t.Errorf("blank host create: status = %d, want 422 with the blank error", rec.Code)
+	}
+	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"host"}, "host": {"https://x.com"}, "replacement": {"/x"}}, session)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "plain host name") {
+		t.Errorf("scheme in host: status = %d, want 422 with the host error", rec.Code)
+	}
+	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"path"}, "path": {"/old"}, "replacement": {"tags/blog"}}, session)
 	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "must start with /") {
 		t.Errorf("relative-word replacement: status = %d, want 422 with the target error", rec.Code)
 	}
 	// An empty port leaves a dangling colon that would never match.
-	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"simple"}, "match_from": {"blog.example.com:"}, "replacement": {"/x"}}, session)
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "must be a path") {
-		t.Errorf("empty-port match_from: status = %d, want 422 with the shape error", rec.Code)
+	rec = doRequest(t, h, http.MethodPost, "/admin/redirects", url.Values{"kind": {"host"}, "host": {"blog.example.com:"}, "replacement": {"/x"}}, session)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "plain host name") {
+		t.Errorf("empty-port host: status = %d, want 422 with the host error", rec.Code)
 	}
 
-	// Edit form of the simple rule opens in simple mode with its values.
+	// Edit form of the simple host rule opens in the host kind with the
+	// match_from split back into the two inputs.
 	rec = doRequest(t, h, http.MethodGet, "/admin/redirects/"+itoa(simpleRule.ID)+"/edit", nil, session)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `value="blog.example.com/Blog/"`) {
-		t.Fatalf("edit form: status = %d", rec.Code)
+	editForm := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(editForm, `<option value="host" selected`) {
+		t.Fatalf("edit form: status = %d, want the host kind selected", rec.Code)
+	}
+	if !strings.Contains(editForm, `name="host" placeholder="blog.example.com" value="blog.example.com"`) ||
+		!strings.Contains(editForm, `name="host_path" placeholder="/feed" value="/Blog/"`) {
+		t.Errorf("edit form does not split the host rule into host + path inputs")
 	}
 
 	// Update the regex rule, flipping permanent/enabled.
@@ -257,11 +276,11 @@ func TestAdminRedirectsCRUD(t *testing.T) {
 		t.Errorf("update stored match_on %q, want path", updated.MatchOn)
 	}
 
-	// Switching a rule to simple mode clears the regex.
+	// Switching a rule to a path rule clears the regex.
 	rec = doRequest(t, h, http.MethodPost, "/admin/redirects/"+itoa(redirect.ID),
-		url.Values{"kind": {"simple"}, "match_from": {"/oldest"}, "replacement": {"/newest"}}, session)
+		url.Values{"kind": {"path"}, "path": {"/oldest"}, "replacement": {"/newest"}}, session)
 	if rec.Code != http.StatusFound {
-		t.Fatalf("update to simple: status = %d", rec.Code)
+		t.Fatalf("update to path rule: status = %d", rec.Code)
 	}
 	updated, err = s.Q.GetRedirectByID(ctx, redirect.ID)
 	if err != nil {
@@ -396,7 +415,8 @@ func postRedirectReorder(t *testing.T, h http.Handler, session *http.Cookie, bod
 }
 
 // TestRedirectFormHelpers covers the pure helpers behind the form: match_from
-// host normalization, regex subject auto-detection, and simple-target shape.
+// host normalization, the host/path join and split the form fields map to,
+// regex subject auto-detection, and simple-target shape.
 func TestRedirectFormHelpers(t *testing.T) {
 	fromCases := map[string]string{
 		"Blog.Example.COM/Blog/":  "blog.example.com/Blog/",
@@ -410,6 +430,38 @@ func TestRedirectFormHelpers(t *testing.T) {
 	for in, want := range fromCases {
 		if got := normalizeMatchFrom(in); got != want {
 			t.Errorf("normalizeMatchFrom(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	joinCases := []struct {
+		host, path, want string
+	}{
+		{"blog.example.com", "", "blog.example.com"},
+		{"blog.example.com", "/feed", "blog.example.com/feed"},
+		{"blog.example.com/", "/feed", "blog.example.com/feed"},
+	}
+	for _, c := range joinCases {
+		if got := joinHostPath(c.host, c.path); got != c.want {
+			t.Errorf("joinHostPath(%q, %q) = %q, want %q", c.host, c.path, got, c.want)
+		}
+	}
+
+	splitCases := []struct {
+		red                          query.Redirect
+		wantKind, wantHost, wantPath string
+	}{
+		{query.Redirect{MatchOn: "simple", MatchFrom: "/old"}, "path", "", "/old"},
+		{query.Redirect{MatchOn: "simple", MatchFrom: "blog.example.com"}, "host", "blog.example.com", ""},
+		{query.Redirect{MatchOn: "simple", MatchFrom: "blog.example.com/feed"}, "host", "blog.example.com", "/feed"},
+		{query.Redirect{MatchOn: "simple", MatchFrom: "blog.example.com/a/b"}, "host", "blog.example.com", "/a/b"},
+		{query.Redirect{MatchOn: "path", Regex: "^/x$"}, "regex", "", ""},
+		{query.Redirect{MatchOn: "host_path", Regex: `^blog\.example\.com$`}, "regex", "", ""},
+	}
+	for _, c := range splitCases {
+		kind, host, path := redirectFormSplit(c.red)
+		if kind != c.wantKind || host != c.wantHost || path != c.wantPath {
+			t.Errorf("redirectFormSplit(%+v) = (%q, %q, %q), want (%q, %q, %q)",
+				c.red, kind, host, path, c.wantKind, c.wantHost, c.wantPath)
 		}
 	}
 

@@ -38,6 +38,7 @@
         <td><code>{{.Replacement}}</code></td>
         <td>
           {{if eq .MatchOn "simple"}}
+            {{if hasPrefix .MatchFrom "/"}}<span class="badge">Path</span>{{else}}<span class="badge badge-info">Host</span>{{end}}
             {{if .MatchPrefix}}<span class="badge badge-info">Prefix</span>{{else}}<span class="badge">Exact</span>{{end}}
           {{else if or (eq .MatchOn "host_path") (eq .MatchOn "host")}}
             <span class="badge badge-info">Host + Path</span>

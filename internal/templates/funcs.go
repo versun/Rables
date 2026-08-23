@@ -26,6 +26,7 @@ func FuncMap() template.FuncMap {
 		"paginationWindow": PaginationWindow,
 		"flashHTML":        FlashHTML,
 		"assetURL":         AssetURL,
+		"hasPrefix":        strings.HasPrefix,
 	}
 }
 
