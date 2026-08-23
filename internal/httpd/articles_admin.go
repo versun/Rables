@@ -37,6 +37,11 @@ const maxAdminPageNumber int64 = math.MaxInt64 / adminArticlesPerPage
 // carries the "blog" tag unless the field is edited before saving.
 const defaultArticleTag = "blog"
 
+// untaggedTagParam is the Tags header filter value that lists articles with
+// no tags at all; it maps to the untagged query flag instead of a tag-name
+// lookup (so a real tag named "none" cannot be filtered by name).
+const untaggedTagParam = "none"
+
 // RegisterArticlesAdminRoutes mounts the admin article UI, mirroring Rails
 // namespace :admin: the admin root is the article list and resources
 // :articles are served under /admin/posts. HTML forms cannot PATCH/DELETE,
@@ -266,10 +271,18 @@ func (s *Server) adminArticlesList(w http.ResponseWriter, r *http.Request, scope
 	if statusFiltered {
 		statusValue = effectiveStatus
 	}
+	// "none" is the untagged filter, not a tag name: it sets the untagged
+	// flag and matches no tag name. The raw param stays in Tag so the view
+	// keeps the active state and re-emits it in filter links.
+	queryTag, untagged := tag, int64(0)
+	if tag == untaggedTagParam {
+		queryTag, untagged = "", 1
+	}
 	filterParams := query.CountAdminArticlesFilteredParams{
 		StatusFilter: statusValue,
 		SearchLike:   likeTerm(term),
-		Tag:          tag,
+		Tag:          queryTag,
+		Untagged:     untagged,
 	}
 
 	var rows []query.Article
@@ -337,22 +350,22 @@ func (s *Server) listAdminArticlesSorted(ctx context.Context, f query.CountAdmin
 	switch {
 	case sort == "updated" && dir == "asc":
 		return s.Q.ListAdminArticlesFilteredUpdatedAsc(ctx, query.ListAdminArticlesFilteredUpdatedAscParams{
-			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag,
+			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag, Untagged: f.Untagged,
 			Limit: adminArticlesPerPage, Offset: offset,
 		})
 	case sort == "updated":
 		return s.Q.ListAdminArticlesFilteredUpdatedDesc(ctx, query.ListAdminArticlesFilteredUpdatedDescParams{
-			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag,
+			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag, Untagged: f.Untagged,
 			Limit: adminArticlesPerPage, Offset: offset,
 		})
 	case dir == "asc":
 		return s.Q.ListAdminArticlesFilteredCreatedAsc(ctx, query.ListAdminArticlesFilteredCreatedAscParams{
-			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag,
+			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag, Untagged: f.Untagged,
 			Limit: adminArticlesPerPage, Offset: offset,
 		})
 	default:
 		return s.Q.ListAdminArticlesFilteredCreatedDesc(ctx, query.ListAdminArticlesFilteredCreatedDescParams{
-			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag,
+			StatusFilter: f.StatusFilter, SearchLike: f.SearchLike, Tag: f.Tag, Untagged: f.Untagged,
 			Limit: adminArticlesPerPage, Offset: offset,
 		})
 	}

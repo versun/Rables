@@ -36,16 +36,24 @@ WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
   AND (CAST(?3 AS TEXT) = '' OR EXISTS (
        SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
        WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
+  AND (CAST(?4 AS INTEGER) = 0 OR NOT EXISTS (
+       SELECT 1 FROM article_tags WHERE article_tags.article_id = articles.id))
 `
 
 type CountAdminArticlesFilteredParams struct {
 	StatusFilter int64
 	SearchLike   string
 	Tag          string
+	Untagged     int64
 }
 
 func (q *Queries) CountAdminArticlesFiltered(ctx context.Context, arg CountAdminArticlesFilteredParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAdminArticlesFiltered, arg.StatusFilter, arg.SearchLike, arg.Tag)
+	row := q.db.QueryRowContext(ctx, countAdminArticlesFiltered,
+		arg.StatusFilter,
+		arg.SearchLike,
+		arg.Tag,
+		arg.Untagged,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -429,13 +437,16 @@ WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
   AND (CAST(?3 AS TEXT) = '' OR EXISTS (
        SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
        WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
-ORDER BY created_at ASC, id ASC LIMIT ?5 OFFSET ?4
+  AND (CAST(?4 AS INTEGER) = 0 OR NOT EXISTS (
+       SELECT 1 FROM article_tags WHERE article_tags.article_id = articles.id))
+ORDER BY created_at ASC, id ASC LIMIT ?6 OFFSET ?5
 `
 
 type ListAdminArticlesFilteredCreatedAscParams struct {
 	StatusFilter int64
 	SearchLike   string
 	Tag          string
+	Untagged     int64
 	Offset       int64
 	Limit        int64
 }
@@ -445,6 +456,7 @@ func (q *Queries) ListAdminArticlesFilteredCreatedAsc(ctx context.Context, arg L
 		arg.StatusFilter,
 		arg.SearchLike,
 		arg.Tag,
+		arg.Untagged,
 		arg.Offset,
 		arg.Limit,
 	)
@@ -499,20 +511,25 @@ WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
   AND (CAST(?3 AS TEXT) = '' OR EXISTS (
        SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
        WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
-ORDER BY created_at DESC, id DESC LIMIT ?5 OFFSET ?4
+  AND (CAST(?4 AS INTEGER) = 0 OR NOT EXISTS (
+       SELECT 1 FROM article_tags WHERE article_tags.article_id = articles.id))
+ORDER BY created_at DESC, id DESC LIMIT ?6 OFFSET ?5
 `
 
 type ListAdminArticlesFilteredCreatedDescParams struct {
 	StatusFilter int64
 	SearchLike   string
 	Tag          string
+	Untagged     int64
 	Offset       int64
 	Limit        int64
 }
 
 // Admin list (fetch_articles), 100 per page. The optional filters are shared
 // by all variants: status_filter -1 lists every status, an empty tag lists
-// every tag (the filter matches on the tag name), an empty search_like skips
+// every tag (the filter matches on the tag name), untagged 1 narrows to
+// articles with no tags at all (the caller's "none" filter choice; combine it
+// with an empty tag), an empty search_like skips
 // Article.search_content (LIKE on title/slug/description/content_html with
 // ESCAPE '\', written in the equivalent like(pattern, string, escape)
 // function form; the caller pre-escapes %, _ and backslash, then wraps the
@@ -527,6 +544,7 @@ func (q *Queries) ListAdminArticlesFilteredCreatedDesc(ctx context.Context, arg 
 		arg.StatusFilter,
 		arg.SearchLike,
 		arg.Tag,
+		arg.Untagged,
 		arg.Offset,
 		arg.Limit,
 	)
@@ -581,13 +599,16 @@ WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
   AND (CAST(?3 AS TEXT) = '' OR EXISTS (
        SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
        WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
-ORDER BY updated_at ASC, id ASC LIMIT ?5 OFFSET ?4
+  AND (CAST(?4 AS INTEGER) = 0 OR NOT EXISTS (
+       SELECT 1 FROM article_tags WHERE article_tags.article_id = articles.id))
+ORDER BY updated_at ASC, id ASC LIMIT ?6 OFFSET ?5
 `
 
 type ListAdminArticlesFilteredUpdatedAscParams struct {
 	StatusFilter int64
 	SearchLike   string
 	Tag          string
+	Untagged     int64
 	Offset       int64
 	Limit        int64
 }
@@ -597,6 +618,7 @@ func (q *Queries) ListAdminArticlesFilteredUpdatedAsc(ctx context.Context, arg L
 		arg.StatusFilter,
 		arg.SearchLike,
 		arg.Tag,
+		arg.Untagged,
 		arg.Offset,
 		arg.Limit,
 	)
@@ -651,13 +673,16 @@ WHERE (CAST(?1 AS INTEGER) = -1 OR status = CAST(?1 AS INTEGER))
   AND (CAST(?3 AS TEXT) = '' OR EXISTS (
        SELECT 1 FROM article_tags JOIN tags ON tags.id = article_tags.tag_id
        WHERE article_tags.article_id = articles.id AND tags.name = CAST(?3 AS TEXT)))
-ORDER BY updated_at DESC, id DESC LIMIT ?5 OFFSET ?4
+  AND (CAST(?4 AS INTEGER) = 0 OR NOT EXISTS (
+       SELECT 1 FROM article_tags WHERE article_tags.article_id = articles.id))
+ORDER BY updated_at DESC, id DESC LIMIT ?6 OFFSET ?5
 `
 
 type ListAdminArticlesFilteredUpdatedDescParams struct {
 	StatusFilter int64
 	SearchLike   string
 	Tag          string
+	Untagged     int64
 	Offset       int64
 	Limit        int64
 }
@@ -667,6 +692,7 @@ func (q *Queries) ListAdminArticlesFilteredUpdatedDesc(ctx context.Context, arg 
 		arg.StatusFilter,
 		arg.SearchLike,
 		arg.Tag,
+		arg.Untagged,
 		arg.Offset,
 		arg.Limit,
 	)

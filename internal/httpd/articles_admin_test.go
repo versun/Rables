@@ -1018,6 +1018,25 @@ func TestAdminArticlesIndexTagFilter(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "No posts found.") {
 		t.Errorf("tag=nope should be empty")
 	}
+
+	// tag=none lists only articles with no tags, marked active in the menu.
+	rec = doRequest(t, h, http.MethodGet, "/admin/posts?tag=none", nil, session)
+	body = rec.Body.String()
+	if !strings.Contains(body, "Rust Post") || strings.Contains(body, "Go One") || strings.Contains(body, "Go Two") {
+		t.Errorf("tag=none filter wrong")
+	}
+	if !strings.Contains(body, `<a href="/admin/posts?tag=none" class="active">Untagged</a>`) {
+		t.Errorf("tag=none should mark Untagged active")
+	}
+	// It combines with the status filter and the search term.
+	rec = doRequest(t, h, http.MethodGet, "/admin/posts?tag=none&status=publish", nil, session)
+	if body := rec.Body.String(); !strings.Contains(body, "Rust Post") || strings.Contains(body, "Go One") {
+		t.Errorf("tag=none&status=publish filter wrong")
+	}
+	rec = doRequest(t, h, http.MethodGet, "/admin/posts?tag=none&q=Rust", nil, session)
+	if body := rec.Body.String(); !strings.Contains(body, "Rust Post") {
+		t.Errorf("tag=none&q=Rust filter wrong")
+	}
 }
 
 // TestAdminArticlesIndexSort covers the clickable Created/Updated headers.

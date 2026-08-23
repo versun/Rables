@@ -65,6 +65,7 @@
               <summary class="{{if .Tag}}filtered{{end}}">Tags</summary>
               <div class="th-filter-menu">
                 <a href="{{.TagURL ""}}" class="{{if not .Tag}}active{{end}}">All</a>
+                <a href="{{.TagURL "none"}}" class="{{if eq .Tag "none"}}active{{end}}">Untagged</a>
                 {{range .Tags}}
                   <a href="{{$.TagURL .}}" class="{{if eq $.Tag .}}active{{end}}">{{.}}</a>
                 {{end}}
