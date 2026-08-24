@@ -126,6 +126,17 @@ func simpleFormat(s, tag string) template.HTML {
 	return template.HTML(strings.Join(paras, "\n\n"))
 }
 
+// absolutizeSourceContent rewrites root-relative media URLs of a stored
+// source_content HTML fragment against base, so the embeds resolve in email;
+// plain-text content (legacy rows, no-media quotes, admin input) passes
+// through untouched.
+func absolutizeSourceContent(content, base string) string {
+	if !domain.IsSourceContentFragment(content) {
+		return content
+	}
+	return domain.AbsolutizeURLs(content, base)
+}
+
 // renderSourceContent renders source_content like the public pages do
 // (internal/httpd renderSourceContent): plain text through simpleFormat; a
 // twitter-sync quote with media is a stored HTML fragment, emitted through

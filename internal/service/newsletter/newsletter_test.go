@@ -602,7 +602,7 @@ func TestRenderSourceReferenceUnsafeURL(t *testing.T) {
 		SourceAuthor:  sql.NullString{String: "alice", Valid: true},
 		SourceContent: sql.NullString{String: "quoted", Valid: true},
 	}
-	out := renderSourceReference(article)
+	out := renderSourceReference(article, "")
 	if strings.Contains(out, "<a href=") {
 		t.Errorf("javascript: source_url rendered a link: %s", out)
 	}
@@ -611,7 +611,7 @@ func TestRenderSourceReferenceUnsafeURL(t *testing.T) {
 	}
 
 	article.SourceUrl = sql.NullString{String: "https://example.com/post", Valid: true}
-	out = renderSourceReference(article)
+	out = renderSourceReference(article, "")
 	if !strings.Contains(out, `href="https://example.com/post"`) {
 		t.Errorf("https source_url not linked: %s", out)
 	}
@@ -627,14 +627,14 @@ func TestRenderSourceReferenceUnsafeURL(t *testing.T) {
 
 	// A blank author keeps the 引用 fallback label.
 	article.SourceAuthor = sql.NullString{}
-	out = renderSourceReference(article)
+	out = renderSourceReference(article, "")
 	if !strings.Contains(out, ">引用</span>") {
 		t.Errorf("引用 fallback label missing without a source author: %s", out)
 	}
 
 	// A blank author with an unsafe URL keeps the 引用 fallback, unlinked.
 	article.SourceUrl = sql.NullString{String: "javascript:alert(1)", Valid: true}
-	out = renderSourceReference(article)
+	out = renderSourceReference(article, "")
 	if strings.Contains(out, "<a href=") {
 		t.Errorf("javascript: source_url rendered a link: %s", out)
 	}
@@ -646,18 +646,19 @@ func TestRenderSourceReferenceUnsafeURL(t *testing.T) {
 // TestRenderSourceReferenceHTMLContent: a media-bearing twitter-sync quote
 // stores an HTML fragment in source_content; the campaign quote block
 // renders the embed through the content sanitizer instead of escaping it
-// like plain text. Plain-text content keeps the simpleFormat rendering.
+// like plain text, with root-relative media URLs absolutized against the
+// site URL. Plain-text content keeps the simpleFormat rendering.
 func TestRenderSourceReferenceHTMLContent(t *testing.T) {
 	article := query.Article{
 		SourceUrl:     sql.NullString{String: "https://example.com/post", Valid: true},
 		SourceContent: sql.NullString{String: `<p>quoted</p><img src="/files/q.jpg" alt="tweet-1-x.jpg" loading="lazy">`, Valid: true},
 	}
-	out := renderSourceReference(article)
-	if !strings.Contains(out, `src="/files/q.jpg"`) {
-		t.Errorf("media embed must render as <img> in the quote block: %s", out)
+	out := renderSourceReference(article, "https://blog.example.com")
+	if !strings.Contains(out, `src="https://blog.example.com/files/q.jpg"`) {
+		t.Errorf("media embed must render as an absolute-URL <img> in the quote block: %s", out)
 	}
 	article.SourceContent = sql.NullString{String: "quoted\nwords", Valid: true}
-	out = renderSourceReference(article)
+	out = renderSourceReference(article, "https://blog.example.com")
 	if !strings.Contains(out, "<span>quoted<br>\nwords</span>") {
 		t.Errorf("plain-text quote lost simpleFormat rendering: %s", out)
 	}

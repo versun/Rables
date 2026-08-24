@@ -71,6 +71,10 @@ func (s *sender) sendNative(ctx context.Context, articleID int64, st query.Newsl
 	}
 	base := siteURL(rawURL)
 	tokenBase := tokenBaseURL(rawURL)
+	// Absolutize root-relative media/file URLs once per issue — the rewrite
+	// does not depend on the recipient, so it stays out of the mail loop.
+	article.ContentHtml.String = domain.AbsolutizeURLs(article.ContentHtml.String, base)
+	article.SourceContent.String = absolutizeSourceContent(article.SourceContent.String, base)
 
 	mailer := s.cfg.NewSender(smtpCfg)
 	prefix := s.routePrefix(ctx)
@@ -147,6 +151,8 @@ func (s *sender) articleTagIDs(ctx context.Context, articleID int64) ([]int64, e
 }
 
 // articleMessage renders NewsletterMailer#article_email for one subscriber.
+// The article's media/file URLs arrive already absolutized (sendNative), so
+// the off-site mail can resolve them.
 func (s *sender) articleMessage(article query.Article, r subscribersvc.Recipient, unsubscribeToken, siteTitle, base, tokenBase, routePrefix string, st query.NewsletterSetting) (Message, error) {
 	htmlBody, textBody, err := RenderArticleEmail(ArticleEmailData{
 		Title:         article.Title.String,

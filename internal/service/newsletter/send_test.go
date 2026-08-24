@@ -231,6 +231,39 @@ func TestSendNewsletterNativeRecipients(t *testing.T) {
 	}
 }
 
+// Root-relative media and file URLs of the stored html are absolutized
+// against the site URL, so they render in mail clients.
+func TestSendNewsletterNativeAbsoluteMediaURLs(t *testing.T) {
+	d := openSendDB(t)
+	seedSettings(t, d, "My Blog", "https://blog.example.com/")
+	seedNewsletterSetting(t, d, 1, "native")
+	articleID := seedArticle(t, d, "Pics", "pics",
+		`<p><img src="/files/a.png" alt="a"></p><a href="/files/doc.pdf">d</a><img src="https://cdn.example.com/b.png">`)
+	seedSubscriber(t, d, "all@example.com", true, false, nil)
+
+	cap := &captureSender{}
+	status, _ := runOneJob(t, d, cap, jobs.KindSendNewsletter, map[string]int64{"article_id": articleID})
+	if status != "done" {
+		t.Fatalf("job status = %s, want done", status)
+	}
+	if len(cap.sent) != 1 {
+		t.Fatalf("sent = %d, want 1", len(cap.sent))
+	}
+	html := cap.sent[0].HTML
+	for _, fragment := range []string{
+		`src="https://blog.example.com/files/a.png"`,
+		`href="https://blog.example.com/files/doc.pdf"`,
+		`src="https://cdn.example.com/b.png"`,
+	} {
+		if !strings.Contains(html, fragment) {
+			t.Errorf("html body missing %q", fragment)
+		}
+	}
+	if strings.Contains(html, `src="/files/`) || strings.Contains(html, `href="/files/`) {
+		t.Errorf("html body kept a root-relative URL: %q", html)
+	}
+}
+
 func TestSendNewsletterNativeSkips(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -484,6 +517,33 @@ func TestSendNewsletterListmonk(t *testing.T) {
 	}
 	if got := cap.recipients(); len(got) != 0 {
 		t.Errorf("smtp sends = %v, want none (listmonk delivers)", got)
+	}
+}
+
+// The campaign body gets the same absolutization: root-relative media URLs
+// of the stored html resolve against the site URL in mail clients.
+func TestSendNewsletterListmonkAbsoluteMediaURLs(t *testing.T) {
+	d := openSendDB(t)
+	seedSettings(t, d, "My Blog", "https://blog.example.com")
+	seedNewsletterSetting(t, d, 1, "listmonk")
+	srv, requests := fakeListmonk(t, http.StatusOK, `{"data":{"id":42}}`)
+	seedListmonk(t, d, srv.URL, int64(7), int64(9))
+	articleID := seedArticle(t, d, "Pics", "pics", `<p><img src="/files/a.png" alt="a"></p>`)
+
+	status, _ := runOneJob(t, d, &captureSender{}, jobs.KindSendNewsletter, map[string]int64{"article_id": articleID})
+	if status != "done" {
+		t.Fatalf("job status = %s, want done", status)
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("requests = %v, want 2", *requests)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte((*requests)[0].body), &body); err != nil {
+		t.Fatalf("decode create body: %v", err)
+	}
+	campaignBody, _ := body["body"].(string)
+	if !strings.Contains(campaignBody, `src="https://blog.example.com/files/a.png"`) {
+		t.Errorf("campaign body missing the absolute media URL: %q", campaignBody)
 	}
 }
 

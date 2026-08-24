@@ -47,10 +47,11 @@ func (s *sender) sendListmonk(ctx context.Context, articleID int64, st query.New
 		"title=%s slug=%s mode=%s",
 		activity.Quote(title), activity.Quote(article.Slug.String), activity.Quote("listmonk")))
 
-	siteTitle, _, err := s.siteInfo(ctx)
+	siteTitle, rawURL, err := s.siteInfo(ctx)
 	if err != nil {
 		return err
 	}
+	base := siteURL(rawURL)
 	client := ListmonkClient{
 		URL:        lm.Url.String,
 		Username:   lm.Username.String,
@@ -58,7 +59,7 @@ func (s *sender) sendListmonk(ctx context.Context, articleID int64, st query.New
 		HTTPClient: s.cfg.HTTPClient,
 	}
 
-	campaignID, err := client.createCampaign(ctx, article, lm, siteTitle)
+	campaignID, err := client.createCampaign(ctx, article, lm, siteTitle, base)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			// Worker shutdown: return the error so the job is rescheduled
@@ -108,7 +109,8 @@ type campaignRequest struct {
 
 // createCampaign mirrors Listmonk#create_campaigns, returning the new
 // campaign id; the error keeps the Rails "Create Campaign failed!" text.
-func (c ListmonkClient) createCampaign(ctx context.Context, article query.Article, lm query.Listmonk, siteTitle string) (int64, error) {
+// base is the normalized site URL used to absolutize the body's media URLs.
+func (c ListmonkClient) createCampaign(ctx context.Context, article query.Article, lm query.Listmonk, siteTitle, base string) (int64, error) {
 	reqBody := campaignRequest{
 		Name:        article.Title.String,
 		Subject:     article.Title.String + " | " + siteTitle,
@@ -116,7 +118,7 @@ func (c ListmonkClient) createCampaign(ctx context.Context, article query.Articl
 		Type:        "regular",
 		ContentType: "html",
 		Messenger:   "email",
-		Body:        campaignBody(article),
+		Body:        campaignBody(article, base),
 		TemplateID:  lm.TemplateID.Int64,
 		SendLater:   false,
 	}
@@ -185,12 +187,14 @@ func (c ListmonkClient) doJSON(ctx context.Context, method, rawURL string, paylo
 
 // campaignBody mirrors Listmonk#campaign_body: the stored html with the
 // source-reference partial prepended when the article has a source.
-func campaignBody(article query.Article) string {
-	body := article.ContentHtml.String
+// Root-relative media/file URLs are absolutized against base — the campaign
+// is rendered in mail clients, where "/files/..." resolves nowhere.
+func campaignBody(article query.Article, base string) string {
+	body := domain.AbsolutizeURLs(article.ContentHtml.String, base)
 	if domain.IsBlank(article.SourceUrl.String) { // !Article#has_source?
 		return body
 	}
-	return renderSourceReference(article) + "\n" + body
+	return renderSourceReference(article, base) + "\n" + body
 }
 
 // renderSourceReference ports articles/_source_reference.html.erb for the
@@ -198,7 +202,7 @@ func campaignBody(article query.Article) string {
 // ApplicationController.renderer). Called only when has_source?, so the
 // blockquote branch is always present. The header comes from
 // domain.SourceReferenceHeader, shared with the public pages.
-func renderSourceReference(article query.Article) string {
+func renderSourceReference(article query.Article, base string) string {
 	var b strings.Builder
 	b.WriteString(`<div style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">`)
 	b.WriteString(`<i class="fas fa-quote-left" style="color: #6c757d; font-size: 1.25rem; margin-top: 0.125rem; opacity: 0.6;"></i>`)
@@ -207,7 +211,7 @@ func renderSourceReference(article query.Article) string {
 	b.WriteString(`</div></div>`)
 	b.WriteString(`<blockquote class="source-reference__quote">`)
 	if !domain.IsBlank(article.SourceContent.String) {
-		b.WriteString(string(renderSourceContent(article.SourceContent.String)))
+		b.WriteString(string(renderSourceContent(absolutizeSourceContent(article.SourceContent.String, base))))
 	}
 	b.WriteString(`</blockquote>`)
 	return b.String()
