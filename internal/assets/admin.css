@@ -989,6 +989,80 @@ body.admin-body {
     vertical-align: bottom;
 }
 
+/* Expandable detail rows (admin Jobs): clicking a row reveals the full
+ * record in the row right below it, clicking again collapses it. Each record
+ * is its own <tbody> so the summary/detail pair scopes one controller. */
+.admin-body .table tr.row-expandable {
+    cursor: pointer;
+}
+
+.admin-body .table tr.row-detail > td {
+    background: var(--ad-bg);
+}
+
+/* Detail rows are their <tbody>'s last row (so the generic rule strips their
+ * bottom border); restore it as the separator to the next record. */
+.admin-body .table tbody:not(:last-child) tr.row-detail > td {
+    border-bottom: 1px solid var(--ad-border);
+}
+
+/* A collapsed detail row renders nothing, so the final record's summary row
+ * would keep its border at the table's bottom edge; drop it there. */
+.admin-body .table tbody:last-child tr:has(+ tr.row-detail[hidden]) > td {
+    border-bottom: none;
+}
+
+.detail-list {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 18px;
+    margin: 0;
+}
+
+.detail-list > dt {
+    padding-top: 1px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ad-text-2);
+}
+
+.detail-list > dd {
+    margin: 0;
+    font-size: 13px;
+    word-break: break-word;
+}
+
+.detail-pre {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* One line of a job run's log (activity rows recorded by the handler). */
+.run-log-line {
+    padding: 2px 0;
+}
+
+.run-log-line + .run-log-line {
+    border-top: 1px dashed var(--ad-border);
+}
+
+.run-log-line > time {
+    display: inline-block;
+    margin-right: 10px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--ad-text-2);
+}
+
+.run-log-line > code {
+    margin: 0 6px;
+}
+
 /* Row action buttons (Edit / Trash / Delete …). Scoped with element selectors
  * so they beat the .admin-body button[type="submit"] primary rule. */
 .admin-body a.row-btn,

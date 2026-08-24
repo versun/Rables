@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"rables/internal/db/query"
+	"rables/internal/service/activity"
 )
 
 // MaxAttempts is the number of executions after which a job is marked failed.
@@ -129,7 +130,10 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		return true, w.fail(context.WithoutCancel(ctx), job.ID, job.Attempts, err)
 	}
 
-	if runErr := w.run(ctx, handler, job.Payload); runErr != nil {
+	// The run id on the handler ctx links the activity rows the handler writes
+	// (crosspost posted/failed lines, import/export counts, …) back to this
+	// run, so /admin/jobs can show them as the run's log.
+	if runErr := w.run(activity.WithJobRunID(ctx, job.ID), handler, job.Payload); runErr != nil {
 		// The handler ran with the (possibly already cancelled) ctx, but the
 		// bookkeeping writes below must still land on the shutdown path —
 		// otherwise a SIGTERM mid-run would strand the job in running until

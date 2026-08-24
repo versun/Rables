@@ -8,11 +8,12 @@ package query
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
 
 const createActivityLog = `-- name: CreateActivityLog :exec
-INSERT INTO activity_logs (level, action, target, description, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO activity_logs (level, action, target, description, job_run_id, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateActivityLogParams struct {
@@ -20,6 +21,7 @@ type CreateActivityLogParams struct {
 	Action      sql.NullString
 	Target      sql.NullString
 	Description sql.NullString
+	JobRunID    sql.NullInt64
 	CreatedAt   int64
 	UpdatedAt   int64
 }
@@ -30,14 +32,66 @@ func (q *Queries) CreateActivityLog(ctx context.Context, arg CreateActivityLogPa
 		arg.Action,
 		arg.Target,
 		arg.Description,
+		arg.JobRunID,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
 	return err
 }
 
+const listAdminJobRunActivity = `-- name: ListAdminJobRunActivity :many
+SELECT id, level, "action", target, description, created_at, updated_at, job_run_id FROM activity_logs
+WHERE job_run_id IN (/*SLICE:ids*/?)
+ORDER BY id ASC
+`
+
+// Run-log lines for the /admin/jobs detail rows: activity entries the job
+// handlers recorded, linked through job_run_id. Global id ASC keeps each
+// run's lines in chronological order after the Go side groups by job_run_id.
+func (q *Queries) ListAdminJobRunActivity(ctx context.Context, ids []sql.NullInt64) ([]ActivityLog, error) {
+	query := listAdminJobRunActivity
+	var queryParams []interface{}
+	if len(ids) > 0 {
+		for _, v := range ids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:ids*/?", strings.Repeat(",?", len(ids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ActivityLog
+	for rows.Next() {
+		var i ActivityLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.Level,
+			&i.Action,
+			&i.Target,
+			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.JobRunID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentActivityLogs = `-- name: ListRecentActivityLogs :many
-SELECT id, level, "action", target, description, created_at, updated_at FROM activity_logs ORDER BY created_at DESC, id DESC LIMIT 100
+SELECT id, level, "action", target, description, created_at, updated_at, job_run_id FROM activity_logs ORDER BY created_at DESC, id DESC LIMIT 100
 `
 
 func (q *Queries) ListRecentActivityLogs(ctx context.Context) ([]ActivityLog, error) {
@@ -57,6 +111,7 @@ func (q *Queries) ListRecentActivityLogs(ctx context.Context) ([]ActivityLog, er
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.JobRunID,
 		); err != nil {
 			return nil, err
 		}

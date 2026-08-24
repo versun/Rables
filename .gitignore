@@ -3,6 +3,7 @@ data/
 
 # Go binaries built at repo root
 /server
+/rables-server
 /migrate-content
 /migrate-quote-media
 

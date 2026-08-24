@@ -11,6 +11,7 @@ import (
 
 	"rables/internal/db"
 	"rables/internal/db/query"
+	"rables/internal/service/activity"
 )
 
 func openDB(t *testing.T) *sql.DB {
@@ -76,6 +77,38 @@ func TestEnqueueAndRunOnceSuccess(t *testing.T) {
 	}
 	if err := json.Unmarshal(got, &payload); err != nil || payload.ArticleID != 42 {
 		t.Errorf("payload = %s, err = %v", got, err)
+	}
+}
+
+// TestRunOnceLinksHandlerActivity: activity rows a handler writes through its
+// ctx link back to the job run, so /admin/jobs can show them as the run's log.
+func TestRunOnceLinksHandlerActivity(t *testing.T) {
+	d := openDB(t)
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	w := newTestWorker(d, now)
+
+	w.Register(KindCrosspost, func(ctx context.Context, _ json.RawMessage) error {
+		activity.Log(ctx, d, "info", "posted", "crosspost", "platforms=mastodon")
+		return nil
+	})
+
+	id, err := NewEnqueuer(d).Enqueue(t.Context(), KindCrosspost, nil, now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if ran, err := w.RunOnce(t.Context()); err != nil || !ran {
+		t.Fatalf("RunOnce = (%v, %v), want (true, nil)", ran, err)
+	}
+
+	rows, err := query.New(d).ListRecentActivityLogs(t.Context())
+	if err != nil {
+		t.Fatalf("list activity logs: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if !rows[0].JobRunID.Valid || rows[0].JobRunID.Int64 != id {
+		t.Errorf("job_run_id = %v, want %d", rows[0].JobRunID, id)
 	}
 }
 

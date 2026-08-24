@@ -2,6 +2,7 @@ package activity
 
 import (
 	"testing"
+	"time"
 
 	"rables/internal/db"
 	"rables/internal/db/query"
@@ -80,6 +81,43 @@ func TestLogNeverFails(t *testing.T) {
 	}
 	database.Close()
 	Log(t.Context(), database, "info", "created", "redirect", "x") // must not panic
+}
+
+// TestLogJobRunID: a ctx carrying a job run id (the worker sets it via
+// WithJobRunID) links the row to that run; a plain ctx stores NULL. The
+// foreign key needs a real job_runs row.
+func TestLogJobRunID(t *testing.T) {
+	database, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	now := time.Now().Unix()
+	jobID, err := query.New(database).EnqueueJobRun(t.Context(), query.EnqueueJobRunParams{
+		Kind: "crosspost", RunAt: now, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("enqueue job run: %v", err)
+	}
+
+	Log(WithJobRunID(t.Context(), jobID), database, "info", "posted", "crosspost", "x")
+	Log(t.Context(), database, "info", "created", "redirect", "y")
+
+	rows, err := query.New(database).ListRecentActivityLogs(t.Context())
+	if err != nil {
+		t.Fatalf("list activity logs: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	// ListRecentActivityLogs is newest first: the unlinked row comes first.
+	if rows[0].JobRunID.Valid {
+		t.Errorf("plain ctx: job_run_id = %v, want NULL", rows[0].JobRunID)
+	}
+	if !rows[1].JobRunID.Valid || rows[1].JobRunID.Int64 != jobID {
+		t.Errorf("job ctx: job_run_id = %v, want %d", rows[1].JobRunID, jobID)
+	}
 }
 
 // TestQuote mirrors ActivityLog.quote_string.

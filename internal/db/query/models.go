@@ -16,6 +16,7 @@ type ActivityLog struct {
 	Description sql.NullString
 	CreatedAt   int64
 	UpdatedAt   int64
+	JobRunID    sql.NullInt64
 }
 
 type Article struct {

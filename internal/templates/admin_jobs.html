@@ -27,9 +27,9 @@
         <th>Created At</th>
       </tr>
     </thead>
-    <tbody>
-      {{range .Jobs}}
-      <tr>
+    {{range .Jobs}}
+    <tbody data-controller="row-detail">
+      <tr class="row-expandable" data-action="click->row-detail#toggle" title="Click to see details">
         <td class="text-muted">{{.ID}}</td>
         <td><code>{{.Kind}}</code></td>
         <td>
@@ -48,12 +48,41 @@
         <td><span class="truncate" title="{{.LastError}}">{{.LastError}}</span></td>
         <td><small class="text-muted">{{.CreatedAt}}</small></td>
       </tr>
-      {{else}}
+      <tr class="row-detail" data-row-detail-target="detail" hidden>
+        <td colspan="7">
+          <dl class="detail-list">
+            <dt>Run Log</dt>
+            <dd>
+              {{range .Logs}}
+              <div class="run-log-line">
+                <time>{{.Time}}</time>
+                <span class="badge badge-level-{{.Level}}">{{.Level}}</span>
+                <code>{{.Action}}</code>
+                {{.Description}}
+              </div>
+              {{else}}
+              <span class="text-muted">No log entries recorded for this run.</span>
+              {{end}}
+            </dd>
+            <dt>Payload</dt>
+            <dd>
+              {{if .Payload}}
+                <pre class="detail-pre">{{.Payload}}</pre>
+              {{else}}
+                <span class="text-muted">—</span>
+              {{end}}
+            </dd>
+          </dl>
+        </td>
+      </tr>
+    </tbody>
+    {{else}}
+    <tbody>
       <tr>
         <td colspan="7" class="empty">No job runs found.</td>
       </tr>
-      {{end}}
     </tbody>
+    {{end}}
   </table>
 </div>
 

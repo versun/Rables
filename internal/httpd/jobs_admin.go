@@ -1,12 +1,14 @@
 package httpd
 
 import (
+	"database/sql"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
 	"rables/internal/db/query"
+	"rables/internal/service/activity"
 	"rables/internal/templates"
 )
 
@@ -23,6 +25,15 @@ func RegisterJobsAdminRoutes(r chi.Router, s *Server) {
 	})
 }
 
+// adminJobLogEntry is one activity_logs line recorded by the job's handler,
+// shown in the run-log section of the expandable detail row.
+type adminJobLogEntry struct {
+	Time        string // created_at in settings.time_zone
+	Level       string // info/warn/error token
+	Action      string
+	Description string
+}
+
 // adminJobRow is one job_runs row with its display values resolved.
 type adminJobRow struct {
 	ID        int64
@@ -32,6 +43,8 @@ type adminJobRow struct {
 	Attempts  int64
 	LastError string
 	CreatedAt string // created_at in settings.time_zone
+	Payload   string // raw JSON, shown only in the expandable detail row
+	Logs      []adminJobLogEntry
 }
 
 // adminJobsData feeds admin_jobs.html.
@@ -89,6 +102,7 @@ func (s *Server) adminJobsIndex(w http.ResponseWriter, r *http.Request) {
 
 	tz := s.siteTimeZone(r)
 	jobs := make([]adminJobRow, 0, len(rows))
+	ids := make([]sql.NullInt64, 0, len(rows))
 	for _, row := range rows {
 		jobs = append(jobs, adminJobRow{
 			ID:        row.ID,
@@ -98,7 +112,32 @@ func (s *Server) adminJobsIndex(w http.ResponseWriter, r *http.Request) {
 			Attempts:  row.Attempts,
 			LastError: row.LastError.String,
 			CreatedAt: templates.FormatTime(row.CreatedAt, tz, "2006-01-02 15:04:05"),
+			Payload:   row.Payload.String,
 		})
+		ids = append(ids, sql.NullInt64{Int64: row.ID, Valid: true})
+	}
+
+	// Run-log lines for the detail rows: the activity entries the handlers
+	// recorded under this run's id. Indexed by job_run_id, chronological.
+	if len(ids) > 0 {
+		activityRows, err := s.Q.ListAdminJobRunActivity(ctx, ids)
+		if err != nil {
+			s.Log.Error("list job run activity", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		logsByRun := make(map[int64][]adminJobLogEntry, len(jobs))
+		for _, a := range activityRows {
+			logsByRun[a.JobRunID.Int64] = append(logsByRun[a.JobRunID.Int64], adminJobLogEntry{
+				Time:        templates.FormatTime(a.CreatedAt, tz, "2006-01-02 15:04:05"),
+				Level:       activity.LevelName(a.Level),
+				Action:      a.Action.String,
+				Description: a.Description.String,
+			})
+		}
+		for i := range jobs {
+			jobs[i].Logs = logsByRun[jobs[i].ID]
+		}
 	}
 
 	if status == "" {

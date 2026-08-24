@@ -15,6 +15,7 @@ import (
 	"rables/internal/config"
 	"rables/internal/db"
 	"rables/internal/db/query"
+	"rables/internal/service/activity"
 	"rables/internal/templates"
 )
 
@@ -84,13 +85,27 @@ func TestAdminJobsIndex(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("fail job run: %v", err)
 	}
+	now := time.Now().Unix()
+	runID, err := s.Q.EnqueueJobRun(ctx, query.EnqueueJobRunParams{
+		Kind: "publish_article", Payload: sql.NullString{String: `{"article_id":42}`, Valid: true},
+		RunAt: now, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("enqueue job run with payload: %v", err)
+	}
+	// The run's log line: an activity row the handler recorded under its ctx.
+	activity.Log(activity.WithJobRunID(ctx, runID), s.DB, "info", "posted", "crosspost", "platforms=mastodon")
 
 	rec := doRequest(t, h, http.MethodGet, "/admin/jobs", nil, session)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("index: status = %d", rec.Code)
 	}
 	body := mainContent(rec.Body.String())
-	for _, want := range []string{"crosspost", "send_newsletter", "queued", "failed", "smtp down"} {
+	for _, want := range []string{"crosspost", "send_newsletter", "queued", "failed", "smtp down",
+		// The payload and the handler's log line render only in the expandable
+		// detail row; jobs without any handler activity get the placeholder.
+		"article_id", "platforms=mastodon", "No log entries recorded for this run.",
+		`data-row-detail-target="detail"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index missing %q", want)
 		}

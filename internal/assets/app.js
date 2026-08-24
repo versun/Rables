@@ -1550,6 +1550,20 @@
     }
   }
 
+  // --- row_detail ------------------------------------------------------------
+  // Expandable rows on the admin Jobs list: each record is its own
+  // <tbody data-controller="row-detail"> holding a summary row and a hidden
+  // detail row; clicking the summary row toggles the detail row below it.
+
+  class RowDetailController extends Controller {
+    static targets = ["detail"];
+
+    toggle() {
+      const detail = this.detailTarget;
+      detail.hidden = !detail.hidden;
+    }
+  }
+
   // --- registration & boot -----------------------------------------------------------
 
   registry.set("batch-selection", BatchSelectionController);
@@ -1563,6 +1577,7 @@
   registry.set("redirect-form", RedirectFormController);
   registry.set("redirect-order", RedirectOrderController);
   registry.set("reply-form", ReplyFormController);
+  registry.set("row-detail", RowDetailController);
   registry.set("share", ShareController);
   registry.set("sidebar", SidebarController);
   registry.set("source-reference", SourceReferenceController);
