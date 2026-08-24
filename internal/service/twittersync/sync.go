@@ -572,9 +572,10 @@ var (
 )
 
 // archiveTweet ports archive_tweet: defensive retweet/reply filter, X-Article
-// announcement skip, start-date filter, slug dedupe, then the Article +
-// social_media_posts rows and the activity entry. Every archived article also
-// carries the twitter tag (find-or-created on first use).
+// announcement skip, start-date filter, slug dedupe plus a self-crosspost
+// guard, then the Article + social_media_posts rows and the activity entry.
+// Every archived article also carries the twitter tag (find-or-created on
+// first use).
 func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tweet apiTweet, inc includes) error {
 	// Defensive filter: exclude retweets/replies even if the API returned them.
 	quotedID := ""
@@ -599,6 +600,14 @@ func (s *Syncer) archiveTweet(ctx context.Context, syncRow query.TwitterSync, tw
 
 	slug := "tweet-" + tweet.ID
 	if n, err := s.q.CountAdminArticlesBySlug(ctx, query.CountAdminArticlesBySlugParams{Slug: sql.NullString{String: slug, Valid: true}, ID: 0}); err != nil {
+		return err
+	} else if n > 0 {
+		return nil
+	}
+	// Self-crosspost guard: a tweet this site crossposted itself already has
+	// its article under the article's own slug, so the dedup above cannot see
+	// it; the recorded social_media_posts URL is the link that skips it.
+	if n, err := s.q.CountTwitterSocialPostsByStatusID(ctx, sql.NullString{String: tweet.ID, Valid: true}); err != nil {
 		return err
 	} else if n > 0 {
 		return nil

@@ -46,3 +46,18 @@ WHERE id = 1 AND since_id IS :expected_since_id AND username IS :expected_userna
 -- Failed run: only last_error changes (update_columns(last_error:) semantics).
 -- name: SetTwitterSyncFailure :exec
 UPDATE twitter_syncs SET last_error = ?, updated_at = ? WHERE id = 1;
+
+-- archive_tweet self-crosspost guard: a tweet this site crossposted itself
+-- already has its article here, under the article's own slug, so slug dedup
+-- cannot see it. The crossposter records the tweet URL in
+-- social_media_posts; a twitter row whose url ends in /status/<tweet id>
+-- (covers both the x.com/<user>/status and the i/web/status forms the
+-- crossposter builds) marks the tweet as already ours. Tweet ids are
+-- numeric, so the LIKE pattern needs no metacharacter escaping. NOTE: keep
+-- this comment ASCII-only -- a multi-byte character (e.g. an em-dash) in the
+-- lines before a query whose LIKE pattern ends in a parameter makes sqlc's
+-- sqlite engine corrupt the generated SQL (it rewrites patterns by byte
+-- offset).
+-- name: CountTwitterSocialPostsByStatusID :one
+SELECT COUNT(*) FROM social_media_posts
+WHERE platform = 'twitter' AND url LIKE '%/status/' || sqlc.arg(tweet_id);

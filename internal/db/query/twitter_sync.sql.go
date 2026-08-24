@@ -10,6 +10,29 @@ import (
 	"database/sql"
 )
 
+const countTwitterSocialPostsByStatusID = `-- name: CountTwitterSocialPostsByStatusID :one
+SELECT COUNT(*) FROM social_media_posts
+WHERE platform = 'twitter' AND url LIKE '%/status/' || ?1
+`
+
+// archive_tweet self-crosspost guard: a tweet this site crossposted itself
+// already has its article here, under the article's own slug, so slug dedup
+// cannot see it. The crossposter records the tweet URL in
+// social_media_posts; a twitter row whose url ends in /status/<tweet id>
+// (covers both the x.com/<user>/status and the i/web/status forms the
+// crossposter builds) marks the tweet as already ours. Tweet ids are
+// numeric, so the LIKE pattern needs no metacharacter escaping. NOTE: keep
+// this comment ASCII-only -- a multi-byte character (e.g. an em-dash) in the
+// lines before a query whose LIKE pattern ends in a parameter makes sqlc's
+// sqlite engine corrupt the generated SQL (it rewrites patterns by byte
+// offset).
+func (q *Queries) CountTwitterSocialPostsByStatusID(ctx context.Context, tweetID sql.NullString) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTwitterSocialPostsByStatusID, tweetID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const ensureTwitterSync = `-- name: EnsureTwitterSync :exec
 
 INSERT OR IGNORE INTO twitter_syncs (id, created_at, updated_at) VALUES (1, ?, ?)

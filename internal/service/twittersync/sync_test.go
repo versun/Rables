@@ -266,6 +266,54 @@ func TestRunIncrementalSinceID(t *testing.T) {
 	}
 }
 
+// A tweet this site crossposted itself already has its article (under the
+// article's own slug, so slug dedup cannot see it); the recorded
+// social_media_posts URL must keep the sync from re-archiving it as a
+// duplicate tweet-<id> article. Both URL forms the crossposter builds are
+// covered: x.com/<user>/status/<id> and the i/web/status fallback.
+func TestRunSkipsSelfCrosspostedTweet(t *testing.T) {
+	database := newTestDB(t)
+	enableSync(t, database, "alice")
+	now := time.Now().Unix()
+	for i, postURL := range []string{
+		"https://x.com/alice/status/77",
+		"https://x.com/i/web/status/78",
+	} {
+		res, err := database.Exec(`INSERT INTO articles (slug, status, comment, scheduled_crosspost_platforms, created_at, updated_at)
+			VALUES (?, 1, 1, '[]', ?, ?)`, fmt.Sprintf("my-post-%d", i), now, now)
+		if err != nil {
+			t.Fatalf("insert article: %v", err)
+		}
+		articleID, _ := res.LastInsertId()
+		if _, err := database.Exec(`INSERT INTO social_media_posts (article_id, platform, url, created_at, updated_at)
+			VALUES (?, 'twitter', ?, ?, ?)`, articleID, postURL, now, now); err != nil {
+			t.Fatalf("insert social_media_posts: %v", err)
+		}
+	}
+	fx := &fakeX{t: t, userID: "42", pages: [][]map[string]any{{
+		tweetJSON(77, "crossposted one"),
+		tweetJSON(78, "crossposted two"),
+		tweetJSON(79, "genuine tweet"),
+	}}}
+	s := newSyncer(database, t.TempDir(), fx.server())
+
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if articleExists(t, database, "tweet-77") {
+		t.Error("self-crossposted tweet 77 re-archived, want skipped")
+	}
+	if articleExists(t, database, "tweet-78") {
+		t.Error("self-crossposted tweet 78 (i/web/status URL) re-archived, want skipped")
+	}
+	if !articleExists(t, database, "tweet-79") {
+		t.Error("genuine tweet-79 not archived")
+	}
+	if row := getSyncRow(t, database); row.SinceID.String != "79" {
+		t.Errorf("since_id = %q, want 79 (advances past skipped tweets)", row.SinceID.String)
+	}
+}
+
 func TestRunTagsArticleAsTwitter(t *testing.T) {
 	database := newTestDB(t)
 	enableSync(t, database, "alice")
